@@ -29,7 +29,11 @@ class MiningController:
             return None
 
         if state.session_state is SessionState.ACQUIRING:
-            return self._intent("reacquire", timeout_s=10.0, expected=("location", "inventory"))
+            return self._intent(
+                "reacquire",
+                timeout_s=10.0,
+                expected=("location", "inventory_state"),
+            )
 
         if state.session_state is SessionState.MINING:
             if state.inventory.is_full is True:
