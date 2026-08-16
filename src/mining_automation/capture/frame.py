@@ -99,6 +99,7 @@ class Frame:
     payload: bytes
     pixel_format: PixelFormat
 
+    # -- convenience delegation to the shared contract ---------------------
     @property
     def frame_id(self) -> int:
         return self.ref.frame_id
@@ -120,7 +121,12 @@ class Frame:
         return len(self.payload)
 
     def age_s(self, now_monotonic_s: float) -> float:
-        """Seconds since capture, floored at zero."""
+        """Seconds since capture, floored at zero.
+
+        Consumers use this for staleness decisions; the capture layer itself
+        never decides that a frame is too old, because the acceptable age
+        depends on the workflow asking.
+        """
         return max(0.0, now_monotonic_s - self.ref.captured_monotonic_s)
 
     @classmethod
@@ -131,9 +137,25 @@ class Frame:
         frame_id: int,
         captured_monotonic_s: float,
     ) -> Frame:
-        """Validate ``raw`` and take ownership of its payload."""
+        """Validate ``raw`` and take ownership of its payload.
+
+        Validation happens **before** the copy. A malformed 4K payload would
+        otherwise allocate ~33 MB purely to be rejected on the next line, and a
+        backend malfunctioning at capture rate would do that every frame.
+
+        Raises:
+            InvalidFrameError: dimensions are non-positive, the payload is
+                empty, the payload byte count disagrees with the declared
+                geometry, or the declared geometry is implausibly large.
+            InvalidTimestampError: the timestamp is not a finite,
+                non-negative float, or ``frame_id`` is not positive.
+        """
         _validate_geometry(raw)
         validate_identity(frame_id, captured_monotonic_s)
+
+        # Measure the *source* before copying. len() is wrong for a non-byte
+        # memoryview -- a memoryview of an 'I' array reports element count, not
+        # bytes -- so byte-sized views use nbytes.
         actual = _payload_nbytes(raw.payload)
         expected = raw.expected_payload_bytes
         if actual != expected:
@@ -141,8 +163,9 @@ class Frame:
                 f"payload size {actual} bytes != expected {expected} for "
                 f"{raw.width}x{raw.height} {raw.pixel_format.name}"
             )
-        payload = bytes(raw.payload)
-        if len(payload) != expected:
+
+        payload = bytes(raw.payload)  # no-op when already bytes; copies otherwise
+        if len(payload) != expected:  # pragma: no cover - defensive
             raise InvalidFrameError(
                 f"payload size changed during copy: {len(payload)} != {expected}"
             )
@@ -159,12 +182,24 @@ class Frame:
 
 
 def _payload_nbytes(payload: bytes | bytearray | memoryview) -> int:
+    """Byte count of a payload, without copying it.
+
+    ``len()`` on a memoryview returns the number of *elements*, which equals the
+    byte count only for byte-sized formats. ``nbytes`` is always the real size.
+    """
     if isinstance(payload, memoryview):
         return payload.nbytes
     return len(payload)
 
 
 def validate_identity(frame_id: int, captured_monotonic_s: float) -> None:
+    """Reject identity and timing values that cannot describe a real capture.
+
+    NaN is the dangerous case: every comparison against it is False, so a NaN
+    timestamp slips through an ordinary monotonicity check and then poisons
+    every downstream age, staleness, and rate calculation. Infinities and
+    negative monotonic readings are equally impossible and equally corrosive.
+    """
     if frame_id < 1:
         raise InvalidTimestampError(f"frame_id must be >= 1, got {frame_id}")
     if not isinstance(captured_monotonic_s, (int, float)) or isinstance(
