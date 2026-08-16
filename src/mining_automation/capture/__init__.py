@@ -26,6 +26,7 @@ from .errors import (
     CaptureTimeoutError,
     CaptureUnavailableError,
     InvalidFrameError,
+    InvalidTimestampError,
     NonMonotonicCaptureError,
 )
 from .frame import Frame, PixelFormat, RawFrame
@@ -44,6 +45,7 @@ __all__ = [
     "CaptureUnavailableError",
     "Frame",
     "InvalidFrameError",
+    "InvalidTimestampError",
     "MonotonicClock",
     "NonMonotonicCaptureError",
     "PixelFormat",
