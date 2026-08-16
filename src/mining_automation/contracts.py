@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 
 class ConfidenceBand(Enum):
