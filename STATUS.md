@@ -2,8 +2,8 @@
 
 | Person | Working on | Status | Next step |
 |---|---|---|---|
-| ChatGPT | Architecture, PR review, integration | ACTIVE | Merge PR #2 when approved by owner; assign next work |
-| Claude 1 | Issue #1 / PR #2 — capture foundation | READY TO MERGE | Lead fixes published; CI and re-review passed |
+| ChatGPT | Architecture, PR review, integration | ACTIVE | Assign next milestone work |
+| Claude 1 | Issue #1 / PR #2 — capture foundation | COMPLETE / MERGED | Await next assigned issue |
 | Codex | Issue #3 — core contracts + tooling | COMPLETE / MERGED | Await next assigned issue |
 
 ## Current milestone
@@ -13,10 +13,10 @@ M1 — Foundation and reliable capture.
 ## Completed
 
 - Codex PR #4 merged into `main`.
-- Claude's four PR #2 review fixes are published on head `afe39ae`.
-- PR #2 CI passes Ruff, mypy, and pytest.
-- Lead re-review: all four blockers resolved.
+- Claude PR #2 merged into `main` as `bd9d5f8`.
+- Capture foundation passed Ruff, mypy, pytest, and lead re-review.
+- Core contract/tooling hardening passed CI and lead review.
 
 ## Blockers
 
-- None technical. PR #2 only needs merge approval.
+- None.
