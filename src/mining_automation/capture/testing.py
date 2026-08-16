@@ -67,6 +67,14 @@ class FakeCaptureBackend:
     Each entry in ``script`` is either a :class:`RawFrame` to return or an
     exception instance to raise. The last entry repeats once exhausted, which
     makes "permanently broken surface" easy to express.
+
+    Args:
+        script: Sequence of frames and/or exceptions. Defaults to a single
+            valid 4x2 frame.
+        name: Backend name recorded in diagnostics.
+        reuse_buffer: When True, returned payloads alias one mutable buffer that
+            is overwritten on each grab -- reproducing the aliasing behaviour of
+            real platform APIs so ownership transfer can be tested.
     """
 
     def __init__(
@@ -86,6 +94,7 @@ class FakeCaptureBackend:
         self._reuse_buffer = reuse_buffer
         self._index = 0
         self._shared_buffer: bytearray | None = None
+
         self.open_calls = 0
         self.close_calls = 0
         self.grab_calls = 0
@@ -107,12 +116,16 @@ class FakeCaptureBackend:
         self.grab_calls += 1
         if not self.is_open:
             raise CaptureUnavailableError("fake backend is not open")
+
         entry = self._script[min(self._index, len(self._script) - 1)]
         self._index += 1
+
         if isinstance(entry, BaseException):
             raise entry
+
         if not self._reuse_buffer:
             return entry
+
         payload = bytes(entry.payload)
         if self._shared_buffer is None or len(self._shared_buffer) != len(payload):
             self._shared_buffer = bytearray(len(payload))
@@ -125,13 +138,23 @@ class FakeCaptureBackend:
         )
 
     def scribble_buffer(self, value: int = 0xFF) -> None:
+        """Overwrite the shared buffer, simulating the backend reusing it.
+
+        Only meaningful when ``reuse_buffer=True``. Used to prove that a
+        previously returned :class:`~mining_automation.capture.frame.Frame` does
+        not change.
+        """
         if self._shared_buffer is not None:
             for i in range(len(self._shared_buffer)):
                 self._shared_buffer[i] = value & 0xFF
 
 
 class FailingEventSink:
-    """A diagnostic sink that always raises."""
+    """A diagnostic sink that always raises.
+
+    Exists to prove that diagnostics are observation and never control flow: a
+    sink this broken must not change any capture behaviour or lifecycle state.
+    """
 
     def __init__(self, error: BaseException | None = None) -> None:
         self.error = error if error is not None else RuntimeError("sink is down")
@@ -143,7 +166,12 @@ class FailingEventSink:
 
 
 class FlakyEventSink:
-    """Records events but raises on those whose type matches ``fail_on``."""
+    """Records events but raises on those whose type matches ``fail_on``.
+
+    Lets a test target one specific emission point -- for example failing only
+    on ``capture.failure_threshold_exceeded`` -- to prove that latching still
+    happens when the sink dies at the worst possible moment.
+    """
 
     def __init__(self, fail_on: str) -> None:
         self.fail_on = fail_on
@@ -158,7 +186,10 @@ class FlakyEventSink:
 
 
 class BrokenClock:
-    """Returns a scripted sequence of timestamps, including invalid ones."""
+    """Returns a scripted sequence of timestamps, including invalid ones.
+
+    The last value repeats once the script is exhausted.
+    """
 
     def __init__(self, values: list[float]) -> None:
         if not values:
