@@ -25,14 +25,15 @@ and that copy is deliberate.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final
 
 from ..contracts import FrameRef
-from .errors import InvalidFrameError
+from .errors import InvalidFrameError, InvalidTimestampError
 
-__all__ = ["Frame", "PixelFormat", "RawFrame"]
+__all__ = ["Frame", "PixelFormat", "RawFrame", "validate_identity"]
 
 
 class PixelFormat(Enum):
@@ -98,7 +99,6 @@ class Frame:
     payload: bytes
     pixel_format: PixelFormat
 
-    # -- convenience delegation to the shared contract ---------------------
     @property
     def frame_id(self) -> int:
         return self.ref.frame_id
@@ -120,12 +120,7 @@ class Frame:
         return len(self.payload)
 
     def age_s(self, now_monotonic_s: float) -> float:
-        """Seconds since capture, floored at zero.
-
-        Consumers use this for staleness decisions; the capture layer itself
-        never decides that a frame is too old, because the acceptable age
-        depends on the workflow asking.
-        """
+        """Seconds since capture, floored at zero."""
         return max(0.0, now_monotonic_s - self.ref.captured_monotonic_s)
 
     @classmethod
@@ -136,21 +131,20 @@ class Frame:
         frame_id: int,
         captured_monotonic_s: float,
     ) -> Frame:
-        """Validate ``raw`` and take ownership of its payload.
-
-        Raises:
-            InvalidFrameError: dimensions are non-positive, the payload is
-                empty, the payload length disagrees with the declared geometry,
-                or the declared geometry is implausibly large.
-        """
+        """Validate ``raw`` and take ownership of its payload."""
         _validate_geometry(raw)
-        payload = bytes(raw.payload)  # no-op when already bytes; copies otherwise
-        actual = len(payload)
+        validate_identity(frame_id, captured_monotonic_s)
+        actual = _payload_nbytes(raw.payload)
         expected = raw.expected_payload_bytes
         if actual != expected:
             raise InvalidFrameError(
-                f"payload length {actual} != expected {expected} for "
+                f"payload size {actual} bytes != expected {expected} for "
                 f"{raw.width}x{raw.height} {raw.pixel_format.name}"
+            )
+        payload = bytes(raw.payload)
+        if len(payload) != expected:
+            raise InvalidFrameError(
+                f"payload size changed during copy: {len(payload)} != {expected}"
             )
         return cls(
             ref=FrameRef(
@@ -162,6 +156,30 @@ class Frame:
             payload=payload,
             pixel_format=raw.pixel_format,
         )
+
+
+def _payload_nbytes(payload: bytes | bytearray | memoryview) -> int:
+    if isinstance(payload, memoryview):
+        return payload.nbytes
+    return len(payload)
+
+
+def validate_identity(frame_id: int, captured_monotonic_s: float) -> None:
+    if frame_id < 1:
+        raise InvalidTimestampError(f"frame_id must be >= 1, got {frame_id}")
+    if not isinstance(captured_monotonic_s, (int, float)) or isinstance(
+        captured_monotonic_s, bool
+    ):
+        raise InvalidTimestampError(
+            f"timestamp must be a real number, got {type(captured_monotonic_s).__name__}"
+        )
+    value = float(captured_monotonic_s)
+    if math.isnan(value):
+        raise InvalidTimestampError("timestamp is NaN")
+    if math.isinf(value):
+        raise InvalidTimestampError(f"timestamp is infinite: {value}")
+    if value < 0.0:
+        raise InvalidTimestampError(f"monotonic timestamp cannot be negative: {value}")
 
 
 def _validate_geometry(raw: RawFrame) -> None:
