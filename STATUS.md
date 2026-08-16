@@ -2,13 +2,13 @@
 
 | Person | Working on | Status | Next step |
 |---|---|---|---|
-| ChatGPT | Architecture, PR review, integration | ACTIVE | Re-review Claude PR #8 after fixes; assign Codex next task |
+| ChatGPT | Architecture, PR review, integration | ACTIVE | Re-review Claude PR #8 after fixes; review Codex Issue #9 when ready |
 | Claude 1 | Issue #5 / PR #8 — Windows RuneLite capture backend | CHANGES REQUIRED | Fix Windows-only GDI blockers in PR #8, rerun gates, then lead re-review |
-| Codex | Issue #6 / PR #7 — perception replay/regression harness | COMPLETE / MERGED | Await next assigned issue |
+| Codex | Issue #9 — inventory perception + InventoryState | ASSIGNED | Implement Issue #9 and open PR |
 
 ## Current milestone
 
-M2 — Real capture + perception infrastructure.
+M3 — First production perception.
 
 ## Completed
 
@@ -23,6 +23,7 @@ M2 — Real capture + perception infrastructure.
 
 - Claude must fix the Windows-only GDI correctness/resource-lifecycle findings from lead review on PR #8.
 - After the fixes pass CI and re-review, run real Windows/RuneLite validation on the owner's machine.
+- Codex Issue #9 will build the first inventory perception path and shared InventoryState adapter.
 
 ## Blockers
 
