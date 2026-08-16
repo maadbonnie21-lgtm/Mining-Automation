@@ -28,13 +28,10 @@ from .errors import (
     CaptureFailureThresholdExceeded,
     NonMonotonicCaptureError,
 )
-from .frame import Frame
+from .frame import Frame, validate_identity
 
 __all__ = ["DEFAULT_MAX_CONSECUTIVE_FAILURES", "CaptureSource", "CaptureStats"]
 
-#: Chosen so a genuinely transient hiccup (one alt-tab, one redraw stall) does
-#: not halt a session, while a persistent fault surfaces in well under a second
-#: of polling instead of looping unnoticed.
 DEFAULT_MAX_CONSECUTIVE_FAILURES: Final[int] = 5
 
 _EVENT_OPENED: Final[str] = "capture.opened"
@@ -49,13 +46,14 @@ _EVENT_RESET: Final[str] = "capture.failures_reset"
 class CaptureStats:
     """Running counters for diagnostics and for tests to assert against."""
 
-    __slots__ = ("consecutive_failures", "failures", "frames", "retries")
+    __slots__ = ("consecutive_failures", "failures", "frames", "retries", "sink_errors")
 
     def __init__(self) -> None:
         self.frames: int = 0
         self.failures: int = 0
         self.consecutive_failures: int = 0
         self.retries: int = 0
+        self.sink_errors: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -63,36 +61,19 @@ class CaptureStats:
             "failures": self.failures,
             "consecutive_failures": self.consecutive_failures,
             "retries": self.retries,
+            "sink_errors": self.sink_errors,
         }
 
 
 class CaptureSource:
-    """Wraps a :class:`CaptureBackend` and produces validated, owned frames.
-
-    Args:
-        backend: Platform implementation.
-        clock: Monotonic time source. Injected so tests are deterministic.
-        sink: Optional diagnostics sink.
-        max_consecutive_failures: Consecutive failures tolerated before the
-            source latches. Must be at least 1.
-        retry_attempts: Extra attempts per :meth:`capture` call, on top of the
-            first. **Defaults to 0 deliberately** -- see the note below.
-        success_event_interval: Emit a success event every Nth frame. 0 disables
-            success events entirely. Per-frame events at capture rate would
-            drown the log, so this is sampled while failures are never sampled.
-
-    Note:
-        Retries default to off. A retry loop inside the capture layer hides how
-        bad the surface actually is from the layer that has to decide about
-        recovery. When retries are enabled each one emits its own event, counts
-        toward the consecutive-failure total, and can therefore still trip the
-        threshold -- a retry can never mask a persistent fault.
-    """
+    """Wraps a :class:`CaptureBackend` and produces validated, owned frames."""
 
     __slots__ = (
         "_backend",
         "_clock",
         "_is_open",
+        "_last_close_error",
+        "_last_sink_error",
         "_last_timestamp_s",
         "_latched_error",
         "_max_consecutive_failures",
@@ -126,21 +107,20 @@ class CaptureSource:
         self._max_consecutive_failures = max_consecutive_failures
         self._retry_attempts = retry_attempts
         self._success_event_interval = success_event_interval
-
         self._next_frame_id = 1
         self._last_timestamp_s: float | None = None
         self._is_open = False
         self._latched_error: CaptureFailureThresholdExceeded | None = None
+        self._last_sink_error: BaseException | None = None
+        self._last_close_error: CaptureError | None = None
         self._stats = CaptureStats()
 
-    # -- introspection -----------------------------------------------------
     @property
     def is_open(self) -> bool:
         return self._is_open
 
     @property
     def is_latched(self) -> bool:
-        """True when consecutive failures exceeded the limit."""
         return self._latched_error is not None
 
     @property
@@ -148,12 +128,18 @@ class CaptureSource:
         return self._stats
 
     @property
+    def last_sink_error(self) -> BaseException | None:
+        return self._last_sink_error
+
+    @property
+    def last_close_error(self) -> CaptureError | None:
+        return self._last_close_error
+
+    @property
     def backend_name(self) -> str:
         return self._backend.name
 
-    # -- lifecycle ---------------------------------------------------------
     def open(self) -> None:
-        """Open the backend. Idempotent."""
         if self._is_open:
             return
         try:
@@ -166,19 +152,19 @@ class CaptureSource:
         self._emit(_EVENT_OPENED, f"capture opened via {self._backend.name}")
 
     def close(self) -> None:
-        """Close the backend. Idempotent, and safe to call after a failure."""
         if not self._is_open:
             return
         self._is_open = False
         try:
             self._backend.close()
-        except Exception as exc:  # noqa: BLE001 - see below
-            # Deliberately broad and deliberately swallowed. close() runs from
-            # __exit__, including while an exception is already propagating; a
-            # teardown failure must not replace the error the caller actually
-            # needs to see. The failure is recorded rather than raised.
+        except CaptureError as exc:
             self._emit(_EVENT_CLOSED, "backend raised during close", error=repr(exc))
-            return
+            raise
+        except Exception as exc:
+            self._emit(_EVENT_CLOSED, "backend raised during close", error=repr(exc))
+            raise CaptureBackendError(
+                f"backend {self._backend.name!r} failed to close"
+            ) from exc
         self._emit(_EVENT_CLOSED, f"capture closed via {self._backend.name}", **self._stats.as_dict())
 
     def __enter__(self) -> Self:
@@ -191,31 +177,21 @@ class CaptureSource:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        self.close()
+        try:
+            self.close()
+        except CaptureError as close_error:
+            self._last_close_error = close_error
+            if exc_type is None:
+                raise
 
     def reset_failures(self) -> None:
-        """Clear a latched failure state.
-
-        Deliberately explicit: recovery policy decides when the surface is worth
-        trusting again, not the capture layer.
-        """
         if self._latched_error is None and self._stats.consecutive_failures == 0:
             return
         self._latched_error = None
         self._stats.consecutive_failures = 0
         self._emit(_EVENT_RESET, "capture failure state cleared")
 
-    # -- capture -----------------------------------------------------------
     def capture(self) -> Frame:
-        """Return the next validated frame.
-
-        Raises:
-            CaptureClosedError: the source is not open.
-            CaptureFailureThresholdExceeded: too many consecutive failures; the
-                source is latched until :meth:`reset_failures`.
-            CaptureError: any other capture failure, always a subclass so
-                callers can branch on cause.
-        """
         if self._latched_error is not None:
             raise self._latched_error
         if not self._is_open:
@@ -223,7 +199,6 @@ class CaptureSource:
 
         attempts = self._retry_attempts + 1
         last_error: CaptureError | None = None
-
         for attempt in range(attempts):
             try:
                 frame = self._attempt_capture()
@@ -242,7 +217,7 @@ class CaptureSource:
             self._record_success(frame)
             return frame
 
-        if last_error is None:  # pragma: no cover - loop cannot exit without an error
+        if last_error is None:
             raise CaptureBackendError("capture loop exited without a frame or an error")
         raise last_error
 
@@ -250,33 +225,26 @@ class CaptureSource:
         try:
             raw = self._backend.grab()
         except CaptureError:
-            # The backend already speaks the taxonomy (CaptureUnavailableError,
-            # CaptureTimeoutError, ...). Preserve the specific type so recovery
-            # policy can distinguish transient from terminal.
             raise
         except Exception as exc:
             raise CaptureBackendError(f"backend {self._backend.name!r} grab failed") from exc
 
         timestamp = self._clock.monotonic_s()
+        validate_identity(self._next_frame_id, timestamp)
         if self._last_timestamp_s is not None and timestamp < self._last_timestamp_s:
             raise NonMonotonicCaptureError(
                 f"clock moved backwards: {timestamp} < {self._last_timestamp_s}"
             )
 
-        # Frame.from_raw validates geometry and payload, and raises
-        # InvalidFrameError (a CaptureError) on any mismatch.
         frame = Frame.from_raw(
             raw,
             frame_id=self._next_frame_id,
             captured_monotonic_s=timestamp,
         )
-        # Only advance identity and time once the frame is known good, so a
-        # rejected frame never consumes an id or moves the monotonic floor.
         self._next_frame_id += 1
         self._last_timestamp_s = timestamp
         return frame
 
-    # -- bookkeeping -------------------------------------------------------
     def _record_success(self, frame: Frame) -> None:
         self._stats.frames += 1
         self._stats.consecutive_failures = 0
@@ -322,10 +290,14 @@ class CaptureSource:
     def _emit(self, event_type: str, message: str, **data: Any) -> None:
         if self._sink is None:
             return
-        self._sink.emit(
-            DiagnosticEvent(
-                event_type=event_type,
-                message=message,
-                data={"backend": self._backend.name, **data},
+        try:
+            self._sink.emit(
+                DiagnosticEvent(
+                    event_type=event_type,
+                    message=message,
+                    data={"backend": self._backend.name, **data},
+                )
             )
-        )
+        except Exception as exc:
+            self._stats.sink_errors += 1
+            self._last_sink_error = exc
