@@ -2,7 +2,7 @@
 
 | Person | Working on | Status | Next step |
 |---|---|---|---|
-| ChatGPT | Issue #11 — Varrock East iron-rock perception + real fixture capture | ACTIVE | Build recorder/annotation path, collect real frames, implement and test detector |
+| ChatGPT | Issue #11 / Draft PR #12 — Varrock East iron perception | REAL-FRAME CALIBRATION | Collect reviewed available/depleted/obstructed frames and calibrate detector profile |
 | Claude 1 | Issue #5 / PR #8 — Windows RuneLite capture backend | COMPLETE / MERGED | Await next assigned issue when available |
 | Codex | Issue #9 — inventory perception + InventoryState | IN PROGRESS | Implement Issue #9 and open PR |
 
@@ -14,13 +14,13 @@ M3 — First production perception.
 
 - Capture foundation and shared-contract hardening are merged.
 - Perception replay/regression infrastructure is merged.
-- Windows RuneLite capture backend merged through PR #8 as `1c7c770`.
-- Linux CI, Windows smoke, and real-machine RuneLite capture validation passed for the tested envelope.
-- Real capture correctly handled live pixels, move/resize, minimize/restore, and frame identity.
+- Windows RuneLite capture backend merged and passed Linux CI, Windows smoke, and live RuneLite validation.
+- Draft PR #12 now contains the first resource detector, shared `ResourceState` adapter, real-frame recorder, annotation/review workflow, replay-manifest builder, documentation, and synthetic regression tests.
+- Draft PR #12 is one clean commit and passes Ruff, strict mypy, and the full suite: 525 passed, 1 skipped.
 
 ## Active
 
-- ChatGPT Issue #11: first real iron-rock detector for Varrock East Mine, including real fixture capture and replay regression data.
+- ChatGPT Issue #11: collect reviewed Varrock East frames, calibrate available/depleted/uncertain iron signatures, and complete real-frame replay evaluation.
 - Codex Issue #9: 28-slot inventory perception and clean `InventoryState` adapter.
 
 ## Next integration target
@@ -33,4 +33,4 @@ No clicking, navigation, or banking will be added until both perception paths pa
 
 ## Blocker
 
-- None.
+- Issue #11 now needs deliberate real RuneLite fixture collection at Varrock East Mine.
