@@ -154,9 +154,12 @@ matter. Failures are never sampled.
 
 **Not implemented in M1** — deliberately out of scope per issue #1
 
-- Any real platform backend (Windows/X11/Wayland/macOS). The protocol is
-  defined; no OS implementation ships yet.
-- Window discovery, targeting, focus handling, DPI/scaling awareness
+- A real platform backend shipped separately: see `docs/CAPTURE_WINDOWS.md`
+  for the Windows/RuneLite implementation added in Issue #5. X11/Wayland/macOS
+  remain unimplemented.
+- Window discovery, targeting, focus handling, DPI/scaling awareness are
+  addressed for Windows in `docs/CAPTURE_WINDOWS.md`; still unimplemented for
+  other platforms.
 - Region-of-interest cropping and format conversion
 - Frame buffering, ring buffers, async or threaded capture
 - Frame persistence to disk and replay

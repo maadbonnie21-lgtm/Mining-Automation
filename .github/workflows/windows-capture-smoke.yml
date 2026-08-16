@@ -1,0 +1,29 @@
+name: Windows capture smoke
+
+on:
+  pull_request:
+    paths:
+      - "src/mining_automation/capture/windows/**"
+      - "tests/test_windows_gdi_resources.py"
+      - "tests/test_windows_capture_real.py"
+      - ".github/workflows/windows-capture-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Test GDI lifecycle and real DLL import
+        run: >-
+          python -m pytest -q
+          tests/test_windows_gdi_resources.py
+          tests/test_windows_capture_real.py
