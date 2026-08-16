@@ -2,8 +2,8 @@
 
 | Person | Working on | Status | Next step |
 |---|---|---|---|
-| ChatGPT | Architecture, PR review, integration | ACTIVE | Merge PR #8 after owner approval; review Codex Issue #9 when ready |
-| Claude 1 | Issue #5 / PR #8 — Windows RuneLite capture backend | COMPLETE / READY TO MERGE | Merge PR #8 |
+| ChatGPT | Architecture, PR review, integration | ACTIVE | Review Codex Issue #9 when ready; define next perception milestone |
+| Claude 1 | Issue #5 / PR #8 — Windows RuneLite capture backend | COMPLETE / MERGED | Await next assigned issue |
 | Codex | Issue #9 — inventory perception + InventoryState | ASSIGNED | Implement Issue #9 and open PR |
 
 ## Current milestone
@@ -14,8 +14,7 @@ M3 — First production perception.
 
 - Capture foundation and shared-contract hardening are merged.
 - Perception replay/regression infrastructure is merged.
-- ChatGPT completed Claude's outstanding PR #8 review fixes.
-- PR #8 is one clean commit on current `main` and is mergeable.
+- Windows RuneLite capture backend merged through PR #8 as `1c7c770`.
 - PR #8 Linux CI: Ruff pass, mypy pass, 513 tests passed, 1 skipped.
 - PR #8 Windows smoke: 11 tests passed using the real Win32 DLL boundary.
 - Real Windows/RuneLite capture passed on `RuneLite - Chief Luma` at DPI 96.
@@ -25,9 +24,9 @@ M3 — First production perception.
 
 ## Pending
 
-- Merge PR #8.
 - Codex Issue #9 will build the first inventory perception path and shared `InventoryState` adapter.
+- Assign Claude's next perception task when Claude is available.
 
 ## Blocker
 
-- None in PR #8's tested operating envelope.
+- None.
