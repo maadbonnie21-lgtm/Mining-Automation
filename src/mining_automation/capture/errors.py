@@ -16,6 +16,7 @@ __all__ = [
     "CaptureTimeoutError",
     "CaptureUnavailableError",
     "InvalidFrameError",
+    "InvalidTimestampError",
     "NonMonotonicCaptureError",
 ]
 
@@ -57,6 +58,19 @@ class InvalidFrameError(CaptureError):
     payload is treated as a hard failure rather than being padded or cropped,
     because silently reshaping a malformed frame would feed corrupt pixels to
     perception.
+    """
+
+
+class InvalidTimestampError(CaptureError):
+    """A frame carried a timestamp that cannot describe a real capture.
+
+    Covers NaN, positive and negative infinity, and negative monotonic
+    readings, plus a non-positive frame id.
+
+    NaN is the reason this is a hard error rather than a clamp. Every
+    comparison against NaN is False, so a NaN timestamp passes an ordinary
+    monotonicity check unchallenged and then silently corrupts every age,
+    staleness, and frame-rate calculation derived from it.
     """
 
 
