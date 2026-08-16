@@ -9,17 +9,26 @@ from mining_automation.capture import (
     CaptureBackend,
     CaptureBackendError,
     CaptureClosedError,
+    CaptureError,
     CaptureFailureThresholdExceeded,
     CaptureSource,
     CaptureTimeoutError,
     CaptureUnavailableError,
     Frame,
     InvalidFrameError,
+    InvalidTimestampError,
     NonMonotonicCaptureError,
     PixelFormat,
     RawFrame,
 )
-from mining_automation.capture.testing import FakeCaptureBackend, ManualClock, solid_payload
+from mining_automation.capture.testing import (
+    BrokenClock,
+    FailingEventSink,
+    FakeCaptureBackend,
+    FlakyEventSink,
+    ManualClock,
+    solid_payload,
+)
 from mining_automation.contracts import FrameRef
 from mining_automation.diagnostics import InMemoryEventSink
 
@@ -70,13 +79,13 @@ def test_non_positive_dimensions_are_rejected(width: int, height: int) -> None:
 
 def test_truncated_payload_is_rejected_not_padded() -> None:
     raw = RawFrame(payload=b"\x00" * 10, width=4, height=2)  # needs 32
-    with pytest.raises(InvalidFrameError, match="payload length 10"):
+    with pytest.raises(InvalidFrameError, match="payload size 10 bytes"):
         Frame.from_raw(raw, frame_id=1, captured_monotonic_s=0.0)
 
 
 def test_oversized_payload_is_rejected() -> None:
     raw = RawFrame(payload=b"\x00" * 64, width=4, height=2)  # needs 32
-    with pytest.raises(InvalidFrameError, match="payload length 64"):
+    with pytest.raises(InvalidFrameError, match="payload size 64 bytes"):
         Frame.from_raw(raw, frame_id=1, captured_monotonic_s=0.0)
 
 
@@ -265,15 +274,20 @@ def test_backend_open_failure_is_normalised() -> None:
     assert source.is_open is False
 
 
-def test_close_error_does_not_propagate() -> None:
+def test_close_error_is_reported_and_diagnosed() -> None:
+    """Superseded by review finding P3: a cleanup failure must not be silent."""
+
     class BadClose(FakeCaptureBackend):
         def close(self) -> None:
+            self.close_calls += 1
+            self.is_open = False
             raise OSError("handle already gone")
 
     sink = InMemoryEventSink()
     source = CaptureSource(BadClose(), clock=ManualClock(), sink=sink)
     source.open()
-    source.close()  # must not raise
+    with pytest.raises(CaptureBackendError, match="failed to close"):
+        source.close()
     assert source.is_open is False
     assert "capture.closed" in event_types(sink)
 
@@ -549,6 +563,7 @@ def test_stats_track_frames_and_failures() -> None:
             "failures": 1,
             "consecutive_failures": 0,
             "retries": 0,
+            "sink_errors": 0,
         }
         assert source.backend_name == "fake"
 
@@ -618,3 +633,345 @@ def test_fake_backend_refuses_to_grab_while_closed() -> None:
     backend = FakeCaptureBackend([make_raw()])
     with pytest.raises(CaptureUnavailableError, match="not open"):
         backend.grab()
+
+
+# ===========================================================================
+# Review findings — regression coverage
+# ===========================================================================
+
+# --- P1: diagnostic sink isolation -----------------------------------------
+# A failing EventSink must never change capture behaviour or lifecycle state.
+
+
+def test_failing_sink_does_not_prevent_open() -> None:
+    sink = FailingEventSink()
+    source = CaptureSource(FakeCaptureBackend(), clock=ManualClock(), sink=sink)
+    source.open()
+    assert source.is_open is True
+    assert sink.attempts == 1
+    assert source.stats.sink_errors == 1
+
+
+def test_failing_sink_does_not_withhold_a_valid_frame() -> None:
+    sink = FailingEventSink()
+    backend = FakeCaptureBackend([make_raw(value=0x33)])
+    with CaptureSource(
+        backend, clock=ManualClock(), sink=sink, success_event_interval=1
+    ) as source:
+        frame = source.capture()
+    assert frame.frame_id == 1
+    assert set(frame.payload) == {0x33}
+    assert source.stats.frames == 1
+
+
+def test_failing_sink_does_not_replace_the_original_capture_error() -> None:
+    sink = FailingEventSink()
+    backend = FakeCaptureBackend([CaptureUnavailableError("window minimised")])
+    with (
+        CaptureSource(backend, clock=ManualClock(), sink=sink) as source,
+        pytest.raises(CaptureUnavailableError, match="minimised"),
+    ):
+        source.capture()
+
+
+def test_failing_sink_does_not_prevent_failure_threshold_latching() -> None:
+    """The dangerous case: the sink dies exactly at the threshold emission."""
+    sink = FlakyEventSink(fail_on="capture.failure_threshold_exceeded")
+    backend = FakeCaptureBackend([CaptureUnavailableError("gone")])
+    source = CaptureSource(backend, clock=ManualClock(), sink=sink, max_consecutive_failures=2)
+    source.open()
+
+    with pytest.raises(CaptureUnavailableError):
+        source.capture()
+    with pytest.raises(CaptureFailureThresholdExceeded):
+        source.capture()
+
+    assert source.is_latched is True
+    assert sink.failures == 1
+    assert source.stats.sink_errors == 1
+
+
+def test_failing_sink_does_not_prevent_failure_reset() -> None:
+    sink = FailingEventSink()
+    backend = FakeCaptureBackend([CaptureUnavailableError("gone"), make_raw()])
+    source = CaptureSource(backend, clock=ManualClock(), sink=sink, max_consecutive_failures=1)
+    source.open()
+    with pytest.raises(CaptureFailureThresholdExceeded):
+        source.capture()
+
+    source.reset_failures()
+    assert source.is_latched is False
+    assert source.capture().frame_id == 1
+
+
+def test_failing_sink_does_not_break_close() -> None:
+    sink = FailingEventSink()
+    backend = FakeCaptureBackend()
+    source = CaptureSource(backend, clock=ManualClock(), sink=sink)
+    source.open()
+    source.close()
+    assert source.is_open is False
+    assert backend.close_calls == 1
+
+
+def test_failing_sink_across_a_full_lifecycle_changes_nothing() -> None:
+    sink = FailingEventSink()
+    working = InMemoryEventSink()
+    script: list[RawFrame | BaseException] = [
+        make_raw(),
+        CaptureUnavailableError("blip"),
+        make_raw(),
+    ]
+
+    def run(s: object) -> dict[str, int]:
+        backend = FakeCaptureBackend(list(script))
+        src = CaptureSource(backend, clock=ManualClock(), sink=s)  # type: ignore[arg-type]
+        src.open()
+        src.capture()
+        with pytest.raises(CaptureUnavailableError):
+            src.capture()
+        src.capture()
+        src.close()
+        stats = src.stats.as_dict()
+        stats.pop("sink_errors")
+        return stats
+
+    assert run(sink) == run(working)
+
+
+def test_sink_errors_are_counted_and_the_last_one_is_retained() -> None:
+    boom = RuntimeError("sink exploded")
+    sink = FailingEventSink(boom)
+    source = CaptureSource(FakeCaptureBackend(), clock=ManualClock(), sink=sink)
+    source.open()
+    source.close()
+    assert source.stats.sink_errors == 2
+    assert source.last_sink_error is boom
+
+
+# --- P2: validate payload size before copying -------------------------------
+
+
+def test_oversized_payload_is_rejected_without_copying() -> None:
+    """Validation must precede the copy, not follow it."""
+    huge = bytearray(4 * 1024 * 1024)
+    raw = RawFrame(payload=huge, width=4, height=2)  # needs 32 bytes
+    copies: list[int] = []
+
+    class TrackedBytes(bytearray):
+        def __bytes__(self) -> bytes:  # pragma: no cover - must never run
+            copies.append(len(self))
+            return bytes(memoryview(self))
+
+    raw = RawFrame(payload=TrackedBytes(huge), width=4, height=2)
+    with pytest.raises(InvalidFrameError, match="payload size 4194304"):
+        Frame.from_raw(raw, frame_id=1, captured_monotonic_s=0.0)
+    assert copies == [], "payload must be rejected before any copy"
+
+
+def test_memoryview_payload_of_correct_size_is_accepted() -> None:
+    buf = bytearray(solid_payload(4, 2, 0x44))
+    raw = RawFrame(payload=memoryview(buf), width=4, height=2)
+    frame = Frame.from_raw(raw, frame_id=1, captured_monotonic_s=0.0)
+    assert frame.size_bytes == 32
+    assert set(frame.payload) == {0x44}
+
+
+def test_memoryview_size_uses_nbytes_not_element_count() -> None:
+    """A non-byte memoryview reports elements from len(), bytes from nbytes.
+
+    An 8-element 'I' array is 32 bytes -- exactly the expected size here. Using
+    len() would see 8 and wrongly reject it.
+    """
+    import array
+
+    arr = array.array("I", [0x01020304] * 8)
+    view = memoryview(arr)
+    assert len(view) == 8
+    assert view.nbytes == 32
+
+    raw = RawFrame(payload=view, width=4, height=2)
+    frame = Frame.from_raw(raw, frame_id=1, captured_monotonic_s=0.0)
+    assert frame.size_bytes == 32
+
+
+def test_memoryview_with_wrong_byte_count_is_rejected() -> None:
+    import array
+
+    arr = array.array("I", [0] * 4)  # 16 bytes, needs 32
+    raw = RawFrame(payload=memoryview(arr), width=4, height=2)
+    with pytest.raises(InvalidFrameError, match="payload size 16 bytes"):
+        Frame.from_raw(raw, frame_id=1, captured_monotonic_s=0.0)
+
+
+def test_undersized_payload_still_rejected_before_copy() -> None:
+    raw = RawFrame(payload=bytearray(10), width=4, height=2)
+    with pytest.raises(InvalidFrameError, match="payload size 10 bytes"):
+        Frame.from_raw(raw, frame_id=1, captured_monotonic_s=0.0)
+
+
+# --- P3: cleanup failure behaviour ------------------------------------------
+
+
+class FailingCloseBackend(FakeCaptureBackend):
+    def close(self) -> None:
+        self.close_calls += 1
+        self.is_open = False
+        raise OSError("handle already released")
+
+
+def test_direct_close_failure_is_normalised_and_raised() -> None:
+    source = CaptureSource(FailingCloseBackend(), clock=ManualClock())
+    source.open()
+    with pytest.raises(CaptureBackendError, match="failed to close") as info:
+        source.close()
+    assert isinstance(info.value.__cause__, OSError)
+    assert source.is_open is False
+
+
+def test_normal_context_exit_surfaces_a_cleanup_failure() -> None:
+    backend = FailingCloseBackend()
+    with (
+        pytest.raises(CaptureBackendError, match="failed to close"),
+        CaptureSource(backend, clock=ManualClock()) as source,
+    ):
+        source.capture()
+    assert backend.close_calls == 1
+
+
+def test_in_flight_exception_wins_over_a_cleanup_failure() -> None:
+    """The original error is what the caller needs; teardown must not mask it."""
+    backend = FailingCloseBackend()
+    source = CaptureSource(backend, clock=ManualClock())
+    with pytest.raises(ValueError, match="consumer blew up"), source:
+        raise ValueError("consumer blew up")
+
+    assert backend.close_calls == 1
+    assert isinstance(source.last_close_error, CaptureBackendError)
+
+
+def test_capture_error_in_flight_also_wins_over_cleanup_failure() -> None:
+    backend = FailingCloseBackend([CaptureUnavailableError("surface gone")])
+    source = CaptureSource(backend, clock=ManualClock())
+    with pytest.raises(CaptureUnavailableError, match="surface gone"), source:
+        source.capture()
+    assert isinstance(source.last_close_error, CaptureBackendError)
+
+
+def test_close_failure_that_is_already_a_capture_error_is_not_rewrapped() -> None:
+    class UnavailableOnClose(FakeCaptureBackend):
+        def close(self) -> None:
+            self.close_calls += 1
+            self.is_open = False
+            raise CaptureUnavailableError("device detached during close")
+
+    source = CaptureSource(UnavailableOnClose(), clock=ManualClock())
+    source.open()
+    with pytest.raises(CaptureUnavailableError, match="detached"):
+        source.close()
+
+
+def test_close_marks_source_closed_even_when_teardown_fails() -> None:
+    source = CaptureSource(FailingCloseBackend(), clock=ManualClock())
+    source.open()
+    with pytest.raises(CaptureBackendError):
+        source.close()
+    source.close()  # idempotent: already closed, no second attempt, no raise
+
+
+# --- P4: invalid and non-finite timestamps ----------------------------------
+
+
+@pytest.mark.parametrize(
+    "value,match",
+    [
+        (float("nan"), "NaN"),
+        (float("inf"), "infinite"),
+        (float("-inf"), "infinite"),
+        (-0.001, "negative"),
+        (-1000.0, "negative"),
+    ],
+)
+def test_invalid_timestamps_are_rejected_by_frame(value: float, match: str) -> None:
+    with pytest.raises(InvalidTimestampError, match=match):
+        Frame.from_raw(make_raw(), frame_id=1, captured_monotonic_s=value)
+
+
+@pytest.mark.parametrize("frame_id", [0, -1, -99])
+def test_non_positive_frame_ids_are_rejected(frame_id: int) -> None:
+    with pytest.raises(InvalidTimestampError, match="frame_id"):
+        Frame.from_raw(make_raw(), frame_id=frame_id, captured_monotonic_s=0.0)
+
+
+def test_zero_timestamp_is_valid() -> None:
+    frame = Frame.from_raw(make_raw(), frame_id=1, captured_monotonic_s=0.0)
+    assert frame.captured_monotonic_s == 0.0
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), -5.0])
+def test_source_rejects_an_invalid_clock_reading(bad: float) -> None:
+    source = CaptureSource(
+        FakeCaptureBackend([make_raw()]), clock=BrokenClock([bad]), max_consecutive_failures=99
+    )
+    source.open()
+    with pytest.raises(InvalidTimestampError):
+        source.capture()
+
+
+def test_nan_timestamp_does_not_consume_a_frame_id_or_move_the_floor() -> None:
+    """NaN is the case an ordinary monotonic check cannot catch."""
+    clock = BrokenClock([10.0, float("nan"), 11.0])
+    backend = FakeCaptureBackend([make_raw()])
+    source = CaptureSource(backend, clock=clock, max_consecutive_failures=99)
+    source.open()
+
+    first = source.capture()
+    assert (first.frame_id, first.captured_monotonic_s) == (1, 10.0)
+
+    with pytest.raises(InvalidTimestampError, match="NaN"):
+        source.capture()
+
+    second = source.capture()
+    assert second.frame_id == 2, "rejected frame must not consume an id"
+    assert second.captured_monotonic_s == 11.0
+
+
+def test_infinite_timestamp_does_not_poison_the_monotonic_floor() -> None:
+    clock = BrokenClock([5.0, float("inf"), 6.0])
+    source = CaptureSource(
+        FakeCaptureBackend([make_raw()]), clock=clock, max_consecutive_failures=99
+    )
+    source.open()
+    source.capture()
+    with pytest.raises(InvalidTimestampError):
+        source.capture()
+    assert source.capture().captured_monotonic_s == 6.0
+
+
+def test_invalid_timestamps_count_toward_the_failure_threshold() -> None:
+    source = CaptureSource(
+        FakeCaptureBackend([make_raw()]),
+        clock=BrokenClock([float("nan")]),
+        max_consecutive_failures=2,
+    )
+    source.open()
+    with pytest.raises(InvalidTimestampError):
+        source.capture()
+    with pytest.raises(CaptureFailureThresholdExceeded):
+        source.capture()
+
+
+def test_invalid_timestamp_error_is_a_capture_error() -> None:
+    assert issubclass(InvalidTimestampError, CaptureError)
+
+
+@pytest.mark.parametrize("bad", ["1.0", None, True, [1.0]])
+def test_non_numeric_timestamps_are_rejected(bad: object) -> None:
+    """bool is excluded deliberately: True would otherwise pass as 1.0."""
+    with pytest.raises(InvalidTimestampError, match="real number"):
+        Frame.from_raw(make_raw(), frame_id=1, captured_monotonic_s=bad)  # type: ignore[arg-type]
+
+
+def test_broken_clock_rejects_an_empty_script() -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        BrokenClock([])
