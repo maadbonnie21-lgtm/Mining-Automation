@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "location": {
+    "location_id": "varrock-east-mine",
+    "display_name": "South-east Varrock mine",
+    "aliases": [
+      "Varrock East Mine",
+      "Varrock south-east mine"
+    ],
+    "relationship": {
+      "nearby_bank_id": "varrock-east-bank",
+      "position_summary": "Directly east of Varrock's southern entrance"
+    },
+    "support_status": "perception_validation_in_progress"
+  },
+  "resource": {
+    "resource_id": "iron-rock",
+    "ore_label": "iron",
+    "mining_level": 15,
+    "experience_per_ore": 35,
+    "ordinary_respawn_seconds": 5.4,
+    "visual_state_notes": {
+      "available": "Ore colour is visible on the rock",
+      "depleted": "The mined rock appears grey until respawn",
+      "uncertain": "Scene, geometry, obstruction, or colour evidence is insufficient"
+    }
+  },
+  "mine_contents": [
+    "iron",
+    "copper",
+    "tin"
+  ],
+  "sources": [
+    {
+      "title": "Iron rocks - OSRS Wiki",
+      "url": "https://oldschool.runescape.wiki/w/Iron_rocks",
+      "retrieved_utc": "2026-08-16"
+    },
+    {
+      "title": "Mining - OSRS Wiki",
+      "url": "https://oldschool.runescape.wiki/w/Mining",
+      "retrieved_utc": "2026-08-16"
+    },
+    {
+      "title": "Varrock - OSRS Wiki",
+      "url": "https://oldschool.runescape.wiki/w/Varrock",
+      "retrieved_utc": "2026-08-16"
+    }
+  ],
+  "validation": {
+    "knowledge_verified": true,
+    "real_fixture_dataset_complete": false,
+    "resource_detector_release_ready": false,
+    "navigation_validated": false,
+    "banking_validated": false,
+    "end_to_end_supported": false
+  }
+}
