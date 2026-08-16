@@ -20,9 +20,11 @@ be developed and tested without a display.
 | `MonotonicClock` / `SystemMonotonicClock` | Injected time source. |
 | `CaptureStats` | Frame/failure/retry counters. |
 | `CaptureError` and subclasses | Failure taxonomy. |
+| `validate_identity` | Rejects non-finite/negative timestamps and non-positive frame ids. |
 
 Test doubles live in `capture.testing`: `FakeCaptureBackend`, `ManualClock`,
-`solid_payload`.
+`BrokenClock` (scripted invalid timestamps), `FailingEventSink`,
+`FlakyEventSink`, `solid_payload`.
 
 ```python
 from mining_automation.capture import CaptureSource
@@ -54,10 +56,40 @@ underneath a consumer. This is covered by
 never returns `None`, never returns a sentinel, and never returns the previous
 frame.
 
-**Validation before delivery.** Non-positive dimensions, empty payloads, and any
-payload whose length disagrees with `width * height * bytes_per_pixel` are
-rejected. Truncated payloads are *not* padded and oversized payloads are *not*
-cropped — reshaping a malformed frame would hand corrupt pixels to perception.
+**Validation before delivery, and before copying.** Non-positive dimensions,
+empty payloads, and any payload whose *byte count* disagrees with
+`width * height * bytes_per_pixel` are rejected. Truncated payloads are *not*
+padded and oversized payloads are *not* cropped — reshaping a malformed frame
+would hand corrupt pixels to perception.
+
+Size is measured on the source payload before ownership transfer. A malformed 4K
+payload would otherwise allocate ~33 MB purely to be rejected, once per frame if
+a backend is malfunctioning at capture rate. For `memoryview` the check uses
+`nbytes`, not `len()` — `len()` on a non-byte view returns the element count, so
+a 4-byte-per-element view would be mis-measured by a factor of four.
+
+**Valid timestamps.** A timestamp must be a finite, non-negative real number and
+a frame id must be positive, checked before the frame is constructed and before
+the monotonicity comparison. Ordering matters: every comparison against NaN is
+False, so a NaN reading passes an ordinary monotonic check unchallenged and then
+silently corrupts every age, staleness, and frame-rate calculation derived from
+it. Rejected timestamps consume neither a frame id nor the monotonic floor.
+
+**Diagnostics cannot change behaviour.** A failing `EventSink` never alters
+capture: it cannot prevent `open()`, withhold a valid frame, replace the capture
+error a caller needs, stop the failure threshold from latching, block
+`reset_failures()`, or break `close()`. Sink failures are swallowed — but
+counted in `CaptureStats.sink_errors` and retained on `last_sink_error`, since a
+broken sink cannot report itself.
+
+**Cleanup failures surface.** `close()` raises on a teardown failure, normalising
+unrecognised backend exceptions to `CaptureBackendError` with the original as
+`__cause__`; a leaked handle is exactly the fault that reappears later as an
+unexplained capture failure. On a normal `with` exit that failure propagates. If
+an exception is already propagating out of the block, the original wins — it is
+what the caller needs to diagnose — and the cleanup failure is recorded on
+`last_close_error`. The source is marked closed either way, so a failing backend
+cannot leave it stuck half-open.
 
 **Bounded failure.** After `max_consecutive_failures` (default 5) consecutive
 failures the source latches: it raises `CaptureFailureThresholdExceeded` and
@@ -73,6 +105,7 @@ success resets the counter.
 | `CaptureTimeoutError` | Backend produced no frame in time. | Transient |
 | `CaptureBackendError` | Uninterpretable platform failure. Original preserved as `__cause__`. | Terminal |
 | `InvalidFrameError` | Frame failed validation. | Terminal |
+| `InvalidTimestampError` | NaN, ±inf, negative timestamp, or non-positive frame id. | Terminal |
 | `NonMonotonicCaptureError` | Clock moved backwards. | Terminal |
 | `CaptureFailureThresholdExceeded` | Consecutive limit reached; source latched. | Escalate |
 
@@ -153,10 +186,15 @@ issue, not here — which is precisely why the protocol seam exists.
 
 ## Tests
 
-`tests/test_capture.py` — 61 tests, 100% statement coverage of the capture
+`tests/test_capture.py` — 102 tests, 100% statement coverage of the capture
 package.
 
 Groups: protocol conformance, frame validation, payload ownership, identity and
 monotonicity, lifecycle and idempotency, failure paths, latch and reset
 behaviour, retry policy, configuration validation, diagnostics, consumer
 decoupling.
+
+Lead review findings each carry dedicated regression coverage: diagnostic sink
+isolation (8 tests), pre-copy payload validation including `memoryview` byte
+accounting (5), cleanup failure behaviour across direct close, normal context
+exit, and in-flight exception (6), and invalid or non-finite timestamps (14).
