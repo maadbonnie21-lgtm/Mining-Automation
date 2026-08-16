@@ -2,8 +2,8 @@
 
 | Person | Working on | Status | Next step |
 |---|---|---|---|
-| ChatGPT | Architecture, PR review, integration | ACTIVE | Re-review Claude PR #8 after fixes; review Codex Issue #9 when ready |
-| Claude 1 | Issue #5 / PR #8 — Windows RuneLite capture backend | CHANGES REQUIRED | Fix Windows-only GDI blockers in PR #8, rerun gates, then lead re-review |
+| ChatGPT | Architecture, PR review, integration | ACTIVE | Run PR #8 real RuneLite validation; review Codex Issue #9 when ready |
+| Claude 1 | Issue #5 / PR #8 — Windows RuneLite capture backend | CODE COMPLETE | Await real-machine RuneLite validation |
 | Codex | Issue #9 — inventory perception + InventoryState | ASSIGNED | Implement Issue #9 and open PR |
 
 ## Current milestone
@@ -12,19 +12,20 @@ M3 — First production perception.
 
 ## Completed
 
-- Codex PR #4 merged into `main`.
-- Claude PR #2 merged into `main` as `bd9d5f8`.
-- Codex PR #7 merged into `main` as `f0225c7` after lead review and fresh CI on current `main`.
-- Capture foundation, shared-contract hardening, and perception replay/regression infrastructure are complete.
-- Claude Issue #5 patch is published as PR #8.
-- PR #8 GitHub CI passes Ruff, mypy, and pytest.
+- Capture foundation and shared-contract hardening are merged.
+- Perception replay/regression infrastructure is merged.
+- ChatGPT completed Claude's outstanding PR #8 review fixes.
+- PR #8 is one clean commit on current `main` and is mergeable.
+- PR #8 Linux CI: Ruff pass, mypy pass, 513 tests passed, 1 skipped.
+- PR #8 Windows smoke: 11 tests passed using the real Win32 DLL boundary.
 
 ## Pending
 
-- Claude must fix the Windows-only GDI correctness/resource-lifecycle findings from lead review on PR #8.
-- After the fixes pass CI and re-review, run real Windows/RuneLite validation on the owner's machine.
-- Codex Issue #9 will build the first inventory perception path and shared InventoryState adapter.
+- Run `tools/windows_capture_check.py` with RuneLite open on the owner's Windows machine.
+- Confirm real pixels, minimize/restore, resize/move, and DPI behavior.
+- Merge PR #8 only after that real-machine gate passes.
+- Codex Issue #9 will build the first inventory perception path and shared `InventoryState` adapter.
 
-## Blockers
+## Blocker
 
-- PR #8 must not merge until the Windows GDI review findings are fixed and re-reviewed.
+- Only the real RuneLite capture validation remains for PR #8.
