@@ -12,7 +12,8 @@ The detector, geometry, reference classifier, replay workflow, and state
 adapter are implemented and regression-tested with deterministic synthetic
 frames. **No live RuneLite layout profile or empty-inventory reference is
 production-validated yet.** Until reviewed real captures are added, a caller
-must supply a reviewed `InventoryFrameProfile` and matching empty reference.
+must supply a reviewed `InventoryFrameProfile` and matching empty reference
+through `inventory_detector_from_profile`.
 Unsupported frame geometry is reported as an unknown inventory; it is never
 silently assigned a guessed count.
 
@@ -32,8 +33,8 @@ hard-coded desktop coordinate or a synthetic guess.
    hand-entered coordinates.
 3. `ReferenceInventoryClassifier` compares every slot with the corresponding
    slot in a reviewed empty-inventory reference. It also compares gutter guard
-   pixels with that reference so a broad overlay or wrong panel cannot become
-   28 confident item detections.
+   pixels with that reference so a broad overlay that changes the reviewed
+   gutters fails closed rather than becoming confident item detections.
 4. The detector aggregates only when localization and all 28 slot decisions
    meet the configured confidence policy.
 5. `inventory_state_from_observation` is the sole public evidence parser and
@@ -44,6 +45,58 @@ localization confidence, produce one well-formed unknown observation. Broken
 component contracts, such as a locator returning an out-of-frame region or a
 classifier returning malformed slot order, raise a typed inventory detector
 error; the generic evaluation harness records that as a detector failure.
+
+## Live profile composition
+
+The public composition boundary takes exactly the two reviewed artifacts that
+define one supported visual profile: an `InventoryFrameProfile` and an owned
+empty-reference `Frame`.
+
+```python
+from mining_automation.perception.inventory import (
+    ClassificationPolicy,
+    InventoryFrameProfile,
+    InventoryGridLayout,
+    Region,
+    inventory_detector_from_profile,
+)
+
+layout = InventoryGridLayout(
+    profile_id="reviewed-profile-id",
+    column_stride=36,  # measured from reviewed captures
+    row_stride=36,
+)
+profile = InventoryFrameProfile(
+    profile_id=layout.profile_id,
+    frame_width=800,
+    frame_height=600,
+    region=Region(650, 300, layout.width, layout.height),
+    layout=layout,
+)
+detector = inventory_detector_from_profile(
+    profile,
+    empty_reference_frame,
+    policy=ClassificationPolicy(),
+)
+```
+
+The numbers above illustrate the API only; they are not a supported RuneLite
+profile. The factory requires the empty reference to have the profile's exact
+full-frame dimensions, derives the reference region and layout from the
+profile, and refuses mismatched calibration inputs. A replay-loaded frame is
+the same consumer `Frame` type, so a reviewed `empty-reference` manifest case
+can be passed directly without a capture or detector adapter.
+
+This baseline intentionally composes one profile with one reference. A second
+theme, scale, or layout needs its own reviewed profile/reference detector; it
+must not be silently routed through the first profile's pixels.
+
+Successful construction does not declare the profile production-supported.
+The exact locator recognizes frame geometry, not tab identity. A same-size
+wrong-tab frame therefore reaches the classifier, and profile activation is
+blocked until a real wrong-tab fixture proves that the complete detector
+returns unknown. If it does not, the existing locator/classifier protocols
+allow a targeted positive panel check without changing downstream contracts.
 
 ## Geometry and sprite ownership
 
@@ -147,8 +200,9 @@ Its evidence contains JSON-friendly values:
 - `reason`
 - `localization_confidence`
 - `profile_id` (or `null` when no profile localized)
-- `configuration_id`, which identifies the classifier algorithm, layout,
-  policy, and reviewed empty-reference fingerprint
+- `configuration_id`, which identifies the exact-profile frame geometry and
+  anchor, classifier algorithm, layout, policy, reviewed empty-reference
+  fingerprint, localization threshold, and detector slot-publication threshold
 - ordered `slots`, each with index, row, column, region, state, confidence, and
   score diagnostics
 
@@ -176,15 +230,90 @@ harness:
 
 Do not commit screenshots merely because they are convenient. Review them for
 usernames, chat, notifications, plugin panels, and other private data first;
-crop or redact outside the evidence region when that does not change the
-failure. Fixture payloads should stay small enough for normal repository and CI
-use.
+redact outside the evidence region when that does not change the failure.
+Fixture payloads should stay small enough for normal repository and CI use.
+
+### First live fixture intake
+
+Collect two independent empty frames: one immutable `empty-reference` used to
+construct the classifier and one `empty-validation` case used to prove the
+detector does not merely recognize its own baseline. Ground truth for the
+initial reviewed corpus must include:
+
+| Case | Expected occupied slots | Expected label/confidence |
+|---|---:|---|
+| empty validation | `0` | `empty`, known |
+| partial | exact reviewer-counted value | `partial`, known |
+| full | `28` | `full`, known |
+| obstructed | `null` | `unknown`, exactly `0.0` |
+| wrong tab | `null` | `unknown`, exactly `0.0` |
+
+The generic manifest checks label, region, and confidence. An
+inventory-specific regression must also run every observation through
+`inventory_state_from_observation` and assert the exact occupied count above,
+the profile ID, the detector configuration ID, and a useful unknown reason.
+`partial` by itself is not adequate ground truth because many incorrect counts
+share that label.
+
+The Windows validation harness currently saves a top-down, uncompressed,
+32-bit BGRA BMP, while replay schema v1 stores headerless raw pixels. Do not
+rename a BMP to `.raw`. Prefer retaining the original `Frame.payload`; if only
+BMP files are supplied, use:
+
+```bash
+python tools/prepare_inventory_fixture.py INPUT.bmp OUTPUT.bgra
+```
+
+The development tool validates the BMP signature, 40-byte information header,
+32-bit depth, no compression, negative/top-down height, pixel offset, and
+exact payload length before extracting the BGRA bytes. This does not require a
+capture-backend change.
+
+Preserve the original full-frame dimensions when exact-profile localization
+is under test. Privacy sanitization may zero or redact pixels outside the
+inventory evidence region when that cannot affect the case, but cropping the
+frame changes its geometry and no longer validates the live profile. Record
+at least the capture and RuneLite builds, frame size and pixel format, Windows
+DPI/scaling, client mode, theme, renderer, tab/overlay state, capture
+configuration, sanitization status, reviewer, and review date in provenance.
+Use these canonical string keys so the first live-corpus test can reject an
+incomplete handoff: `capture_build`, `runelite_build`, `frame_size`,
+`pixel_format`, `windows_dpi`, `windows_scaling`, `client_mode`, `theme`,
+`renderer`, `inventory_tab_state`, `overlay_state`,
+`capture_configuration_id`, `sanitization`, `reviewer`, `reviewed_at`, and
+`validation_split`. Set `validation_split` to `reference`, `calibration`, or
+`held-out`; do not put account names in provenance.
+
+### Calibration discipline
+
+Use reviewed frames to propose an immutable `ClassificationPolicy`, then
+validate it against separate held-out frames. Preserve a non-zero uncertainty
+gap; do not move thresholds merely until every example produces a number. The
+shipped defaults are deliberately conservative: with the detector's `0.8`
+slot-publication threshold, the default score policy effectively requires a
+score at or below approximately `0.032` for a known empty slot and at or above
+approximately `0.688` for a known occupied slot. Initial real sprites may
+therefore return unknown, which is safe and expected until calibration is
+reviewed.
+
+Pin the approved detector `configuration_id` in the live regression test. It
+changes when the reviewed frame geometry or inventory anchor, canonical
+reference pixels, layout, classification policy, localization threshold, or
+slot-publication threshold changes. Re-run the entire synthetic and real
+corpus for every candidate policy; calibration cases must not double as the
+only validation cases.
+
+The initial five visual states are the minimum intake, not enough evidence to
+approve thresholds. Capture additional byte-distinct partial and full frames
+with different item art for `calibration` and `held-out` splits. If the first
+handoff contains only one partial and one full frame, it can validate the
+composition and replay path but cannot establish a production calibration.
 
 ## Required live RuneLite validation
 
-Before declaring any profile production-supported, collect reviewed empty,
-partial, full, and obstructed frames from the actual consumer-facing capture
-path. Validate at least:
+Before declaring any profile production-supported, collect a reviewed empty
+reference plus independent empty, partial, full, obstructed, and wrong-tab
+frames from the actual consumer-facing capture path. Validate at least:
 
 - fixed and any intended resizable modes;
 - physical-pixel dimensions across supported Windows scaling and DPI changes;

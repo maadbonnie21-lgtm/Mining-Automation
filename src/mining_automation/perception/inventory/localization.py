@@ -8,6 +8,8 @@ explicit zero-confidence localization rather than a fabricated region.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -116,6 +118,7 @@ class ExactProfileInventoryLocator:
     """
 
     _profiles: tuple[InventoryFrameProfile, ...]
+    _configuration_id: str
 
     def __init__(self, profiles: Sequence[InventoryFrameProfile]) -> None:
         if not isinstance(profiles, Sequence) or isinstance(profiles, (str, bytes, bytearray)):
@@ -148,11 +151,21 @@ class ExactProfileInventoryLocator:
             layouts_by_profile_id[profile.profile_id] = profile.layout
 
         object.__setattr__(self, "_profiles", normalized)
+        object.__setattr__(
+            self,
+            "_configuration_id",
+            _profile_configuration_id(normalized),
+        )
 
     @property
     def profiles(self) -> tuple[InventoryFrameProfile, ...]:
         """Immutable reviewed profiles, retained in caller order."""
         return self._profiles
+
+    @property
+    def configuration_id(self) -> str:
+        """Stable identity for every exact frame geometry and inventory anchor."""
+        return self._configuration_id
 
     def locate(self, frame: Frame, /) -> InventoryLocalization:
         """Return the exact frame-size match or an explicit unknown result."""
@@ -193,3 +206,38 @@ def _is_confidence(value: object) -> bool:
         and math.isfinite(value)
         and 0.0 <= value <= 1.0
     )
+
+
+def _profile_configuration_id(
+    profiles: tuple[InventoryFrameProfile, ...],
+) -> str:
+    ordered_profiles = sorted(
+        profiles,
+        key=lambda value: (
+            value.frame_width,
+            value.frame_height,
+            value.profile_id,
+            value.region.as_tuple(),
+        ),
+    )
+    canonical_profiles = [
+        {
+            "column_stride": profile.layout.column_stride,
+            "frame_height": profile.frame_height,
+            "frame_width": profile.frame_width,
+            "profile_id": profile.profile_id,
+            "region": profile.region.as_tuple(),
+            "row_stride": profile.layout.row_stride,
+        }
+        for profile in ordered_profiles
+    ]
+    payload = json.dumps(
+        {
+            "profiles": canonical_profiles,
+            "schema": "inventory-exact-profile-locator-v1",
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    return f"inventory-locator-config-{hashlib.sha256(payload).hexdigest()}"

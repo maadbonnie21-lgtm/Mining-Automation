@@ -102,6 +102,7 @@ def _decisions(
 @dataclass
 class FakeLocator:
     result: InventoryLocalization
+    configuration_id: str = "fake-inventory-locator-v1"
     calls: list[Frame] = field(default_factory=list)
 
     def locate(self, frame: Frame) -> InventoryLocalization:
@@ -165,6 +166,49 @@ def test_inventory_detector_satisfies_generic_protocol_and_metadata() -> None:
     assert detector.metadata.version == "1.0.0"
 
 
+def test_detector_configuration_identity_covers_all_publication_thresholds() -> None:
+    baseline, locator, classifier = _detector(_decisions())
+    equivalent, _, _ = _detector(_decisions())
+    changed_localization = InventoryDetector(
+        locator,
+        classifier,
+        localization_threshold=0.91,
+        minimum_slot_confidence=0.8,
+    )
+    changed_slot_threshold = InventoryDetector(
+        locator,
+        classifier,
+        localization_threshold=0.9,
+        minimum_slot_confidence=0.81,
+    )
+    changed_classifier = InventoryDetector(
+        locator,
+        FakeClassifier(
+            _decisions(), configuration_id="different-classifier-configuration"
+        ),
+    )
+    changed_locator = InventoryDetector(
+        FakeLocator(
+            locator.result,
+            configuration_id="different-locator-configuration",
+        ),
+        classifier,
+    )
+
+    assert baseline.configuration_id == equivalent.configuration_id
+    assert baseline.configuration_id.startswith("inventory-detector-config-")
+    assert len(baseline.configuration_id.removeprefix("inventory-detector-config-")) == 64
+    assert len(
+        {
+            baseline.configuration_id,
+            changed_localization.configuration_id,
+            changed_slot_threshold.configuration_id,
+            changed_classifier.configuration_id,
+            changed_locator.configuration_id,
+        }
+    ) == 5
+
+
 @pytest.mark.parametrize(
     ("occupied", "expected_count", "expected_label"),
     [
@@ -188,7 +232,7 @@ def test_detector_produces_known_empty_partial_and_full_states(
     assert observation.evidence["label"] == expected_label
     assert observation.evidence["region"] == INVENTORY_REGION.as_tuple()
     assert observation.evidence["reason"] is None
-    assert observation.evidence["configuration_id"] == "fake-inventory-classifier-v1"
+    assert observation.evidence["configuration_id"] == detector.configuration_id
     assert observation.evidence["profile_id"] == LAYOUT.profile_id
     assert len(cast(tuple[object, ...], observation.evidence["slots"])) == 28
     assert inventory_state_from_observation(observation) == InventoryState(
@@ -371,9 +415,7 @@ def test_inventory_obstruction_becomes_explicit_unknown_observation() -> None:
     assert observation.evidence["reason"] == (
         "inventory_obstructed: opaque overlay covers the inventory"
     )
-    assert observation.evidence["configuration_id"] == (
-        "obstruction-aware-test-classifier"
-    )
+    assert observation.evidence["configuration_id"] == detector.configuration_id
     assert observation.evidence["profile_id"] == LAYOUT.profile_id
     assert inventory_state_from_observation(observation).occupied_slots is None
 
@@ -412,9 +454,8 @@ def test_custom_classifier_without_identity_uses_stable_evidence_fallback() -> N
 
     observation = _one_observation(detector)
 
-    assert observation.evidence["configuration_id"] == (
-        "unidentified-custom-classifier"
-    )
+    assert observation.evidence["configuration_id"] == detector.configuration_id
+    assert detector.configuration_id.startswith("inventory-detector-config-")
     assert observation.evidence["profile_id"] is None
 
 

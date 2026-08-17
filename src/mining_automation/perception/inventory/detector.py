@@ -7,6 +7,8 @@ the region and all twenty-eight slot decisions are trustworthy.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -47,6 +49,8 @@ _DETECTOR_METADATA: Final[DetectorMetadata] = DetectorMetadata(
     version="1.0.0",
 )
 _UNIDENTIFIED_CONFIGURATION_ID: Final[str] = "unidentified-custom-classifier"
+_UNIDENTIFIED_LOCATOR_ID: Final[str] = "unidentified-custom-locator"
+_CONFIGURATION_SCHEMA: Final[str] = "inventory-detector-configuration-v1"
 
 
 class InventoryDetectorError(DetectorError):
@@ -104,6 +108,45 @@ def _classifier_identifier(
     if not isinstance(value, str) or not value.strip():
         raise InventoryDetectorError(
             f"inventory classifier {attribute} must be a non-empty string or None"
+        )
+    return value
+
+
+def _detector_configuration_id(
+    locator_configuration_id: str,
+    classifier_configuration_id: str,
+    localization_threshold: float,
+    minimum_slot_confidence: float,
+) -> str:
+    """Identify declared components and settings that affect published state."""
+    payload = json.dumps(
+        {
+            "classifier_configuration_id": classifier_configuration_id,
+            "locator_configuration_id": locator_configuration_id,
+            "localization_threshold": float(localization_threshold),
+            "minimum_slot_confidence": float(minimum_slot_confidence),
+            "schema": _CONFIGURATION_SCHEMA,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    return f"inventory-detector-config-{hashlib.sha256(payload).hexdigest()}"
+
+
+def _locator_identifier(locator: InventoryRegionLocator) -> str | None:
+    """Read an optional locator identity without accepting opaque values."""
+    try:
+        value = getattr(locator, "configuration_id", None)
+    except Exception as exc:
+        raise InventoryDetectorError(
+            f"inventory locator configuration_id could not be read: {exc}"
+        ) from exc
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise InventoryDetectorError(
+            "inventory locator configuration_id must be a non-empty string or None"
         )
     return value
 
@@ -380,6 +423,22 @@ class InventoryDetector:
         """Return the stable identity required by the generic detector contract."""
         return _DETECTOR_METADATA
 
+    @property
+    def configuration_id(self) -> str:
+        """Stable identity for locator, classifier, and publication thresholds."""
+        locator_configuration_id = (
+            _locator_identifier(self.locator) or _UNIDENTIFIED_LOCATOR_ID
+        )
+        classifier_configuration_id = _classifier_identifier(
+            self.classifier, "configuration_id"
+        ) or _UNIDENTIFIED_CONFIGURATION_ID
+        return _detector_configuration_id(
+            locator_configuration_id,
+            classifier_configuration_id,
+            self.localization_threshold,
+            self.minimum_slot_confidence,
+        )
+
     def detect(self, frame: Frame) -> tuple[Observation, ...]:
         """Produce exactly one known or explicitly unknown inventory observation."""
         if not isinstance(frame, Frame):
@@ -390,9 +449,7 @@ class InventoryDetector:
         return (detection.to_observation(frame, self.metadata.version),)
 
     def _analyze(self, frame: Frame) -> InventoryDetection:
-        configuration_id = _classifier_identifier(
-            self.classifier, "configuration_id"
-        ) or _UNIDENTIFIED_CONFIGURATION_ID
+        configuration_id = self.configuration_id
         classifier_profile_id = _classifier_identifier(self.classifier, "profile_id")
         try:
             localization = self.locator.locate(frame)

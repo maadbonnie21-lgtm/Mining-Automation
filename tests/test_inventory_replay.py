@@ -11,15 +11,12 @@ from mining_automation.perception.errors import CorruptFixtureError
 from mining_automation.perception.inventory.adapter import (
     inventory_state_from_observation,
 )
-from mining_automation.perception.inventory.classification import (
-    ReferenceInventoryClassifier,
+from mining_automation.perception.inventory.configuration import (
+    inventory_detector_from_profile,
 )
 from mining_automation.perception.inventory.detector import InventoryDetector
 from mining_automation.perception.inventory.geometry import InventoryGridLayout, Region
-from mining_automation.perception.inventory.localization import (
-    ExactProfileInventoryLocator,
-    InventoryFrameProfile,
-)
+from mining_automation.perception.inventory.localization import InventoryFrameProfile
 
 _BACKGROUND = (24, 27, 31)
 _LAYOUT = InventoryGridLayout(
@@ -76,7 +73,13 @@ def _paint_uncertain(payload: bytearray, index: int) -> None:
 
 def _case_payload(case_id: str) -> bytes:
     payload = _rgb_payload()
-    if case_id == "partial":
+    if case_id == "empty-validation":
+        # Make the held-out frame independent inside the pixels the classifier
+        # owns while keeping the difference safely below the occupied threshold.
+        slot = _LAYOUT.slot_region(_REGION, 0)
+        offset = ((slot.y + 4) * _FRAME_WIDTH + slot.x + 4) * 3
+        payload[offset : offset + 3] = bytes((25, 27, 31))
+    elif case_id == "partial":
         for index in (0, 13, 27):
             _paint_occupied(payload, index)
     elif case_id == "full":
@@ -109,7 +112,7 @@ def _case_payload(case_id: str) -> bytes:
             Region(_REGION.x, _REGION.y, _REGION.width // 2, _REGION.height),
             (235, 235, 235),
         )
-    elif case_id != "empty":  # pragma: no cover - test helper guard
+    elif case_id != "empty-reference":  # pragma: no cover - test helper guard
         raise AssertionError(f"unknown synthetic case {case_id}")
     return bytes(payload)
 
@@ -127,8 +130,7 @@ def _owned_frame(payload: bytes, *, frame_id: int = 100) -> Frame:
     )
 
 
-def _detector() -> InventoryDetector:
-    reference = _owned_frame(_case_payload("empty"))
+def _detector(reference: Frame) -> InventoryDetector:
     profile = InventoryFrameProfile(
         profile_id=_LAYOUT.profile_id,
         frame_width=_FRAME_WIDTH,
@@ -136,10 +138,7 @@ def _detector() -> InventoryDetector:
         region=_REGION,
         layout=_LAYOUT,
     )
-    return InventoryDetector(
-        locator=ExactProfileInventoryLocator((profile,)),
-        classifier=ReferenceInventoryClassifier(reference, _REGION, _LAYOUT),
-    )
+    return inventory_detector_from_profile(profile, reference)
 
 
 def _manifest_case(case_id: str, label: str, *, confidence_min: float) -> dict[str, object]:
@@ -168,7 +167,8 @@ def _manifest_case(case_id: str, label: str, *, confidence_min: float) -> dict[s
 
 def _write_dataset(tmp_path: Path) -> Path:
     specifications = (
-        ("empty", "empty", 0.8),
+        ("empty-reference", "empty", 0.8),
+        ("empty-validation", "empty", 0.8),
         ("partial", "partial", 0.8),
         ("full", "full", 0.8),
         ("uncertain", "unknown", 0.0),
@@ -198,45 +198,55 @@ def test_inventory_replay_evaluates_known_unknown_and_boundary_cases(
     tmp_path: Path,
 ) -> None:
     dataset = load_replay_dataset(_write_dataset(tmp_path))
-    detector = _detector()
+    assert dataset[0].case.case_id == "empty-reference"
+    assert dataset[1].case.case_id == "empty-validation"
+    assert dataset[0].frame.payload != dataset[1].frame.payload
+    first_slot = _LAYOUT.slot_region(_REGION, 0)
+    owned_offset = ((first_slot.y + 4) * _FRAME_WIDTH + first_slot.x + 4) * 3
+    assert dataset[0].frame.payload[owned_offset : owned_offset + 3] == bytes(
+        _BACKGROUND
+    )
+    assert dataset[1].frame.payload[owned_offset : owned_offset + 3] == bytes(
+        (25, 27, 31)
+    )
+    detector = _detector(dataset[0].frame)
 
     report = evaluate_dataset(dataset, [detector])
 
     assert report.passed
-    assert report.cases_run == 7
+    assert report.cases_run == 8
     assert report.cases_failed == 0
-    states = [
-        inventory_state_from_observation(detector.detect(sample.frame)[0])
-        for sample in dataset
-    ]
-    assert [state.occupied_slots for state in states] == [
-        0,
-        3,
-        28,
-        None,
-        1,
-        None,
-        None,
-    ]
-    assert [state.is_full for state in states] == [
-        False,
-        False,
-        True,
-        None,
-        False,
-        None,
-        None,
-    ]
-    assert [state.confidence for state in states if state.occupied_slots is None] == [
-        0.0,
-        0.0,
-        0.0,
-    ]
+    expected = {
+        "empty-reference": (0, "empty", None),
+        "empty-validation": (0, "empty", None),
+        "partial": (3, "partial", None),
+        "full": (28, "full", None),
+        "uncertain": (None, "unknown", "uncertain_slots:"),
+        "boundary-spill": (1, "partial", None),
+        "obstructed": (None, "unknown", "inventory_obstructed:"),
+        "partial-obstruction": (None, "unknown", "inventory_obstructed:"),
+    }
+    for sample in dataset:
+        observation = detector.detect(sample.frame)[0]
+        state = inventory_state_from_observation(observation)
+        occupied_slots, label, reason_prefix = expected[sample.case.case_id]
+        assert state.occupied_slots == occupied_slots
+        assert observation.evidence["label"] == label
+        assert observation.evidence["profile_id"] == _LAYOUT.profile_id
+        assert observation.evidence["configuration_id"] == detector.configuration_id
+        if reason_prefix is None:
+            assert observation.evidence["reason"] is None
+            assert state.confidence > 0.0
+        else:
+            reason = observation.evidence["reason"]
+            assert isinstance(reason, str) and reason.startswith(reason_prefix)
+            assert state.confidence == 0.0
 
 
 def test_inventory_replay_report_and_observations_are_repeatable(tmp_path: Path) -> None:
     dataset = load_replay_dataset(_write_dataset(tmp_path))
-    detector = _detector()
+    assert dataset[0].case.case_id == "empty-reference"
+    detector = _detector(dataset[0].frame)
 
     first_report = evaluate_dataset(dataset, [detector]).to_json()
     second_report = evaluate_dataset(dataset, [detector]).to_json()

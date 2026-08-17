@@ -16,6 +16,7 @@ from .classification import (
     SlotDecision,
     SlotOccupancy,
 )
+from .configuration import inventory_detector_from_profile
 from .detector import (
     INVENTORY_EVIDENCE_SCHEMA_VERSION,
     INVENTORY_OBSERVATION_KIND,
@@ -62,5 +63,6 @@ __all__ = [
     "Region",
     "SlotDecision",
     "SlotOccupancy",
+    "inventory_detector_from_profile",
     "inventory_state_from_observation",
 ]
