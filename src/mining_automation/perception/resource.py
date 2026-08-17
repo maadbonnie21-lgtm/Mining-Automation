@@ -40,7 +40,7 @@ __all__ = [
 ]
 
 RESOURCE_OBSERVATION_PREFIX: Final[str] = "resource."
-RESOURCE_PROFILE_SCHEMA_VERSION: Final[int] = 1
+RESOURCE_PROFILE_SCHEMA_VERSION: Final[int] = 2
 _REGION_COMPONENTS: Final[int] = 4
 _MAX_RGB_DISTANCE: Final[float] = math.sqrt(3.0 * 255.0 * 255.0)
 
@@ -83,6 +83,26 @@ def _validate_region(
         raise ValueError("region must fit inside the profile frame width")
     if frame_height is not None and y + height > frame_height:
         raise ValueError("region must fit inside the profile frame height")
+
+
+def _regions_overlap(
+    first: tuple[int, int, int, int],
+    second: tuple[int, int, int, int],
+) -> bool:
+    """Whether two frame-local ``(x, y, width, height)`` rectangles intersect.
+
+    Edge-touching (sharing only a boundary line, zero-area intersection) is
+    not overlap -- two candidate regions calibrated flush against each other
+    are a legitimate, if tight, calibration and should not be rejected.
+    """
+    first_x, first_y, first_width, first_height = first
+    second_x, second_y, second_width, second_height = second
+    return (
+        first_x < second_x + second_width
+        and second_x < first_x + first_width
+        and first_y < second_y + second_height
+        and second_y < first_y + first_height
+    )
 
 
 class ResourceVisualState(StrEnum):
@@ -152,7 +172,20 @@ class SceneAnchorProfile:
 
 @dataclass(frozen=True, slots=True)
 class RockCandidateProfile:
-    """One known rock position and its available/depleted colour prototypes."""
+    """One known rock position and its available/depleted colour prototypes.
+
+    ``occlusion_grid_columns``/``occlusion_grid_rows`` default to ``1x1``: one
+    cell covering the whole region, which is exactly today's whole-region-mean
+    behaviour and requires no calibration change for an existing profile. A
+    grid larger than 1x1 partitions the region into that many equal cells,
+    classifies each independently against the same signatures and thresholds,
+    and requires ``minimum_occlusion_agreement`` of them to agree on the same
+    definitive state before trusting it. A whole-region mean has no defence
+    against a partial occluder (a player, an overlay) that covers *some* of the
+    region and pulls the aggregate mean toward whichever colour it is; a grid
+    that requires several independent sub-regions to agree does, because an
+    occluder covering one cell cannot silently outvote the others.
+    """
 
     resource_id: str
     region: tuple[int, int, int, int]
@@ -160,6 +193,9 @@ class RockCandidateProfile:
     depleted_signature: ColorSignature
     minimum_similarity: float = 0.55
     minimum_margin: float = 0.12
+    occlusion_grid_columns: int = 1
+    occlusion_grid_rows: int = 1
+    minimum_occlusion_agreement: float = 1.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.resource_id, str) or not self.resource_id.strip():
@@ -171,11 +207,67 @@ class RockCandidateProfile:
             raise ValueError("depleted_signature must be ColorSignature")
         _validate_unit_interval(self.minimum_similarity, "minimum_similarity")
         _validate_unit_interval(self.minimum_margin, "minimum_margin")
+        if not _is_integer(self.occlusion_grid_columns) or self.occlusion_grid_columns < 1:
+            raise ValueError("occlusion_grid_columns must be a positive integer")
+        if not _is_integer(self.occlusion_grid_rows) or self.occlusion_grid_rows < 1:
+            raise ValueError("occlusion_grid_rows must be a positive integer")
+        _validate_unit_interval(self.minimum_occlusion_agreement, "minimum_occlusion_agreement")
+        if self.minimum_occlusion_agreement <= 0.0:
+            raise ValueError("minimum_occlusion_agreement must be greater than 0.0")
+        _, _, width, height = self.region
+        if width % self.occlusion_grid_columns != 0:
+            raise ValueError(
+                f"region width {width} must divide evenly by "
+                f"occlusion_grid_columns {self.occlusion_grid_columns}"
+            )
+        if height % self.occlusion_grid_rows != 0:
+            raise ValueError(
+                f"region height {height} must divide evenly by "
+                f"occlusion_grid_rows {self.occlusion_grid_rows}"
+            )
+        # No separate "cell must be at least one pixel" check is needed here:
+        # if width % columns == 0 and width > 0, width // columns >= 1 always
+        # holds (width is a positive multiple of columns), and symmetrically
+        # for height // rows. The divide-evenly checks above already
+        # guarantee every cell is at least one pixel.
+
+    @property
+    def occlusion_cell_count(self) -> int:
+        """Total number of independently classified sub-regions."""
+        return self.occlusion_grid_columns * self.occlusion_grid_rows
+
+    def occlusion_cell_regions(self) -> tuple[tuple[int, int, int, int], ...]:
+        """Row-major frame-local regions for every occlusion grid cell.
+
+        A 1x1 grid (the default) returns exactly ``(self.region,)``, so this is
+        a strict generalisation of the whole-region case rather than a
+        parallel code path.
+        """
+        x, y, width, height = self.region
+        cell_width = width // self.occlusion_grid_columns
+        cell_height = height // self.occlusion_grid_rows
+        return tuple(
+            (x + column * cell_width, y + row * cell_height, cell_width, cell_height)
+            for row in range(self.occlusion_grid_rows)
+            for column in range(self.occlusion_grid_columns)
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class ResourceDetectorProfile:
-    """Reviewed support envelope for one mine/ore/camera configuration."""
+    """Reviewed support envelope for one mine/ore/camera configuration.
+
+    ``minimum_scene_confidence`` gates a *weighted average* across all
+    anchors, which a single badly drifted anchor can survive if the others
+    stay strong -- with four equally weighted anchors, one anchor's confidence
+    can fall as low as ``4 * minimum_scene_confidence - 3`` while the other
+    three stay near 1.0 and the average still passes. In-game camera rotation
+    or zoom, unlike frame-size or pixel-format mismatch, is not caught by any
+    other check here. ``minimum_anchor_confidence`` (default ``0.0``, meaning
+    no additional floor and therefore no behaviour change for an existing
+    profile) closes that gap: every anchor must individually clear it, so no
+    single anchor's drift can be averaged away by the others.
+    """
 
     profile_id: str
     location_id: str
@@ -186,6 +278,7 @@ class ResourceDetectorProfile:
     anchors: tuple[SceneAnchorProfile, ...]
     candidates: tuple[RockCandidateProfile, ...]
     minimum_scene_confidence: float = 0.7
+    minimum_anchor_confidence: float = 0.0
     sample_step: int = 2
 
     def __post_init__(self) -> None:
@@ -218,6 +311,7 @@ class ResourceDetectorProfile:
         ):
             raise ValueError("candidates must be a non-empty tuple of RockCandidateProfile values")
         _validate_unit_interval(self.minimum_scene_confidence, "minimum_scene_confidence")
+        _validate_unit_interval(self.minimum_anchor_confidence, "minimum_anchor_confidence")
         if not _is_integer(self.sample_step) or self.sample_step <= 0:
             raise ValueError("sample_step must be a positive integer")
 
@@ -239,6 +333,30 @@ class ResourceDetectorProfile:
                 frame_width=self.frame_width,
                 frame_height=self.frame_height,
             )
+
+        # A hand-calibrated profile is exactly the workflow most prone to a
+        # copy-paste or eyeballing mistake leaving two windows over what is
+        # really one physical location -- unlike a programmatically derived
+        # grid, nothing here generates these regions, so nothing else catches
+        # that mistake. Two candidates observing the same rock would silently
+        # produce two independent, potentially disagreeing observations for
+        # one physical target; a candidate overlapping an anchor would let a
+        # rock's own colour changes corrupt the scene-verification signal that
+        # is supposed to be independent of resource state.
+        for first_index, first_candidate in enumerate(self.candidates):
+            for second_candidate in self.candidates[first_index + 1 :]:
+                if _regions_overlap(first_candidate.region, second_candidate.region):
+                    raise ValueError(
+                        "candidate regions must not overlap: "
+                        f"{first_candidate.resource_id!r} and "
+                        f"{second_candidate.resource_id!r}"
+                    )
+            for anchor in self.anchors:
+                if _regions_overlap(first_candidate.region, anchor.region):
+                    raise ValueError(
+                        "a candidate region must not overlap a scene anchor: "
+                        f"{first_candidate.resource_id!r} and anchor {anchor.anchor_id!r}"
+                    )
 
 
 class ProfiledResourceDetector:
@@ -282,13 +400,40 @@ class ProfiledResourceDetector:
         anchor_evidence: dict[str, float] = {}
         weighted_total = 0.0
         total_weight = 0.0
+        weakest_anchor_id = ""
+        weakest_anchor_confidence = 1.0
         for anchor in self._profile.anchors:
             mean_rgb = _mean_rgb(frame, anchor.region, sample_step=self._profile.sample_step)
             confidence = anchor.signature.similarity(mean_rgb)
             anchor_evidence[anchor.anchor_id] = confidence
             weighted_total += confidence * float(anchor.weight)
             total_weight += float(anchor.weight)
+            if confidence < weakest_anchor_confidence:
+                weakest_anchor_confidence = confidence
+                weakest_anchor_id = anchor.anchor_id
         scene_confidence = weighted_total / total_weight
+
+        # Checked before the aggregate: a weighted average can hide one badly
+        # drifted anchor behind several unaffected ones (see the profile
+        # docstring for the exact arithmetic). This floor requires every
+        # anchor to independently clear it, so in-scene camera drift that a
+        # single anchor's patch would reveal cannot be averaged away.
+        if weakest_anchor_confidence < self._profile.minimum_anchor_confidence:
+            return tuple(
+                self._uncertain_observation(
+                    frame,
+                    candidate,
+                    reason=(
+                        f"anchor_confidence_below_floor: {weakest_anchor_id!r} "
+                        f"at {weakest_anchor_confidence:.6f}, "
+                        f"floor {self._profile.minimum_anchor_confidence:.6f}"
+                    ),
+                    scene_confidence=scene_confidence,
+                    region_is_valid=True,
+                    anchor_confidences=anchor_evidence,
+                )
+                for candidate in self._profile.candidates
+            )
 
         if scene_confidence < self._profile.minimum_scene_confidence:
             return tuple(
@@ -328,6 +473,24 @@ class ProfiledResourceDetector:
         return None
 
     def _classify_candidate(
+        self,
+        frame: Frame,
+        candidate: RockCandidateProfile,
+        *,
+        scene_confidence: float,
+        anchor_confidences: dict[str, float],
+    ) -> Observation:
+        if candidate.occlusion_cell_count == 1:
+            return self._classify_whole_region(
+                frame, candidate, scene_confidence=scene_confidence,
+                anchor_confidences=anchor_confidences,
+            )
+        return self._classify_with_occlusion_grid(
+            frame, candidate, scene_confidence=scene_confidence,
+            anchor_confidences=anchor_confidences,
+        )
+
+    def _classify_whole_region(
         self,
         frame: Frame,
         candidate: RockCandidateProfile,
@@ -379,6 +542,100 @@ class ProfiledResourceDetector:
             "scene_confidence": round(scene_confidence, 6),
             "anchor_confidences": dict(sorted(anchor_confidences.items())),
             "reason": reason,
+        }
+        return Observation(
+            kind=observation_kind_for_state(state),
+            frame=frame.ref,
+            confidence=max(0.0, min(1.0, confidence)),
+            evidence=evidence,
+            detector_version=self._metadata.version,
+        )
+
+    def _classify_with_occlusion_grid(
+        self,
+        frame: Frame,
+        candidate: RockCandidateProfile,
+        *,
+        scene_confidence: float,
+        anchor_confidences: dict[str, float],
+    ) -> Observation:
+        """Classify each occlusion-grid cell independently and require agreement.
+
+        A whole-region mean cannot distinguish "the whole rock changed colour"
+        from "part of the rock is hidden behind something colour-different" --
+        both shift the same single average. Splitting into cells and requiring
+        several of them to independently agree can: an occluder covering a
+        minority of cells is outvoted rather than silently blended into a
+        confident answer for the whole region.
+        """
+        whole_mean_rgb = _mean_rgb(frame, candidate.region, sample_step=self._profile.sample_step)
+        whole_available_similarity = candidate.available_signature.similarity(whole_mean_rgb)
+        whole_depleted_similarity = candidate.depleted_signature.similarity(whole_mean_rgb)
+
+        cell_states: list[ResourceVisualState] = []
+        cell_winning_similarities: list[float] = []
+        for cell_region in candidate.occlusion_cell_regions():
+            cell_mean_rgb = _mean_rgb(frame, cell_region, sample_step=self._profile.sample_step)
+            cell_available = candidate.available_signature.similarity(cell_mean_rgb)
+            cell_depleted = candidate.depleted_signature.similarity(cell_mean_rgb)
+            cell_best = max(cell_available, cell_depleted)
+            cell_margin = abs(cell_available - cell_depleted)
+            if cell_best < candidate.minimum_similarity or cell_margin < candidate.minimum_margin:
+                cell_states.append(ResourceVisualState.UNCERTAIN)
+                cell_winning_similarities.append(cell_best)
+            elif cell_available > cell_depleted:
+                cell_states.append(ResourceVisualState.AVAILABLE)
+                cell_winning_similarities.append(cell_available)
+            else:
+                cell_states.append(ResourceVisualState.DEPLETED)
+                cell_winning_similarities.append(cell_depleted)
+
+        cell_count = len(cell_states)
+        available_votes = cell_states.count(ResourceVisualState.AVAILABLE)
+        depleted_votes = cell_states.count(ResourceVisualState.DEPLETED)
+        if available_votes >= depleted_votes:
+            leading_state, leading_votes = ResourceVisualState.AVAILABLE, available_votes
+        else:
+            leading_state, leading_votes = ResourceVisualState.DEPLETED, depleted_votes
+        agreement_fraction = leading_votes / cell_count
+
+        if leading_votes == 0 or agreement_fraction < candidate.minimum_occlusion_agreement:
+            state = ResourceVisualState.UNCERTAIN
+            confidence = min(scene_confidence, agreement_fraction)
+            reason = "partial_occlusion_suspected"
+        else:
+            state = leading_state
+            agreeing_similarities = [
+                similarity
+                for similarity, cell_state in zip(cell_winning_similarities, cell_states, strict=True)
+                if cell_state is leading_state
+            ]
+            # Minimum, not average or the whole-region mean: one weak agreeing
+            # cell should not be hidden behind stronger ones, matching the same
+            # "weakest evidence sets the confidence" principle already used for
+            # inventory-slot aggregation elsewhere in this codebase.
+            confidence = min(scene_confidence, min(agreeing_similarities))
+            reason = (
+                "available_signature_matched"
+                if state is ResourceVisualState.AVAILABLE
+                else "depleted_signature_matched"
+            )
+
+        evidence: dict[str, object] = {
+            "label": self._profile.ore_label,
+            "location_id": self._profile.location_id,
+            "profile_id": self._profile.profile_id,
+            "resource_id": candidate.resource_id,
+            "state": state.value,
+            "region": candidate.region,
+            "mean_rgb": tuple(round(channel, 3) for channel in whole_mean_rgb),
+            "available_similarity": round(whole_available_similarity, 6),
+            "depleted_similarity": round(whole_depleted_similarity, 6),
+            "scene_confidence": round(scene_confidence, 6),
+            "anchor_confidences": dict(sorted(anchor_confidences.items())),
+            "reason": reason,
+            "occlusion_cell_states": [cell_state.value for cell_state in cell_states],
+            "occlusion_agreement_fraction": round(agreement_fraction, 6),
         }
         return Observation(
             kind=observation_kind_for_state(state),
@@ -521,6 +778,7 @@ def load_resource_detector_profile(path: Path) -> ResourceDetectorProfile:
         "ore_label",
         "frame",
         "minimum_scene_confidence",
+        "minimum_anchor_confidence",
         "sample_step",
         "anchors",
         "candidates",
@@ -555,6 +813,7 @@ def load_resource_detector_profile(path: Path) -> ResourceDetectorProfile:
             anchors=anchors,
             candidates=candidates,
             minimum_scene_confidence=raw["minimum_scene_confidence"],
+            minimum_anchor_confidence=raw["minimum_anchor_confidence"],
             sample_step=raw["sample_step"],
         )
     except (TypeError, ValueError) as exc:
@@ -577,6 +836,7 @@ def save_resource_detector_profile(profile: ResourceDetectorProfile, path: Path)
             "pixel_format": profile.pixel_format.value,
         },
         "minimum_scene_confidence": profile.minimum_scene_confidence,
+        "minimum_anchor_confidence": profile.minimum_anchor_confidence,
         "sample_step": profile.sample_step,
         "anchors": [
             {
@@ -599,6 +859,9 @@ def save_resource_detector_profile(profile: ResourceDetectorProfile, path: Path)
                 ),
                 "minimum_similarity": candidate.minimum_similarity,
                 "minimum_margin": candidate.minimum_margin,
+                "occlusion_grid_columns": candidate.occlusion_grid_columns,
+                "occlusion_grid_rows": candidate.occlusion_grid_rows,
+                "minimum_occlusion_agreement": candidate.minimum_occlusion_agreement,
             }
             for candidate in profile.candidates
         ],
@@ -669,6 +932,9 @@ def _candidate_from_json(value: object) -> RockCandidateProfile:
         "depleted_signature",
         "minimum_similarity",
         "minimum_margin",
+        "occlusion_grid_columns",
+        "occlusion_grid_rows",
+        "minimum_occlusion_agreement",
     }:
         raise ValueError("rock candidate has invalid fields")
     return RockCandidateProfile(
@@ -678,6 +944,9 @@ def _candidate_from_json(value: object) -> RockCandidateProfile:
         depleted_signature=_signature_from_json(value["depleted_signature"]),
         minimum_similarity=value["minimum_similarity"],
         minimum_margin=value["minimum_margin"],
+        occlusion_grid_columns=value["occlusion_grid_columns"],
+        occlusion_grid_rows=value["occlusion_grid_rows"],
+        minimum_occlusion_agreement=value["minimum_occlusion_agreement"],
     )
 
 def _mean_rgb(

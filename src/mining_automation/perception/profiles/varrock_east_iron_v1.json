@@ -92,7 +92,10 @@
         ]
       },
       "minimum_margin": 0.25,
+      "minimum_occlusion_agreement": 1.0,
       "minimum_similarity": 0.65,
+      "occlusion_grid_columns": 2,
+      "occlusion_grid_rows": 2,
       "region": [
         263,
         409,
@@ -119,7 +122,10 @@
         ]
       },
       "minimum_margin": 0.25,
+      "minimum_occlusion_agreement": 1.0,
       "minimum_similarity": 0.65,
+      "occlusion_grid_columns": 2,
+      "occlusion_grid_rows": 2,
       "region": [
         295,
         490,
@@ -146,7 +152,10 @@
         ]
       },
       "minimum_margin": 0.25,
+      "minimum_occlusion_agreement": 1.0,
       "minimum_similarity": 0.65,
+      "occlusion_grid_columns": 2,
+      "occlusion_grid_rows": 2,
       "region": [
         405,
         424,
@@ -173,7 +182,10 @@
         ]
       },
       "minimum_margin": 0.25,
+      "minimum_occlusion_agreement": 1.0,
       "minimum_similarity": 0.65,
+      "occlusion_grid_columns": 2,
+      "occlusion_grid_rows": 2,
       "region": [
         590,
         365,
@@ -189,9 +201,10 @@
     "width": 1005
   },
   "location_id": "varrock-east-mine",
+  "minimum_anchor_confidence": 0.9,
   "minimum_scene_confidence": 0.85,
   "ore_label": "iron",
   "profile_id": "varrock-east-iron-v1",
   "sample_step": 2,
-  "schema_version": 1
+  "schema_version": 2
 }

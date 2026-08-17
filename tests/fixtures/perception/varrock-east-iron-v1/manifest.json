@@ -6,7 +6,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.92
           },
           "kind": "resource.available",
           "label": "iron",
@@ -20,7 +20,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.92
           },
           "kind": "resource.available",
           "label": "iron",
@@ -34,7 +34,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.87
           },
           "kind": "resource.available",
           "label": "iron",
@@ -48,7 +48,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.96
           },
           "kind": "resource.available",
           "label": "iron",
@@ -92,7 +92,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.92
           },
           "kind": "resource.available",
           "label": "iron",
@@ -106,7 +106,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.92
           },
           "kind": "resource.available",
           "label": "iron",
@@ -120,7 +120,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.87
           },
           "kind": "resource.available",
           "label": "iron",
@@ -134,7 +134,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.96
           },
           "kind": "resource.available",
           "label": "iron",
@@ -178,7 +178,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.92
           },
           "kind": "resource.available",
           "label": "iron",
@@ -192,7 +192,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.89
           },
           "kind": "resource.depleted",
           "label": "iron",
@@ -206,7 +206,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.87
           },
           "kind": "resource.available",
           "label": "iron",
@@ -220,7 +220,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.96
           },
           "kind": "resource.available",
           "label": "iron",
@@ -265,7 +265,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.92
           },
           "kind": "resource.available",
           "label": "iron",
@@ -279,7 +279,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.89
           },
           "kind": "resource.depleted",
           "label": "iron",
@@ -293,7 +293,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.87
           },
           "kind": "resource.available",
           "label": "iron",
@@ -307,7 +307,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.96
           },
           "kind": "resource.available",
           "label": "iron",
@@ -352,7 +352,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.92
           },
           "kind": "resource.available",
           "label": "iron",
@@ -366,7 +366,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.92
           },
           "kind": "resource.available",
           "label": "iron",
@@ -380,7 +380,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.87
           },
           "kind": "resource.available",
           "label": "iron",
@@ -394,7 +394,7 @@
         {
           "confidence": {
             "max": 1.0,
-            "min": 0.95
+            "min": 0.96
           },
           "kind": "resource.available",
           "label": "iron",
