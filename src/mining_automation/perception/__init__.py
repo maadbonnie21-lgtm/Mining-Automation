@@ -22,6 +22,13 @@ from .evaluation import (
     IssueCategory,
     evaluate_dataset,
 )
+from .fixture_materialization import materialize_gzip_replay_dataset
+from .production_profiles import (
+    VARROCK_EAST_IRON_DETECTOR_VERSION,
+    VARROCK_EAST_IRON_PROFILE_ID,
+    build_varrock_east_iron_detector,
+    load_varrock_east_iron_profile,
+)
 from .replay import (
     MANIFEST_SCHEMA_VERSION,
     ConfidenceRange,
@@ -70,6 +77,8 @@ __all__ = [
     "RESOURCE_FIXTURE_SCHEMA_VERSION",
     "RESOURCE_OBSERVATION_PREFIX",
     "RESOURCE_PROFILE_SCHEMA_VERSION",
+    "VARROCK_EAST_IRON_DETECTOR_VERSION",
+    "VARROCK_EAST_IRON_PROFILE_ID",
     "CaseEvaluation",
     "ColorSignature",
     "ConfidenceRange",
@@ -104,12 +113,15 @@ __all__ = [
     "UnsupportedManifestVersionError",
     "add_resource_annotation",
     "build_replay_manifest",
+    "build_varrock_east_iron_detector",
     "evaluate_dataset",
     "load_fixture_manifest",
     "load_replay_dataset",
     "load_resource_detector_profile",
     "load_resource_fixture_draft",
+    "load_varrock_east_iron_profile",
     "mark_resource_fixture_reviewed",
+    "materialize_gzip_replay_dataset",
     "measure_region_mean_rgb",
     "observation_kind_for_state",
     "resource_state_from_observation",

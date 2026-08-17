@@ -1,0 +1,438 @@
+{
+  "cases": [
+    {
+      "case_id": "available-01",
+      "expected_observations": [
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            263,
+            409,
+            20,
+            20
+          ]
+        },
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            295,
+            490,
+            20,
+            20
+          ]
+        },
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            405,
+            424,
+            20,
+            20
+          ]
+        },
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            590,
+            365,
+            20,
+            20
+          ]
+        }
+      ],
+      "frame": {
+        "height": 1078,
+        "path": "frames/available-01.raw",
+        "pixel_format": "bgra8888",
+        "width": 1005
+      },
+      "notes": "Reviewed real frame. All four 20x20 target patches visibly contain available iron; the player is nearby but does not cover the profiled patches.",
+      "provenance": {
+        "capture_backend": "windows-runelite",
+        "capture_monotonic_s": "382294.1491014",
+        "location_id": "varrock-east-mine",
+        "original_sha256": "9acde8e33e17edccb7b3277dd8b81420c8339bef2bfcf25af34bcfaf57895f68",
+        "reported_dpi": "96",
+        "review": "owner-and-lead-visual-review",
+        "sanitization": "title-bar, lower-chat-area, and lower-right-inventory-area masked",
+        "sanitized_sha256": "bae0782b1260e1c7e6c9c4412408f41098150411437d3d5567efd155bca159e4"
+      },
+      "tags": [
+        "real",
+        "baseline",
+        "player-nearby",
+        "state:available",
+        "location:varrock-east-mine",
+        "ore:iron"
+      ]
+    },
+    {
+      "case_id": "lower-left-full-cycle-019",
+      "expected_observations": [
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            263,
+            409,
+            20,
+            20
+          ]
+        },
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            295,
+            490,
+            20,
+            20
+          ]
+        },
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            405,
+            424,
+            20,
+            20
+          ]
+        },
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            590,
+            365,
+            20,
+            20
+          ]
+        }
+      ],
+      "frame": {
+        "height": 1078,
+        "path": "frames/lower-left-full-cycle-019.raw",
+        "pixel_format": "bgra8888",
+        "width": 1005
+      },
+      "notes": "Reviewed real frame immediately before the south-west iron node depletes; all four profiled patches are available.",
+      "provenance": {
+        "capture_backend": "windows-runelite",
+        "capture_monotonic_s": "383044.9645721",
+        "location_id": "varrock-east-mine",
+        "original_sha256": "f2235d8ad40ab0ba820204a7e7ef22820da88ca59f10d9ba94fd5a2eab641fe0",
+        "reported_dpi": "96",
+        "review": "owner-and-lead-visual-review",
+        "sanitization": "title-bar, lower-chat-area, and lower-right-inventory-area masked",
+        "sanitized_sha256": "d3cdd7914ee5faff896da0b5f5c68e2f64b81bd902413caac7cbe4dd4bc2b5f0"
+      },
+      "tags": [
+        "real",
+        "transition",
+        "pre-depletion",
+        "state:available",
+        "location:varrock-east-mine",
+        "ore:iron"
+      ]
+    },
+    {
+      "case_id": "lower-left-full-cycle-020",
+      "expected_observations": [
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            263,
+            409,
+            20,
+            20
+          ]
+        },
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.depleted",
+          "label": "iron",
+          "region": [
+            295,
+            490,
+            20,
+            20
+          ]
+        },
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            405,
+            424,
+            20,
+            20
+          ]
+        },
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            590,
+            365,
+            20,
+            20
+          ]
+        }
+      ],
+      "frame": {
+        "height": 1078,
+        "path": "frames/lower-left-full-cycle-020.raw",
+        "pixel_format": "bgra8888",
+        "width": 1005
+      },
+      "notes": "Reviewed first clearly depleted frame. South-west node is grey; the other three profiled patches remain available.",
+      "provenance": {
+        "capture_backend": "windows-runelite",
+        "capture_monotonic_s": "383045.5292277",
+        "location_id": "varrock-east-mine",
+        "original_sha256": "7c1d1a86a4eda890cefee0b19d7a980215296ed355f4828ba51e6fca8704fa3f",
+        "reported_dpi": "96",
+        "review": "owner-and-lead-visual-review",
+        "sanitization": "title-bar, lower-chat-area, and lower-right-inventory-area masked",
+        "sanitized_sha256": "febf28649310d78d704325afbef6dd7779cf2842425d621abd733cd12b17a74c"
+      },
+      "tags": [
+        "real",
+        "transition",
+        "depletion-start",
+        "state:available",
+        "state:depleted",
+        "location:varrock-east-mine",
+        "ore:iron"
+      ]
+    },
+    {
+      "case_id": "lower-left-full-cycle-028",
+      "expected_observations": [
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            263,
+            409,
+            20,
+            20
+          ]
+        },
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.depleted",
+          "label": "iron",
+          "region": [
+            295,
+            490,
+            20,
+            20
+          ]
+        },
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            405,
+            424,
+            20,
+            20
+          ]
+        },
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            590,
+            365,
+            20,
+            20
+          ]
+        }
+      ],
+      "frame": {
+        "height": 1078,
+        "path": "frames/lower-left-full-cycle-028.raw",
+        "pixel_format": "bgra8888",
+        "width": 1005
+      },
+      "notes": "Reviewed late-depleted frame. South-west node remains grey; the other three profiled patches remain available.",
+      "provenance": {
+        "capture_backend": "windows-runelite",
+        "capture_monotonic_s": "383050.040032",
+        "location_id": "varrock-east-mine",
+        "original_sha256": "fae77ddd117b3aa84b8eba8e5e2f5417e1b275620c6eb95fd590f4b939e4582d",
+        "reported_dpi": "96",
+        "review": "owner-and-lead-visual-review",
+        "sanitization": "title-bar, lower-chat-area, and lower-right-inventory-area masked",
+        "sanitized_sha256": "d7df627979f4f204deb2e1ccc11dfc6af3e677a63c084f51b64d74419e68c654"
+      },
+      "tags": [
+        "real",
+        "transition",
+        "late-depleted",
+        "state:available",
+        "state:depleted",
+        "location:varrock-east-mine",
+        "ore:iron"
+      ]
+    },
+    {
+      "case_id": "lower-left-full-cycle-029",
+      "expected_observations": [
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            263,
+            409,
+            20,
+            20
+          ]
+        },
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            295,
+            490,
+            20,
+            20
+          ]
+        },
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            405,
+            424,
+            20,
+            20
+          ]
+        },
+        {
+          "confidence": {
+            "max": 1.0,
+            "min": 0.95
+          },
+          "kind": "resource.available",
+          "label": "iron",
+          "region": [
+            590,
+            365,
+            20,
+            20
+          ]
+        }
+      ],
+      "frame": {
+        "height": 1078,
+        "path": "frames/lower-left-full-cycle-029.raw",
+        "pixel_format": "bgra8888",
+        "width": 1005
+      },
+      "notes": "Reviewed first respawn frame. South-west node has returned to the available brown state; all four patches are available.",
+      "provenance": {
+        "capture_backend": "windows-runelite",
+        "capture_monotonic_s": "383050.6052549",
+        "location_id": "varrock-east-mine",
+        "original_sha256": "f54064dc11366e1c3db8c2897a6394575c3d45eec48634a1c73ff7b8dcee242e",
+        "reported_dpi": "96",
+        "review": "owner-and-lead-visual-review",
+        "sanitization": "title-bar, lower-chat-area, and lower-right-inventory-area masked",
+        "sanitized_sha256": "bde69c2604ccd596448c77010362d2dfd60c1401181663e9bc2bf0ed49575299"
+      },
+      "tags": [
+        "real",
+        "transition",
+        "respawn",
+        "state:available",
+        "location:varrock-east-mine",
+        "ore:iron"
+      ]
+    }
+  ],
+  "dataset_id": "varrock-east-iron-v1",
+  "schema_version": 1
+}
