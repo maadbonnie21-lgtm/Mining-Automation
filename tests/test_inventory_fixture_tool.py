@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import os
 import struct
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from mining_automation.capture.windows.bmp import write_bgra_bmp
-from tools.prepare_inventory_fixture import (
+from mining_automation.perception.inventory import (
     InventoryFixturePreparationError,
     extract_capture_bmp,
-    main,
 )
+
+_TOOL = Path(__file__).resolve().parents[1] / "tools" / "prepare_inventory_fixture.py"
 
 
 def _bmp_bytes(tmp_path: Path) -> tuple[bytes, bytes]:
@@ -122,27 +125,28 @@ def test_extract_capture_bmp_rejects_truncated_payload(tmp_path: Path) -> None:
 
 def test_cli_writes_raw_payload_and_refuses_unapproved_overwrite(
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     data, payload = _bmp_bytes(tmp_path)
     input_path = tmp_path / "input.bmp"
     input_path.write_bytes(data)
     output_path = tmp_path / "frames" / "empty-reference.bgra"
 
-    assert main([str(input_path), str(output_path)]) == 0
+    first = _run_tool(input_path, output_path)
+    assert first.returncode == 0
     assert output_path.read_bytes() == payload
-    assert "2x2 bgra8888" in capsys.readouterr().out
+    assert "2x2 bgra8888" in first.stdout
 
-    assert main([str(input_path), str(output_path)]) == 2
-    assert "pass --force" in capsys.readouterr().err
+    refused = _run_tool(input_path, output_path)
+    assert refused.returncode == 2
+    assert "pass --force" in refused.stderr
 
-    assert main([str(input_path), str(output_path), "--force"]) == 0
+    forced = _run_tool(input_path, output_path, force=True)
+    assert forced.returncode == 0
     assert output_path.read_bytes() == payload
 
 
 def test_cli_refuses_hard_link_alias_even_with_force(
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     data, _ = _bmp_bytes(tmp_path)
     input_path = tmp_path / "reviewed-input.bmp"
@@ -150,7 +154,25 @@ def test_cli_refuses_hard_link_alias_even_with_force(
     output_alias = tmp_path / "empty-reference.bgra"
     os.link(input_path, output_alias)
 
-    assert main([str(input_path), str(output_alias), "--force"]) == 2
-    assert "same file" in capsys.readouterr().err
+    result = _run_tool(input_path, output_alias, force=True)
+    assert result.returncode == 2
+    assert "same file" in result.stderr
     assert input_path.read_bytes() == data
     assert output_alias.read_bytes() == data
+
+
+def _run_tool(
+    input_path: Path,
+    output_path: Path,
+    *,
+    force: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    command = [sys.executable, str(_TOOL), str(input_path), str(output_path)]
+    if force:
+        command.append("--force")
+    return subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+    )

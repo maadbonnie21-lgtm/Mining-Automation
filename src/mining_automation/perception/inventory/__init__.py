@@ -24,6 +24,11 @@ from .detector import (
     InventoryDetector,
     InventoryDetectorError,
 )
+from .fixture_preparation import (
+    InventoryFixturePreparationError,
+    PreparedInventoryFrame,
+    extract_capture_bmp,
+)
 from .geometry import (
     INVENTORY_CAPACITY,
     INVENTORY_COLUMNS,
@@ -53,16 +58,19 @@ __all__ = [
     "InventoryDetector",
     "InventoryDetectorError",
     "InventoryFrameProfile",
+    "InventoryFixturePreparationError",
     "InventoryGridLayout",
     "InventoryLocalization",
     "InventoryObstructionError",
     "InventoryObservationError",
     "InventoryRegionLocator",
     "InventorySlotClassifier",
+    "PreparedInventoryFrame",
     "ReferenceInventoryClassifier",
     "Region",
     "SlotDecision",
     "SlotOccupancy",
+    "extract_capture_bmp",
     "inventory_detector_from_profile",
     "inventory_state_from_observation",
 ]
