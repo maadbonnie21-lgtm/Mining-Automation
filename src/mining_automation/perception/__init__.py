@@ -1,9 +1,4 @@
-"""Platform-neutral detector evaluation and saved-frame replay.
-
-The perception package defines detector contracts and a deterministic regression
-harness. It consumes owned capture :class:`~mining_automation.capture.Frame`
-values but does not implement or emulate a live capture backend.
-"""
+"""Platform-neutral detector evaluation, replay, and production perception."""
 
 from __future__ import annotations
 
@@ -27,6 +22,13 @@ from .evaluation import (
     IssueCategory,
     evaluate_dataset,
 )
+from .fixture_materialization import materialize_gzip_replay_dataset
+from .production_profiles import (
+    VARROCK_EAST_IRON_DETECTOR_VERSION,
+    VARROCK_EAST_IRON_PROFILE_ID,
+    build_varrock_east_iron_detector,
+    load_varrock_east_iron_profile,
+)
 from .replay import (
     MANIFEST_SCHEMA_VERSION,
     ConfidenceRange,
@@ -39,11 +41,46 @@ from .replay import (
     load_fixture_manifest,
     load_replay_dataset,
 )
+from .resource import (
+    RESOURCE_OBSERVATION_PREFIX,
+    RESOURCE_PROFILE_SCHEMA_VERSION,
+    ColorSignature,
+    ProfiledResourceDetector,
+    ResourceDetectorProfile,
+    ResourceVisualState,
+    RockCandidateProfile,
+    SceneAnchorProfile,
+    load_resource_detector_profile,
+    measure_region_mean_rgb,
+    observation_kind_for_state,
+    resource_state_from_observation,
+    resource_states_from_observations,
+    save_resource_detector_profile,
+)
+from .resource_fixtures import (
+    RESOURCE_FIXTURE_SCHEMA_VERSION,
+    ResourceFixtureAnnotation,
+    ResourceFixtureDraft,
+    ResourceFixturePaths,
+    ResourceFixtureReviewStatus,
+    add_resource_annotation,
+    build_replay_manifest,
+    load_resource_fixture_draft,
+    mark_resource_fixture_reviewed,
+    save_resource_fixture_draft,
+    write_resource_fixture_draft,
+)
 
 __all__ = [
     "MANIFEST_SCHEMA_VERSION",
     "REPORT_SCHEMA_VERSION",
+    "RESOURCE_FIXTURE_SCHEMA_VERSION",
+    "RESOURCE_OBSERVATION_PREFIX",
+    "RESOURCE_PROFILE_SCHEMA_VERSION",
+    "VARROCK_EAST_IRON_DETECTOR_VERSION",
+    "VARROCK_EAST_IRON_PROFILE_ID",
     "CaseEvaluation",
+    "ColorSignature",
     "ConfidenceRange",
     "CorruptFixtureError",
     "Detector",
@@ -61,13 +98,37 @@ __all__ = [
     "ManifestError",
     "MissingFixtureError",
     "PerceptionError",
+    "ProfiledResourceDetector",
     "ReplayDataset",
     "ReplayError",
     "ReplaySample",
+    "ResourceDetectorProfile",
+    "ResourceFixtureAnnotation",
+    "ResourceFixtureDraft",
+    "ResourceFixturePaths",
+    "ResourceFixtureReviewStatus",
+    "ResourceVisualState",
+    "RockCandidateProfile",
+    "SceneAnchorProfile",
     "UnsupportedManifestVersionError",
+    "add_resource_annotation",
+    "build_replay_manifest",
+    "build_varrock_east_iron_detector",
     "evaluate_dataset",
     "load_fixture_manifest",
     "load_replay_dataset",
+    "load_resource_detector_profile",
+    "load_resource_fixture_draft",
+    "load_varrock_east_iron_profile",
+    "mark_resource_fixture_reviewed",
+    "materialize_gzip_replay_dataset",
+    "measure_region_mean_rgb",
+    "observation_kind_for_state",
+    "resource_state_from_observation",
+    "resource_states_from_observations",
     "run_detector",
+    "save_resource_detector_profile",
+    "save_resource_fixture_draft",
     "validate_detector",
+    "write_resource_fixture_draft",
 ]

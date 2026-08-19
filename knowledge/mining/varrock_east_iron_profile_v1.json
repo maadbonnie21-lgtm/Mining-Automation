@@ -1,0 +1,83 @@
+{
+  "candidate_regions": [
+    {
+      "region": [
+        263,
+        409,
+        20,
+        20
+      ],
+      "resource_id": "varrock-east-iron-northwest"
+    },
+    {
+      "region": [
+        295,
+        490,
+        20,
+        20
+      ],
+      "resource_id": "varrock-east-iron-southwest"
+    },
+    {
+      "region": [
+        405,
+        424,
+        20,
+        20
+      ],
+      "resource_id": "varrock-east-iron-center"
+    },
+    {
+      "region": [
+        590,
+        365,
+        20,
+        20
+      ],
+      "resource_id": "varrock-east-iron-northeast"
+    }
+  ],
+  "capture_envelope": {
+    "camera": "fixed-reviewed-camera-v1",
+    "frame_height": 1078,
+    "frame_width": 1005,
+    "pixel_format": "bgra8888",
+    "reported_dpi": 96
+  },
+  "detector_version": "1.0.0",
+  "location_id": "varrock-east-mine",
+  "ore_label": "iron",
+  "profile_id": "varrock-east-iron-v1",
+  "real_fixture_dataset": {
+    "available_validated_for": [
+      "varrock-east-iron-northwest",
+      "varrock-east-iron-southwest",
+      "varrock-east-iron-center",
+      "varrock-east-iron-northeast"
+    ],
+    "cases": [
+      "available-01",
+      "lower-left-full-cycle-019",
+      "lower-left-full-cycle-020",
+      "lower-left-full-cycle-028",
+      "lower-left-full-cycle-029"
+    ],
+    "dataset_id": "varrock-east-iron-v1",
+    "depleted_and_respawn_validated_for": [
+      "varrock-east-iron-southwest"
+    ],
+    "mixed_state_validated": true,
+    "privacy_sanitized": true
+  },
+  "release_ready": false,
+  "remaining_release_gates": [
+    "real north-west depletion and respawn",
+    "real center depletion and respawn",
+    "real north-east depletion and respawn",
+    "real unsupported-location fixture",
+    "real sample-patch obstruction fixture",
+    "repeatability after supported client restart"
+  ],
+  "schema_version": 1,
+  "support_status": "calibrated_partial_validation"
+}
