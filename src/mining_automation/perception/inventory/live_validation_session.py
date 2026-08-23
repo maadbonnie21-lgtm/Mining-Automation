@@ -1,15 +1,15 @@
 """Guided, resumable real-client inventory evidence sessions.
 
-A session coordinates the existing one-capture live-validation primitive across
-an ordered set of operator-prepared RuneLite states.  It never manipulates the
-client, never promotes operator labels to reviewed truth, and never treats a
-successful capture as a detector pass.
+The session coordinates the existing one-capture workflow across an ordered set
+of operator-prepared RuneLite states. It never manipulates RuneLite, promotes
+operator labels to truth, or treats capture completion as a detector pass.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import tempfile
 from collections.abc import Callable, Sequence
@@ -66,11 +66,11 @@ UtcClock = Callable[[], datetime]
 
 
 class InventoryValidationSessionError(RuntimeError):
-    """A validation session could not preserve its evidence-safety contract."""
+    """The session could not preserve its evidence-safety contract."""
 
 
 class InventoryValidationSessionPaused(InventoryValidationSessionError):
-    """The operator paused a resumable session before all cases were captured."""
+    """The operator paused a resumable session."""
 
     def __init__(self, session_directory: Path) -> None:
         self.session_directory = session_directory
@@ -78,7 +78,7 @@ class InventoryValidationSessionPaused(InventoryValidationSessionError):
 
 
 class InventoryValidationSessionStatus(StrEnum):
-    """Durable state of one requested case inside a session."""
+    """Durable state of one requested case."""
 
     PENDING = "pending"
     CAPTURING = "capturing"
@@ -136,7 +136,7 @@ class InventoryValidationSessionRecord:
             raise TypeError("session record case must be InventoryValidationCase")
         if not isinstance(self.status, InventoryValidationSessionStatus):
             raise TypeError("session record status must be InventoryValidationSessionStatus")
-        capture_fields = (
+        required = (
             self.capture_id,
             self.report_path,
             self.report_sha256,
@@ -149,10 +149,10 @@ class InventoryValidationSessionRecord:
             self.detector_status,
         )
         if self.status is InventoryValidationSessionStatus.CAPTURED:
-            if any(value is None for value in capture_fields):
-                raise ValueError("a captured session record requires complete capture metadata")
-        elif any(value is not None for value in capture_fields):
-            raise ValueError("pending/capturing session records cannot publish capture metadata")
+            if any(value is None for value in required):
+                raise ValueError("captured session record requires complete metadata")
+        elif any(value is not None for value in required):
+            raise ValueError("uncaptured session record cannot publish capture metadata")
 
     @classmethod
     def from_summary(
@@ -183,10 +183,9 @@ class InventoryValidationSessionRecord:
         )
 
     def as_dict(self) -> dict[str, object]:
-        return {
-            "capture": None
-            if self.status is not InventoryValidationSessionStatus.CAPTURED
-            else {
+        capture: dict[str, object] | None = None
+        if self.status is InventoryValidationSessionStatus.CAPTURED:
+            capture = {
                 "capture_id": self.capture_id,
                 "detector": {
                     "confidence": self.detector_confidence,
@@ -207,7 +206,9 @@ class InventoryValidationSessionRecord:
                 },
                 "report_path": self.report_path,
                 "report_sha256": self.report_sha256,
-            },
+            }
+        return {
+            "capture": capture,
             "operator_case": {
                 "label": self.case.value,
                 "truth_status": "operator-selected-unverified",
@@ -219,7 +220,7 @@ class InventoryValidationSessionRecord:
 
 @dataclass(frozen=True, slots=True)
 class InventoryValidationSessionReport:
-    """Durable manifest and review summary for a guided capture session."""
+    """Durable manifest and review summary for one guided session."""
 
     session_directory: Path
     session_id: str
@@ -240,12 +241,12 @@ class InventoryValidationSessionReport:
         if not isinstance(self.records, tuple) or not self.records:
             raise ValueError("records must be a non-empty tuple")
         if any(not isinstance(item, InventoryValidationSessionRecord) for item in self.records):
-            raise TypeError("records must contain InventoryValidationSessionRecord values")
-        expected_orders = tuple(range(1, len(self.records) + 1))
-        if tuple(item.order for item in self.records) != expected_orders:
+            raise TypeError("records must contain session record values")
+        if tuple(item.order for item in self.records) != tuple(
+            range(1, len(self.records) + 1)
+        ):
             raise ValueError("session record order must be contiguous and start at 1")
-        cases = tuple(item.case for item in self.records)
-        if len(set(cases)) != len(cases):
+        if len({item.case for item in self.records}) != len(self.records):
             raise ValueError("session cases must be unique")
 
     @property
@@ -287,19 +288,39 @@ class InventoryValidationSessionReport:
                 f"{len(self.pending_records)} requested capture case(s) remain incomplete"
             )
         captured = self.captured_records
-        geometries = {
-            (item.frame_width, item.frame_height)
-            for item in captured
-            if item.frame_width is not None and item.frame_height is not None
-        }
-        if len(geometries) > 1:
+        if len(
+            {
+                (item.frame_width, item.frame_height)
+                for item in captured
+                if item.frame_width is not None and item.frame_height is not None
+            }
+        ) > 1:
             reasons.append("captured cases use inconsistent frame geometry")
-        pixel_formats = {item.pixel_format for item in captured if item.pixel_format is not None}
-        if len(pixel_formats) > 1:
+        if len({item.pixel_format for item in captured if item.pixel_format is not None}) > 1:
             reasons.append("captured cases use inconsistent pixel formats")
-        window_classes = {item.window_class for item in captured if item.window_class is not None}
-        if len(window_classes) > 1:
+        if len({item.window_class for item in captured if item.window_class is not None}) > 1:
             reasons.append("captured cases use inconsistent window classes")
+        if len({item.reported_dpi for item in captured if item.reported_dpi is not None}) > 1:
+            reasons.append("captured cases report inconsistent DPI")
+        modes = {item.detector_mode for item in captured if item.detector_mode is not None}
+        if len(modes) > 1:
+            reasons.append("captured cases use mixed detector modes")
+        profile_ids = {
+            item.detector_profile_id
+            for item in captured
+            if item.detector_mode == "detector-run"
+            and item.detector_profile_id is not None
+        }
+        if len(profile_ids) > 1:
+            reasons.append("detector-run cases use inconsistent profile identity")
+        configuration_ids = {
+            item.detector_configuration_id
+            for item in captured
+            if item.detector_mode == "detector-run"
+            and item.detector_configuration_id is not None
+        }
+        if len(configuration_ids) > 1:
+            reasons.append("detector-run cases use inconsistent configuration identity")
         reference = self._record_for_case(InventoryValidationCase.EMPTY_REFERENCE)
         validation = self._record_for_case(InventoryValidationCase.EMPTY_VALIDATION)
         if (
@@ -314,7 +335,7 @@ class InventoryValidationSessionReport:
             )
         if any(item.detector_status == "detector-error" for item in captured):
             reasons.append("at least one configured detector evaluation failed")
-        if captured and all(item.detector_mode == "capture-only" for item in captured):
+        if captured and modes == {"capture-only"}:
             reasons.append("reviewed live detector/profile is not configured")
         reasons.append("all operator case labels and captured evidence remain unreviewed")
         return tuple(reasons)
@@ -351,13 +372,16 @@ class InventoryValidationSessionReport:
         }
 
     def to_json(self) -> str:
-        return json.dumps(
-            self.as_dict(),
-            allow_nan=False,
-            ensure_ascii=True,
-            indent=2,
-            sort_keys=True,
-        ) + "\n"
+        return (
+            json.dumps(
+                self.as_dict(),
+                allow_nan=False,
+                ensure_ascii=True,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
 
     def render_text(self) -> str:
         state = "COMPLETE -- REVIEW REQUIRED" if self.complete else "PAUSED / INCOMPLETE"
@@ -369,9 +393,8 @@ class InventoryValidationSessionReport:
             f"Profile review draft: {self.profile_review_draft_path.resolve()}",
             "Operator labels are unverified; capture completion is not a detector pass.",
         ]
-        if self.blocking_reasons():
-            lines.append("Release-gate blockers / review items:")
-            lines.extend(f"  - {reason}" for reason in self.blocking_reasons())
+        lines.append("Release-gate blockers / review items:")
+        lines.extend(f"  - {reason}" for reason in self.blocking_reasons())
         return "\n".join(lines) + "\n"
 
     def _record_for_case(
@@ -392,13 +415,15 @@ def run_inventory_validation_session(
     capture_clock: MonotonicClock | None = None,
     utc_clock: UtcClock | None = None,
 ) -> InventoryValidationSessionReport:
-    """Capture an ordered case plan with durable interruption/resume semantics."""
+    """Capture an ordered plan with durable interruption/resume semantics."""
     if not callable(backend_factory):
         raise TypeError("backend_factory must be callable")
     if not isinstance(output_root, Path):
         raise TypeError("output_root must be pathlib.Path")
     if not isinstance(provenance, InventoryValidationProvenance):
         raise TypeError("provenance must be InventoryValidationProvenance")
+    if detector is not None and not isinstance(detector, InventoryDetector):
+        raise TypeError("detector must be InventoryDetector or None")
     normalized_cases = _validate_cases(cases)
     callback = ready_callback or _no_op_ready
 
@@ -429,6 +454,7 @@ def run_inventory_validation_session(
                 "resume provenance differs from the durable session manifest"
             )
         report = _reconcile_session(report, utc_clock)
+        _validate_detector_mode(report, detector)
         _publish_session(report)
 
     try:
@@ -476,30 +502,31 @@ def load_inventory_validation_session(
     """Load and strictly validate one durable session manifest."""
     if not isinstance(session_directory, Path):
         raise TypeError("session_directory must be pathlib.Path")
-    path = session_directory / _SESSION_REPORT_NAME
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise InventoryValidationSessionError(f"session report cannot be read: {path}: {exc}") from exc
-    if not isinstance(raw, dict):
-        raise InventoryValidationSessionError("session report root must be an object")
+    raw = _read_json_object(
+        session_directory / _SESSION_REPORT_NAME,
+        "session report",
+    )
     if raw.get("session_kind") != "inventory-live-validation-session":
         raise InventoryValidationSessionError("unsupported session report kind")
     if raw.get("schema_version") != SESSION_SCHEMA_VERSION:
         raise InventoryValidationSessionError("unsupported session report schema version")
     session_id = _required_text(raw, "session_id")
     if session_id != session_directory.name:
-        raise InventoryValidationSessionError("session report identity does not match its directory")
-    provenance_raw = raw.get("provenance")
-    if not isinstance(provenance_raw, dict):
-        raise InventoryValidationSessionError("session provenance must be an object")
-    notes = provenance_raw.get("notes")
-    if not isinstance(notes, list) or any(not isinstance(item, str) for item in notes):
-        raise InventoryValidationSessionError("session provenance notes must be strings")
+        raise InventoryValidationSessionError(
+            "session report identity does not match its directory"
+        )
+    provenance_raw = _required_object(raw, "provenance")
+    notes_raw = provenance_raw.get("notes")
+    if not isinstance(notes_raw, list) or any(
+        not isinstance(item, str) for item in notes_raw
+    ):
+        raise InventoryValidationSessionError(
+            "session provenance notes must be an array of strings"
+        )
     provenance = InventoryValidationProvenance(
-        capture_build=_optional_text_value(provenance_raw.get("capture_build")),
-        runelite_build=_optional_text_value(provenance_raw.get("runelite_build")),
-        notes=tuple(notes),
+        capture_build=_optional_text(provenance_raw.get("capture_build")),
+        runelite_build=_optional_text(provenance_raw.get("runelite_build")),
+        notes=tuple(notes_raw),
     )
     cases_raw = raw.get("cases")
     if not isinstance(cases_raw, list) or not cases_raw:
@@ -527,8 +554,10 @@ def _reconcile_session(
         for item in report.captured_records
         if item.capture_id is not None
     }
+    captured_cases = {item.case for item in report.captured_records}
     summaries_by_case: dict[InventoryValidationCase, list[_CaptureSummary]] = {}
     partial_directories: list[Path] = []
+    unexpected_complete: list[str] = []
     for child in sorted(capture_root.iterdir()):
         if not child.is_dir() or child.name in referenced:
             continue
@@ -540,22 +569,32 @@ def _reconcile_session(
             candidate_report,
             session_directory=report.session_directory,
         )
-        summaries_by_case.setdefault(case, []).append(summary)
+        if case in captured_cases:
+            unexpected_complete.append(child.name)
+        else:
+            summaries_by_case.setdefault(case, []).append(summary)
     if partial_directories:
         names = ", ".join(path.name for path in partial_directories)
         raise InventoryValidationSessionError(
-            "partial/uncommitted capture evidence requires manual preservation review: " + names
+            "partial/uncommitted capture evidence requires manual preservation "
+            f"review: {names}"
+        )
+    if unexpected_complete:
+        raise InventoryValidationSessionError(
+            "unreferenced completed capture evidence exists for an already-captured "
+            f"case: {', '.join(unexpected_complete)}"
         )
 
     updated = report
     for record in report.records:
         if record.status is InventoryValidationSessionStatus.CAPTURED:
             assert record.report_path is not None
-            _load_capture_summary(
+            summary = _load_capture_summary(
                 report.session_directory / record.report_path,
                 session_directory=report.session_directory,
                 expected_case=record.case,
             )
+            _validate_record_summary(record, summary)
             continue
         candidates = summaries_by_case.get(record.case, [])
         if len(candidates) > 1:
@@ -578,19 +617,47 @@ def _reconcile_session(
     return updated
 
 
+def _validate_detector_mode(
+    report: InventoryValidationSessionReport,
+    detector: InventoryDetector | None,
+) -> None:
+    existing_modes = {
+        item.detector_mode
+        for item in report.captured_records
+        if item.detector_mode is not None
+    }
+    requested = "detector-run" if detector is not None else "capture-only"
+    if existing_modes and existing_modes != {requested}:
+        raise InventoryValidationSessionError(
+            "resume cannot change detector mode after evidence has been captured"
+        )
+
+
+def _validate_record_summary(
+    record: InventoryValidationSessionRecord,
+    summary: _CaptureSummary,
+) -> None:
+    expected = InventoryValidationSessionRecord.from_summary(record, summary)
+    if expected != record:
+        raise InventoryValidationSessionError(
+            f"session manifest metadata disagrees with owned capture {summary.capture_id!r}"
+        )
+
+
 def _load_unassigned_capture_summary(
     report_path: Path,
     *,
     session_directory: Path,
 ) -> tuple[_CaptureSummary, InventoryValidationCase]:
-    raw = _read_capture_report(report_path)
-    operator_case = raw.get("operator_case")
-    if not isinstance(operator_case, dict):
-        raise InventoryValidationSessionError("capture report operator_case must be an object")
+    raw = _read_json_object(report_path, "capture report")
+    operator_case = _required_object(raw, "operator_case")
+    label = _required_text(operator_case, "label")
     try:
-        case = InventoryValidationCase(operator_case.get("label"))
+        case = InventoryValidationCase(label)
     except ValueError as exc:
-        raise InventoryValidationSessionError("capture report has unsupported case label") from exc
+        raise InventoryValidationSessionError(
+            f"capture report has unsupported case label {label!r}"
+        ) from exc
     return (
         _capture_summary_from_raw(
             raw,
@@ -609,23 +676,11 @@ def _load_capture_summary(
     expected_case: InventoryValidationCase,
 ) -> _CaptureSummary:
     return _capture_summary_from_raw(
-        _read_capture_report(report_path),
+        _read_json_object(report_path, "capture report"),
         report_path=report_path,
         session_directory=session_directory,
         expected_case=expected_case,
     )
-
-
-def _read_capture_report(report_path: Path) -> dict[str, object]:
-    try:
-        raw = json.loads(report_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise InventoryValidationSessionError(
-            f"capture report cannot be read: {report_path}: {exc}"
-        ) from exc
-    if not isinstance(raw, dict):
-        raise InventoryValidationSessionError("capture report root must be an object")
-    return raw
 
 
 def _capture_summary_from_raw(
@@ -635,100 +690,111 @@ def _capture_summary_from_raw(
     session_directory: Path,
     expected_case: InventoryValidationCase,
 ) -> _CaptureSummary:
-    if raw.get("report_kind") != "inventory-live-validation" or raw.get("schema_version") != 1:
+    if (
+        raw.get("report_kind") != "inventory-live-validation"
+        or raw.get("schema_version") != 1
+    ):
         raise InventoryValidationSessionError("unsupported one-capture report format")
     if raw.get("review_status") != "unreviewed":
-        raise InventoryValidationSessionError("session may only adopt unreviewed owned captures")
-    operator_case = raw.get("operator_case")
-    if not isinstance(operator_case, dict) or operator_case != {
+        raise InventoryValidationSessionError(
+            "session may only adopt unreviewed owned captures"
+        )
+    operator_case = _required_object(raw, "operator_case")
+    if operator_case != {
         "label": expected_case.value,
         "truth_status": "operator-selected-unverified",
     }:
-        raise InventoryValidationSessionError("capture case identity/truth status is invalid")
+        raise InventoryValidationSessionError(
+            "capture case identity/truth status is invalid"
+        )
     capture_id = _required_text(raw, "capture_id")
     if capture_id != report_path.parent.name:
-        raise InventoryValidationSessionError("capture id does not match its evidence directory")
-    try:
-        relative_report = report_path.relative_to(session_directory).as_posix()
-    except ValueError as exc:
-        raise InventoryValidationSessionError("capture report escapes the owned session") from exc
-    artifacts = raw.get("artifacts")
-    capture = raw.get("capture")
-    detector = raw.get("detector")
-    if not isinstance(artifacts, dict) or not isinstance(capture, dict):
-        raise InventoryValidationSessionError("capture report artifacts/capture fields are invalid")
-    if not isinstance(detector, dict):
-        raise InventoryValidationSessionError("capture report detector field is invalid")
-    raw_artifact = artifacts.get("raw")
-    if not isinstance(raw_artifact, dict):
-        raise InventoryValidationSessionError("capture raw artifact metadata is invalid")
-    raw_name = _required_text(raw_artifact, "path")
-    if Path(raw_name).is_absolute() or Path(raw_name).name != raw_name:
-        raise InventoryValidationSessionError("capture raw artifact path must be local and relative")
-    raw_path = report_path.parent / raw_name
-    if not raw_path.is_file():
-        raise InventoryValidationSessionError("capture raw artifact is missing")
-    payload_sha256 = _required_text(raw_artifact, "sha256")
-    if _sha256(raw_path.read_bytes()) != payload_sha256:
-        raise InventoryValidationSessionError("capture raw artifact hash mismatch")
-    window = capture.get("window")
-    if not isinstance(window, dict):
-        raise InventoryValidationSessionError("capture window metadata is invalid")
-    reported_dpi = capture.get("reported_dpi")
-    if reported_dpi is not None and (
-        not isinstance(reported_dpi, int) or isinstance(reported_dpi, bool) or reported_dpi <= 0
-    ):
-        raise InventoryValidationSessionError("capture reported_dpi must be positive or null")
-    confidence = detector.get("confidence")
-    if confidence is not None and (
-        isinstance(confidence, bool) or not isinstance(confidence, (int, float))
-    ):
-        raise InventoryValidationSessionError("detector confidence must be numeric or null")
+        raise InventoryValidationSessionError(
+            "capture id does not match its evidence directory"
+        )
+    relative_report = _owned_relative_path(
+        report_path,
+        session_directory,
+        "capture report",
+    )
+    artifacts = _required_object(raw, "artifacts")
+    capture = _required_object(raw, "capture")
+    detector = _required_object(raw, "detector")
+    raw_artifact = _required_object(artifacts, "raw")
+    bmp_artifact = _required_object(artifacts, "bmp")
+    draft_artifact = _required_object(artifacts, "draft")
+
+    raw_path, payload_sha256 = _validate_hashed_artifact(
+        report_path.parent,
+        raw_artifact,
+        "raw",
+    )
+    del raw_path
+    _, bmp_sha256 = _validate_hashed_artifact(
+        report_path.parent,
+        bmp_artifact,
+        "bmp",
+    )
+    del bmp_sha256
+    _validate_unhashed_artifact(report_path.parent, draft_artifact, "draft")
+    if _required_text(capture, "payload_sha256") != payload_sha256:
+        raise InventoryValidationSessionError(
+            "capture payload hash disagrees with raw artifact metadata"
+        )
+
+    window = _required_object(capture, "window")
+    reported_dpi = _optional_positive_int(capture.get("reported_dpi"), "reported_dpi")
+    confidence = _optional_confidence(detector.get("confidence"))
     return _CaptureSummary(
         capture_id=capture_id,
         report_path=relative_report,
         report_sha256=_sha256(report_path.read_bytes()),
         payload_sha256=payload_sha256,
-        frame_width=_required_int(capture, "width"),
-        frame_height=_required_int(capture, "height"),
+        frame_width=_required_positive_int(capture, "width"),
+        frame_height=_required_positive_int(capture, "height"),
         pixel_format=_required_text(capture, "pixel_format"),
         reported_dpi=reported_dpi,
         window_class=_required_text(window, "class_name"),
         detector_mode=_required_text(detector, "mode"),
         detector_status=_required_text(detector, "status"),
-        detector_profile_id=_optional_text_value(detector.get("profile_id")),
-        detector_configuration_id=_optional_text_value(detector.get("configuration_id")),
-        detector_occupied_slots=_optional_int(detector.get("occupied_slots")),
-        detector_confidence=None if confidence is None else float(confidence),
-        detector_reason=_optional_text_value(detector.get("reason")),
+        detector_profile_id=_optional_text(detector.get("profile_id")),
+        detector_configuration_id=_optional_text(detector.get("configuration_id")),
+        detector_occupied_slots=_optional_nonnegative_int(
+            detector.get("occupied_slots"),
+            "occupied_slots",
+        ),
+        detector_confidence=confidence,
+        detector_reason=_optional_text(detector.get("reason")),
     )
 
 
 def _record_from_json(value: object) -> InventoryValidationSessionRecord:
-    if not isinstance(value, dict):
-        raise InventoryValidationSessionError("session case record must be an object")
-    operator_case = value.get("operator_case")
-    if not isinstance(operator_case, dict):
-        raise InventoryValidationSessionError("session operator_case must be an object")
+    raw = _object_value(value, "session case record")
+    operator_case = _required_object(raw, "operator_case")
+    case_text = _required_text(operator_case, "label")
+    status_text = _required_text(raw, "status")
     try:
-        case = InventoryValidationCase(operator_case.get("label"))
-        status = InventoryValidationSessionStatus(value.get("status"))
+        case = InventoryValidationCase(case_text)
+        status = InventoryValidationSessionStatus(status_text)
     except ValueError as exc:
-        raise InventoryValidationSessionError("session case/status value is unsupported") from exc
+        raise InventoryValidationSessionError(
+            "session case/status value is unsupported"
+        ) from exc
     if operator_case.get("truth_status") != "operator-selected-unverified":
-        raise InventoryValidationSessionError("session case truth status must remain unverified")
-    order = _required_int(value, "order")
-    capture = value.get("capture")
+        raise InventoryValidationSessionError(
+            "session case truth status must remain unverified"
+        )
+    order = _required_positive_int(raw, "order")
+    capture_value = raw.get("capture")
     if status is not InventoryValidationSessionStatus.CAPTURED:
-        if capture is not None:
-            raise InventoryValidationSessionError("uncaptured session record cannot contain capture")
+        if capture_value is not None:
+            raise InventoryValidationSessionError(
+                "uncaptured session record cannot contain capture"
+            )
         return InventoryValidationSessionRecord(order=order, case=case, status=status)
-    if not isinstance(capture, dict):
-        raise InventoryValidationSessionError("captured session record requires capture metadata")
-    frame = capture.get("frame")
-    detector = capture.get("detector")
-    if not isinstance(frame, dict) or not isinstance(detector, dict):
-        raise InventoryValidationSessionError("captured record frame/detector metadata is invalid")
+    capture = _object_value(capture_value, "captured session metadata")
+    frame = _required_object(capture, "frame")
+    detector = _required_object(capture, "detector")
     return InventoryValidationSessionRecord(
         order=order,
         case=case,
@@ -737,18 +803,21 @@ def _record_from_json(value: object) -> InventoryValidationSessionRecord:
         report_path=_required_text(capture, "report_path"),
         report_sha256=_required_text(capture, "report_sha256"),
         payload_sha256=_required_text(frame, "payload_sha256"),
-        frame_width=_required_int(frame, "width"),
-        frame_height=_required_int(frame, "height"),
+        frame_width=_required_positive_int(frame, "width"),
+        frame_height=_required_positive_int(frame, "height"),
         pixel_format=_required_text(frame, "pixel_format"),
-        reported_dpi=_optional_int(frame.get("reported_dpi")),
+        reported_dpi=_optional_positive_int(frame.get("reported_dpi"), "reported_dpi"),
         window_class=_required_text(frame, "window_class"),
         detector_mode=_required_text(detector, "mode"),
         detector_status=_required_text(detector, "status"),
-        detector_profile_id=_optional_text_value(detector.get("profile_id")),
-        detector_configuration_id=_optional_text_value(detector.get("configuration_id")),
-        detector_occupied_slots=_optional_int(detector.get("occupied_slots")),
-        detector_confidence=_optional_float(detector.get("confidence")),
-        detector_reason=_optional_text_value(detector.get("reason")),
+        detector_profile_id=_optional_text(detector.get("profile_id")),
+        detector_configuration_id=_optional_text(detector.get("configuration_id")),
+        detector_occupied_slots=_optional_nonnegative_int(
+            detector.get("occupied_slots"),
+            "occupied_slots",
+        ),
+        detector_confidence=_optional_confidence(detector.get("confidence")),
+        detector_reason=_optional_text(detector.get("reason")),
     )
 
 
@@ -801,25 +870,29 @@ def _profile_review_draft(report: InventoryValidationSessionReport) -> str:
             "profile_id": None,
         },
         "required_review": [
-            "privacy-review every BMP/raw capture before sharing or fixture promotion",
+            "privacy-review every BMP/raw capture before sharing or promotion",
             "verify operator labels against visible inventory state",
             "review frame-local inventory origin and row/column stride",
             "keep empty-reference separate from held-out empty-validation evidence",
-            "verify wrong-tab and obstructed captures fail closed with a reviewed detector",
+            "verify wrong-tab and obstructed captures fail closed",
             "approve profile/configuration identity before activation",
         ],
         "session_id": report.session_id,
         "warning": (
-            "Draft only. No inventory coordinates, profile, or detector are activated by this file."
+            "Draft only. No inventory coordinates, profile, or detector are "
+            "activated by this file."
         ),
     }
-    return json.dumps(
-        payload,
-        allow_nan=False,
-        ensure_ascii=True,
-        indent=2,
-        sort_keys=True,
-    ) + "\n"
+    return (
+        json.dumps(
+            payload,
+            allow_nan=False,
+            ensure_ascii=True,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
 
 
 def _publish_session(report: InventoryValidationSessionReport) -> None:
@@ -833,9 +906,14 @@ def _replace_record(
     utc_clock: UtcClock | None,
 ) -> InventoryValidationSessionReport:
     records = tuple(
-        replacement if item.order == replacement.order else item for item in report.records
+        replacement if item.order == replacement.order else item
+        for item in report.records
     )
-    return replace(report, records=records, updated_at_utc=_utc_timestamp(utc_clock))
+    return replace(
+        report,
+        records=records,
+        updated_at_utc=_utc_timestamp(utc_clock),
+    )
 
 
 def _allocate_session_directory(output_root: Path, created_at_utc: str) -> Path:
@@ -855,8 +933,10 @@ def _allocate_session_directory(output_root: Path, created_at_utc: str) -> Path:
     )
 
 
-def _validate_cases(cases: Sequence[InventoryValidationCase]) -> tuple[InventoryValidationCase, ...]:
-    if not isinstance(cases, Sequence) or isinstance(cases, (str, bytes, bytearray)):
+def _validate_cases(
+    cases: Sequence[InventoryValidationCase],
+) -> tuple[InventoryValidationCase, ...]:
+    if isinstance(cases, (str, bytes, bytearray)):
         raise TypeError("cases must be a sequence of InventoryValidationCase values")
     normalized = tuple(cases)
     if not normalized:
@@ -868,18 +948,144 @@ def _validate_cases(cases: Sequence[InventoryValidationCase]) -> tuple[Inventory
     return normalized
 
 
+def _read_json_object(path: Path, label: str) -> dict[str, object]:
+    try:
+        value: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InventoryValidationSessionError(
+            f"{label} cannot be read: {path}: {exc}"
+        ) from exc
+    return _object_value(value, label)
+
+
+def _object_value(value: object, label: str) -> dict[str, object]:
+    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+        raise InventoryValidationSessionError(f"{label} must be an object with string keys")
+    return {key: item for key, item in value.items() if isinstance(key, str)}
+
+
+def _required_object(mapping: dict[str, object], key: str) -> dict[str, object]:
+    return _object_value(mapping.get(key), key)
+
+
+def _required_text(mapping: dict[str, object], key: str) -> str:
+    value = mapping.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise InventoryValidationSessionError(f"{key} must be a non-empty string")
+    return value
+
+
+def _required_positive_int(mapping: dict[str, object], key: str) -> int:
+    value = mapping.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise InventoryValidationSessionError(f"{key} must be a positive integer")
+    return value
+
+
+def _optional_text(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise InventoryValidationSessionError(
+            "optional text value must be non-empty or null"
+        )
+    return value
+
+
+def _optional_positive_int(value: object, label: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise InventoryValidationSessionError(f"{label} must be positive or null")
+    return value
+
+
+def _optional_nonnegative_int(value: object, label: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise InventoryValidationSessionError(
+            f"{label} must be non-negative or null"
+        )
+    return value
+
+
+def _optional_confidence(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise InventoryValidationSessionError(
+            "detector confidence must be numeric or null"
+        )
+    confidence = float(value)
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        raise InventoryValidationSessionError(
+            "detector confidence must be finite and between 0 and 1"
+        )
+    return confidence
+
+
+def _owned_relative_path(path: Path, root: Path, label: str) -> str:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError as exc:
+        raise InventoryValidationSessionError(
+            f"{label} escapes the owned session directory"
+        ) from exc
+
+
+def _artifact_path(directory: Path, metadata: dict[str, object], label: str) -> Path:
+    name = _required_text(metadata, "path")
+    candidate = Path(name)
+    if candidate.is_absolute() or candidate.name != name:
+        raise InventoryValidationSessionError(
+            f"{label} artifact path must be local and relative"
+        )
+    path = directory / candidate
+    if not path.is_file():
+        raise InventoryValidationSessionError(f"{label} artifact is missing")
+    return path
+
+
+def _validate_hashed_artifact(
+    directory: Path,
+    metadata: dict[str, object],
+    label: str,
+) -> tuple[Path, str]:
+    path = _artifact_path(directory, metadata, label)
+    expected = _required_text(metadata, "sha256")
+    if _sha256(path.read_bytes()) != expected:
+        raise InventoryValidationSessionError(f"{label} artifact hash mismatch")
+    return path, expected
+
+
+def _validate_unhashed_artifact(
+    directory: Path,
+    metadata: dict[str, object],
+    label: str,
+) -> Path:
+    return _artifact_path(directory, metadata, label)
+
+
 def _utc_timestamp(clock: UtcClock | None) -> str:
     value = datetime.now(UTC) if clock is None else clock()
     if not isinstance(value, datetime):
         raise TypeError("utc_clock must return datetime")
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("utc_clock must return a timezone-aware datetime")
-    return value.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    return (
+        value.astimezone(UTC)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        dir=path.parent,
+    )
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
@@ -893,44 +1099,6 @@ def _atomic_write_text(path: Path, content: str) -> None:
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def _required_text(mapping: dict[str, object], key: str) -> str:
-    value = mapping.get(key)
-    if not isinstance(value, str) or not value.strip():
-        raise InventoryValidationSessionError(f"{key} must be a non-empty string")
-    return value
-
-
-def _required_int(mapping: dict[str, object], key: str) -> int:
-    value = mapping.get(key)
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise InventoryValidationSessionError(f"{key} must be a non-negative integer")
-    return value
-
-
-def _optional_text_value(value: object) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
-        raise InventoryValidationSessionError("optional text value must be non-empty or null")
-    return value
-
-
-def _optional_int(value: object) -> int | None:
-    if value is None:
-        return None
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise InventoryValidationSessionError("optional integer must be non-negative or null")
-    return value
-
-
-def _optional_float(value: object) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise InventoryValidationSessionError("optional float must be numeric or null")
-    return float(value)
 
 
 def _no_op_ready(
