@@ -6,7 +6,11 @@ frame profile and matching empty-inventory reference are supplied.
 
 from __future__ import annotations
 
-from .adapter import InventoryObservationError, inventory_state_from_observation
+from .adapter import (
+    InventoryObservationError,
+    inventory_detection_from_observation,
+    inventory_state_from_observation,
+)
 from .classification import (
     ClassificationPolicy,
     InventoryClassificationError,
@@ -71,6 +75,7 @@ __all__ = [
     "SlotDecision",
     "SlotOccupancy",
     "extract_capture_bmp",
+    "inventory_detection_from_observation",
     "inventory_detector_from_profile",
     "inventory_state_from_observation",
 ]

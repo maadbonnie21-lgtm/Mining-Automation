@@ -31,3 +31,20 @@ python tools/prepare_inventory_fixture.py \
 The tool reports the exact width, height, pixel format, and payload length for
 the manifest entry. Visual/privacy review still happens before the raw output
 is committed.
+
+## Inventory live validation
+
+`validate_inventory_live.py` is the thin entry point for a passive, one-frame
+Windows/RuneLite inventory evidence workflow. Reusable capture, persistence,
+reporting, and detector evaluation logic lives in
+`mining_automation.perception.inventory`; the tool never contains detector or
+Win32 logic.
+
+```powershell
+python tools/validate_inventory_live.py --case empty-reference --capture-build <HARNESS_COMMIT_SHA>
+```
+
+Until a reviewed live profile/reference detector factory is supplied, the
+command completes in `capture-only / profile-not-configured` mode. See
+`docs/INVENTORY_LIVE_VALIDATION.md` for artifact safety, optional reviewed
+detector activation, exit codes, privacy review, and fixture promotion.

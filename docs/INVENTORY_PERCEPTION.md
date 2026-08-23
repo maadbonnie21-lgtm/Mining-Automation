@@ -37,8 +37,9 @@ hard-coded desktop coordinate or a synthetic guess.
    gutters fails closed rather than becoming confident item detections.
 4. The detector aggregates only when localization and all 28 slot decisions
    meet the configured confidence policy.
-5. `inventory_state_from_observation` is the sole public evidence parser and
-   produces the shared `InventoryState` used by controller code.
+5. `inventory_detection_from_observation` is the sole evidence-schema parser;
+   `inventory_state_from_observation` delegates to it and produces the shared
+   `InventoryState` used by controller code.
 
 Expected runtime misses, such as an unsupported frame size or insufficient
 localization confidence, produce one well-formed unknown observation. Broken
@@ -206,10 +207,20 @@ Its evidence contains JSON-friendly values:
 - ordered `slots`, each with index, row, column, region, state, confidence, and
   score diagnostics
 
-Consumers must use `inventory_state_from_observation`; they must not parse this
-mapping in controller logic. The adapter rejects wrong kinds, unknown schema
-versions, malformed values, and incoherent label/count combinations before
-constructing `InventoryState`.
+Consumers must use the typed adapters; they must not parse this mapping in
+controller logic or diagnostics tooling. The adapter rejects wrong kinds,
+unknown schema versions, malformed values, and incoherent label/count
+combinations before constructing `InventoryDetection` or `InventoryState`.
+
+## One-command real-client evidence
+
+The passive Windows harness captures one production-backend frame and creates
+unique raw/BMP/draft/report artifacts without input automation or overwrite.
+It safely operates in capture-only mode until a reviewed live profile/reference
+factory exists, and it can run that future production `InventoryDetector` on
+the exact captured frame without an architecture change. See
+`INVENTORY_LIVE_VALIDATION.md` for the command, report schema, exit semantics,
+privacy review, and replay-promotion workflow.
 
 ## Replay and failure-promotion workflow
 

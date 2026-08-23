@@ -15,7 +15,11 @@ from .detector import (
 )
 from .geometry import INVENTORY_CAPACITY, Region
 
-__all__ = ["InventoryObservationError", "inventory_state_from_observation"]
+__all__ = [
+    "InventoryObservationError",
+    "inventory_detection_from_observation",
+    "inventory_state_from_observation",
+]
 
 _EVIDENCE_KEYS = frozenset(
     {
@@ -147,12 +151,12 @@ def _slot(value: object, position: int) -> SlotDecision:
         raise InventoryObservationError(f"{path} is invalid: {exc}") from exc
 
 
-def inventory_state_from_observation(observation: Observation) -> InventoryState:
-    """Validate an inventory observation and produce the shared state contract.
+def inventory_detection_from_observation(observation: Observation) -> InventoryDetection:
+    """Validate an inventory observation and recover its typed diagnostic result.
 
     This is intentionally the only place outside the detector that understands
-    its evidence schema.  State/controller code receives :class:`InventoryState`
-    and never indexes detector-private dictionaries.
+    its evidence schema. Diagnostic consumers can retain the fail-closed reason
+    and configuration identity without indexing detector-private dictionaries.
     """
     if not isinstance(observation, Observation):
         raise InventoryObservationError(
@@ -243,6 +247,17 @@ def inventory_state_from_observation(observation: Observation) -> InventoryState
     except (TypeError, ValueError) as exc:
         raise InventoryObservationError(f"inventory evidence is incoherent: {exc}") from exc
 
+    return detection
+
+
+def inventory_state_from_observation(observation: Observation) -> InventoryState:
+    """Validate an inventory observation and produce the shared state contract.
+
+    State/controller code receives :class:`InventoryState` and never indexes
+    detector-private dictionaries. The richer diagnostic adapter above is the
+    single evidence parser used by both paths.
+    """
+    detection = inventory_detection_from_observation(observation)
     return InventoryState(
         occupied_slots=detection.occupied_slots,
         capacity=INVENTORY_CAPACITY,
