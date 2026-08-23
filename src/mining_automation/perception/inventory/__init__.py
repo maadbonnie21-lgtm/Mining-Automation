@@ -41,6 +41,17 @@ from .geometry import (
     InventoryGridLayout,
     Region,
 )
+from .live_validation_session import (
+    DEFAULT_INVENTORY_VALIDATION_CASES,
+    OPTIONAL_INVENTORY_VALIDATION_CASES,
+    InventoryValidationSessionError,
+    InventoryValidationSessionPaused,
+    InventoryValidationSessionRecord,
+    InventoryValidationSessionReport,
+    InventoryValidationSessionStatus,
+    load_inventory_validation_session,
+    run_inventory_validation_session,
+)
 from .localization import (
     ExactProfileInventoryLocator,
     InventoryFrameProfile,
@@ -49,12 +60,14 @@ from .localization import (
 )
 
 __all__ = [
+    "DEFAULT_INVENTORY_VALIDATION_CASES",
     "INVENTORY_CAPACITY",
     "INVENTORY_COLUMNS",
     "INVENTORY_EVIDENCE_SCHEMA_VERSION",
     "INVENTORY_OBSERVATION_KIND",
     "INVENTORY_ROWS",
     "INVENTORY_SLOT_SIZE",
+    "OPTIONAL_INVENTORY_VALIDATION_CASES",
     "ClassificationPolicy",
     "ExactProfileInventoryLocator",
     "InventoryClassificationError",
@@ -69,6 +82,11 @@ __all__ = [
     "InventoryObservationError",
     "InventoryRegionLocator",
     "InventorySlotClassifier",
+    "InventoryValidationSessionError",
+    "InventoryValidationSessionPaused",
+    "InventoryValidationSessionRecord",
+    "InventoryValidationSessionReport",
+    "InventoryValidationSessionStatus",
     "PreparedInventoryFrame",
     "ReferenceInventoryClassifier",
     "Region",
@@ -78,4 +96,6 @@ __all__ = [
     "inventory_detection_from_observation",
     "inventory_detector_from_profile",
     "inventory_state_from_observation",
+    "load_inventory_validation_session",
+    "run_inventory_validation_session",
 ]
