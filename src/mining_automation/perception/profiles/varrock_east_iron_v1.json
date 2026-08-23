@@ -2,73 +2,37 @@
   "anchors": [
     {
       "anchor_id": "grass-west",
-      "region": [
-        50,
-        80,
-        48,
-        48
-      ],
+      "region": [50, 80, 48, 48],
       "signature": {
         "max_distance": 50.0,
-        "mean_rgb": [
-          80.411458,
-          82.079861,
-          34.185764
-        ]
+        "mean_rgb": [80.411458, 82.079861, 34.185764]
       },
       "weight": 1.0
     },
     {
       "anchor_id": "grass-center",
-      "region": [
-        360,
-        120,
-        48,
-        48
-      ],
+      "region": [360, 120, 48, 48],
       "signature": {
         "max_distance": 50.0,
-        "mean_rgb": [
-          70.258681,
-          77.246528,
-          34.888889
-        ]
+        "mean_rgb": [70.258681, 77.246528, 34.888889]
       },
       "weight": 1.0
     },
     {
       "anchor_id": "east-slope",
-      "region": [
-        660,
-        250,
-        40,
-        40
-      ],
+      "region": [660, 250, 40, 40],
       "signature": {
         "max_distance": 50.0,
-        "mean_rgb": [
-          86.1525,
-          85.3875,
-          31.1175
-        ]
+        "mean_rgb": [86.1525, 85.3875, 31.1175]
       },
       "weight": 1.0
     },
     {
       "anchor_id": "south-ground",
-      "region": [
-        80,
-        760,
-        48,
-        48
-      ],
+      "region": [80, 760, 48, 48],
       "signature": {
         "max_distance": 50.0,
-        "mean_rgb": [
-          51.411458,
-          38.414931,
-          11.909722
-        ]
+        "mean_rgb": [51.411458, 38.414931, 11.909722]
       },
       "weight": 1.0
     }
@@ -77,121 +41,69 @@
     {
       "available_signature": {
         "max_distance": 60.0,
-        "mean_rgb": [
-          56.73,
-          31.24,
-          19.97
-        ]
+        "mean_rgb": [56.73, 31.24, 19.97]
       },
       "depleted_signature": {
         "max_distance": 60.0,
-        "mean_rgb": [
-          58.78,
-          53.43,
-          53.17
-        ]
+        "mean_rgb": [58.78, 53.43, 53.17]
       },
       "minimum_margin": 0.25,
       "minimum_occlusion_agreement": 1.0,
       "minimum_similarity": 0.65,
       "occlusion_grid_columns": 2,
       "occlusion_grid_rows": 2,
-      "region": [
-        263,
-        409,
-        20,
-        20
-      ],
+      "region": [263, 409, 20, 20],
       "resource_id": "varrock-east-iron-northwest"
     },
     {
       "available_signature": {
         "max_distance": 60.0,
-        "mean_rgb": [
-          56.36,
-          29.69,
-          20.32
-        ]
+        "mean_rgb": [56.36, 29.69, 20.32]
       },
       "depleted_signature": {
         "max_distance": 60.0,
-        "mean_rgb": [
-          58.78,
-          53.43,
-          53.17
-        ]
+        "mean_rgb": [58.78, 53.43, 53.17]
       },
       "minimum_margin": 0.25,
       "minimum_occlusion_agreement": 1.0,
       "minimum_similarity": 0.65,
       "occlusion_grid_columns": 2,
       "occlusion_grid_rows": 2,
-      "region": [
-        295,
-        490,
-        20,
-        20
-      ],
+      "region": [295, 490, 20, 20],
       "resource_id": "varrock-east-iron-southwest"
     },
     {
       "available_signature": {
         "max_distance": 60.0,
-        "mean_rgb": [
-          56.81,
-          29.89,
-          20.42
-        ]
+        "mean_rgb": [56.81, 29.89, 20.42]
       },
       "depleted_signature": {
         "max_distance": 60.0,
-        "mean_rgb": [
-          58.78,
-          53.43,
-          53.17
-        ]
+        "mean_rgb": [58.78, 53.43, 53.17]
       },
       "minimum_margin": 0.25,
       "minimum_occlusion_agreement": 1.0,
       "minimum_similarity": 0.65,
       "occlusion_grid_columns": 2,
       "occlusion_grid_rows": 2,
-      "region": [
-        405,
-        424,
-        20,
-        20
-      ],
+      "region": [405, 424, 20, 20],
       "resource_id": "varrock-east-iron-center"
     },
     {
       "available_signature": {
         "max_distance": 60.0,
-        "mean_rgb": [
-          60.28,
-          31.81,
-          21.7
-        ]
+        "mean_rgb": [60.28, 31.81, 21.7]
       },
       "depleted_signature": {
         "max_distance": 60.0,
-        "mean_rgb": [
-          58.78,
-          53.43,
-          53.17
-        ]
+        "mean_rgb": [58.78, 53.43, 53.17]
       },
       "minimum_margin": 0.25,
       "minimum_occlusion_agreement": 1.0,
       "minimum_similarity": 0.65,
       "occlusion_grid_columns": 2,
       "occlusion_grid_rows": 2,
-      "region": [
-        590,
-        365,
-        20,
-        20
-      ],
+      "region": [590, 365, 20, 20],
       "resource_id": "varrock-east-iron-northeast"
     }
   ],
@@ -214,174 +126,78 @@
       "landmark_id": "west-ridge",
       "maximum_distance": 0.12,
       "reference_descriptor": [
-        0.578483,
-        0.798826,
-        -0.497874,
-        0.348648,
-        -0.456174,
-        0.667594,
-        -0.307893,
-        -0.360095,
-        -0.436482,
-        0.801364,
-        -0.033105,
-        -1.0,
-        -0.53288,
-        0.964521,
-        0.213013,
-        -0.747946
+        0.578483, 0.798826, -0.497874, 0.348648,
+        -0.456174, 0.667594, -0.307893, -0.360095,
+        -0.436482, 0.801364, -0.033105, -1.0,
+        -0.53288, 0.964521, 0.213013, -0.747946
       ],
-      "region": [
-        6,
-        376,
-        48,
-        48
-      ]
+      "region": [6, 376, 48, 48],
+      "zone": "north_west"
     },
     {
       "grid": 4,
       "landmark_id": "west-lower-ridge",
       "maximum_distance": 0.12,
       "reference_descriptor": [
-        0.692031,
-        0.351959,
-        -0.277861,
-        -0.553755,
-        1.0,
-        0.018392,
-        -0.504311,
-        -0.471103,
-        0.991303,
-        0.312147,
-        -0.397231,
-        -0.446366,
-        0.229945,
-        -0.176824,
-        -0.375565,
-        -0.392759
+        0.692031, 0.351959, -0.277861, -0.553755,
+        1.0, 0.018392, -0.504311, -0.471103,
+        0.991303, 0.312147, -0.397231, -0.446366,
+        0.229945, -0.176824, -0.375565, -0.392759
       ],
-      "region": [
-        6,
-        448,
-        48,
-        48
-      ]
+      "region": [6, 448, 48, 48],
+      "zone": "north_west"
     },
     {
       "grid": 4,
       "landmark_id": "south-path",
       "maximum_distance": 0.12,
       "reference_descriptor": [
-        -0.352321,
-        -0.36217,
-        -0.365994,
-        0.331845,
-        -0.364846,
-        -0.366182,
-        -0.366057,
-        0.715706,
-        -0.370831,
-        -0.387066,
-        -0.181471,
-        0.993555,
-        -0.392493,
-        -0.335723,
-        0.804048,
-        1.0
+        -0.352321, -0.36217, -0.365994, 0.331845,
+        -0.364846, -0.366182, -0.366057, 0.715706,
+        -0.370831, -0.387066, -0.181471, 0.993555,
+        -0.392493, -0.335723, 0.804048, 1.0
       ],
-      "region": [
-        258,
-        784,
-        48,
-        48
-      ]
+      "region": [258, 784, 48, 48],
+      "zone": "south_west"
     },
     {
       "grid": 4,
       "landmark_id": "south-central-edge",
       "maximum_distance": 0.12,
       "reference_descriptor": [
-        0.56574,
-        0.814542,
-        -0.04869,
-        -1.0,
-        -0.934556,
-        -0.531345,
-        -0.342228,
-        -0.534201,
-        -0.020678,
-        0.380984,
-        0.345386,
-        0.296817,
-        -0.874236,
-        0.642729,
-        0.674544,
-        0.565192
+        0.56574, 0.814542, -0.04869, -1.0,
+        -0.934556, -0.531345, -0.342228, -0.534201,
+        -0.020678, 0.380984, 0.345386, 0.296817,
+        -0.874236, 0.642729, 0.674544, 0.565192
       ],
-      "region": [
-        426,
-        736,
-        48,
-        48
-      ]
+      "region": [426, 736, 48, 48],
+      "zone": "south_west"
     },
     {
       "grid": 4,
       "landmark_id": "north-east-wall",
       "maximum_distance": 0.12,
       "reference_descriptor": [
-        -0.831116,
-        -0.213399,
-        0.821122,
-        0.110314,
-        0.804405,
-        0.769038,
-        0.14368,
-        -0.173639,
-        1.0,
-        -0.656043,
-        -0.306333,
-        -0.650017,
-        -0.339308,
-        0.493404,
-        -0.107174,
-        -0.864934
+        -0.831116, -0.213399, 0.821122, 0.110314,
+        0.804405, 0.769038, 0.14368, -0.173639,
+        1.0, -0.656043, -0.306333, -0.650017,
+        -0.339308, 0.493404, -0.107174, -0.864934
       ],
-      "region": [
-        702,
-        88,
-        48,
-        48
-      ]
+      "region": [702, 88, 48, 48],
+      "zone": "north_east"
     },
     {
       "grid": 4,
       "landmark_id": "east-bank-edge",
       "maximum_distance": 0.12,
       "reference_descriptor": [
-        -1.0,
-        0.166549,
-        0.731298,
-        -0.175635,
-        -0.699088,
-        0.846673,
-        0.591575,
-        -0.239147,
-        -0.668823,
-        -0.214718,
-        0.251567,
-        0.455167,
-        -0.938356,
-        -0.5367,
-        0.560672,
-        0.868966
+        -1.0, 0.166549, 0.731298, -0.175635,
+        -0.699088, 0.846673, 0.591575, -0.239147,
+        -0.668823, -0.214718, 0.251567, 0.455167,
+        -0.938356, -0.5367, 0.560672, 0.868966
       ],
-      "region": [
-        678,
-        448,
-        48,
-        48
-      ]
+      "region": [678, 448, 48, 48],
+      "zone": "north_east"
     }
   ],
   "schema_version": 3
