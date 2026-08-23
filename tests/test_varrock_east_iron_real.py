@@ -232,8 +232,13 @@ def test_wrong_scene_returns_uncertain_for_every_profiled_target(
     # this case is the most extreme form (every anchor fails at once) and
     # continues to prove the scene is rejected outright, not partially
     # trusted.
+    # Schema v3 (Issue #18): an all-black frame matches none of the six
+    # structural landmarks, so distributed evidence rejects the scene with a
+    # specific quorum reason. Previously this tripped the v2 per-anchor floor;
+    # the outcome is unchanged (every target uncertain) and the reason is now
+    # more diagnostic.
     assert all(
-        observation.evidence["reason"].startswith("anchor_confidence_below_floor")
+        observation.evidence["reason"].startswith("insufficient_landmark_quorum")
         for observation in observations
     )
 
@@ -295,14 +300,16 @@ def _mutate_region(
     )
 
 
-def test_single_anchor_drift_is_caught_by_the_per_anchor_floor(tmp_path: Path) -> None:
-    """A camera-drift stand-in: one real anchor's patch is replaced with a
-    colour distinct enough to matter but not so extreme it fails outright.
-    similarity ~= 0.6 -- comfortably above the ~0.4 a single anchor could
-    survive at under the old weighted-average-only check (see the
-    ResourceDetectorProfile docstring for that arithmetic), but below the
-    production profile's 0.90 per-anchor floor. Every other anchor and every
-    candidate region keep their real, unmutated pixels."""
+def test_legacy_anchor_patch_change_is_non_gating_under_schema_v3(tmp_path: Path) -> None:
+    """Issue #18, lead decision B/D: legacy mean-RGB anchors no longer veto.
+
+    Under schema v2 this exact mutation tripped the Issue #13 per-anchor floor
+    and rejected the whole scene. That veto is the confirmed reacquisition
+    bug: the four legacy anchors measure 0.78-3.27 structural variance against
+    a 8.0 discriminative floor, so they never carried information capable of
+    telling one camera view from another. Under v3 the six structural
+    landmarks still agree, so the scene remains validated.
+    """
     dataset = _load_real_dataset(tmp_path)
     source = next(
         sample.frame
@@ -322,20 +329,16 @@ def test_single_anchor_drift_is_caught_by_the_per_anchor_floor(tmp_path: Path) -
     observations = run_detector(build_varrock_east_iron_detector(), frame)
 
     assert _states_by_resource(observations) == {
-        resource_id: ResourceVisualState.UNCERTAIN.value for resource_id in ALL_RESOURCES
+        resource_id: ResourceVisualState.AVAILABLE.value for resource_id in ALL_RESOURCES
     }
-    assert all(
-        observation.evidence["reason"].startswith("anchor_confidence_below_floor")
-        and "south-ground" in observation.evidence["reason"]
-        for observation in observations
-    )
-    # The other three anchors are untouched real pixels and should still read
-    # as a near-perfect match, confirming the rejection is specific to the
-    # one drifted anchor rather than a side effect of the mutation.
-    anchor_confidences = observations[0].evidence["anchor_confidences"]
-    for anchor_id in ("grass-west", "grass-center", "east-slope"):
-        assert anchor_confidences[anchor_id] > 0.99
-    assert anchor_confidences["south-ground"] < 0.65
+    # The legacy anchor measurement is still recorded as evidence, just not
+    # used to gate the decision.
+    assert "anchor_confidences" in observations[0].evidence
+    assert observations[0].evidence["anchor_confidences"]["south-ground"] < 0.65
+    # Every landmark is untouched by this mutation and still matches exactly.
+    distances = observations[0].evidence["landmark_distances"]
+    assert len(distances) == 6
+    assert max(distances.values()) == 0.0
 
 
 def test_partial_occlusion_on_a_real_candidate_is_suspected(tmp_path: Path) -> None:

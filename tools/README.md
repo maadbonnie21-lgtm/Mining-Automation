@@ -21,3 +21,9 @@ Rules:
 `annotate_resource_fixture.py` adds frame-local resource annotations and performs the explicit review transition. This is internal dataset work; normal application users never enter regions or train detectors.
 
 `build_resource_replay_manifest.py` promotes reviewed drafts into the merged replay-schema-v1 format. See `docs/RESOURCE_PERCEPTION.md` for the complete workflow and privacy rules.
+
+- `validate_varrock_east_drift.py` — point the unmodified production detector at a
+  local directory of real frames (Issue #18). `--expect uncertain` is the
+  camera-drift gate; `--expect definitive` is the reacquisition gate. Reads
+  `.raw`/`.raw.gz` payloads at the profile geometry and writes nothing back into
+  the repository.

@@ -64,8 +64,10 @@ same reviewed grey state.
 
 Current thresholds:
 
-- scene confidence: `0.85`
-- per-anchor confidence floor: `0.90` (new, Issue #13)
+- scene confidence: `0.85` (legacy v2 path only; non-gating under v3)
+- per-anchor confidence floor: `0.90` (Issue #13; **non-gating under v3**, see below)
+- structural landmarks: 6, quorum 5, spanning >= 3 of 4 macro zones (Issue #18)
+- landmark descriptor max distance: `0.12` (Issue #18)
 - candidate minimum similarity: `0.65`
 - candidate minimum available/depleted margin: `0.25`
 - candidate signature maximum RGB distance: `60`
@@ -152,6 +154,69 @@ real patch) may look different from any synthetic fill colour and should
 still be captured and evaluated before this profile is called
 occlusion-validated, not just occlusion-defended.
 
+## Issue #18: structural scene validation and reacquisition
+
+Schema v3 replaces the *gating* role of the four mean-RGB terrain anchors with
+six spatially distributed structural landmarks under a quorum rule.
+
+**Why the old anchors could not work.** Measured with the same structural
+variance metric that now gates landmark calibration, the four legacy anchors
+score `grass-west 1.75`, `grass-center 3.03`, `east-slope 0.78`,
+`south-ground 3.27` -- against a discriminative floor of `8.0`. They never
+carried information capable of telling one camera view from another. Giving any
+single one of them veto power (the Issue #13 per-anchor floor) therefore
+rejected scenes on evidence that could not distinguish views, which is the
+confirmed cause of the reacquisition failure. They are still measured and
+recorded as evidence; they no longer gate.
+
+**The replacement.** Each landmark is a 48x48 region reduced to a 4x4 grid of
+cell luminances, mean-centred and normalised by maximum absolute deviation. It
+encodes internal structure rather than average colour and is invariant to a
+uniform brightness change. The scene validates only when at least 5 of 6
+landmarks match **and** the matching ones span at least 3 macro zones.
+
+**Calibrated landmarks**, two per usable macro zone:
+
+| landmark | region | zone | structural variance |
+|---|---|---|---|
+| `west-ridge` | (6,376,48,48) | north_west | 10.17 |
+| `west-lower-ridge` | (6,448,48,48) | north_west | 13.35 |
+| `south-path` | (258,784,48,48) | south_west | 17.53 |
+| `south-central-edge` | (426,736,48,48) | south_west | 12.60 |
+| `north-east-wall` | (702,88,48,48) | north_east | 8.75 |
+| `east-bank-edge` | (678,448,48,48) | north_east | 16.38 |
+
+The 2-per-zone layout is load-bearing: with one landmark per zone, losing any
+single landmark would drop below the 3-zone requirement and the 5-of-6 quorum
+would never actually tolerate an obstruction. The south-east quadrant is
+unusable -- the inventory panel occupies it -- so three zones is the maximum
+available and every one of them carries a spare.
+
+**Threshold derivation.** Set by measured separation, not tuned:
+
+- worst positive across all five reviewed rock-state frames: `0.00005`
+- closest negative at 4px camera translation: `0.143`
+- closest negative at 8px: `0.279`
+
+`0.12` sits ~2400x above the worst positive and below the closest negative,
+with no overlap between the distributions.
+
+**Calibration guards.** `MINIMUM_STRUCTURAL_VARIANCE` (8.0) rejects a
+featureless region at construction time, so "no generic grass/dirt patches" is
+mechanically enforced. Landmarks may not overlap candidate regions, so rock
+available/depleted transitions cannot alter scene validation -- measured at
+<= 0.00006 descriptor movement across every reviewed depletion/respawn frame.
+
+**Masked-region hazard.** The committed fixtures are privacy-sanitized: title
+bar, chat/status area and lower-right inventory are solid black. A naive search
+for "most structural region" ranks mask edges first, because they are perfectly
+stable and extremely high-contrast -- and they hold live UI on a real machine.
+No landmark may sit inside `y <= 33` or `y >= 850`; this is asserted in
+`tests/test_issue18_scene_reacquisition.py`.
+
+**Backward compatibility.** A profile with no `scene_landmarks` keeps the exact
+v2 behaviour including the Issue #13 per-anchor floor. Schema v3 is additive.
+
 ## Release boundary
 
 This is a calibrated development profile, not yet a claim of universal or
@@ -165,9 +230,13 @@ four-node release readiness. Before Issue #11 can close, collect and pass:
   Issue #13 occlusion defense is mechanism-validated against real pixels with
   a synthetic mutation — see above — not yet against a genuinely captured
   occlusion event)
-- at least one reviewed frame with the camera or zoom genuinely different
-  from the calibrated position, to confirm the per-anchor floor behaves as
-  expected against real drift rather than only a synthetic one
+- the 36 real camera-drift frames re-run against schema v3 via
+  `tools/validate_varrock_east_drift.py --frames <dir>`: all rocks UNCERTAIN,
+  zero false definitive targets (this branch does **not** claim that baseline
+  was re-verified; the frames are not in the repository)
+- a freshly restored supported camera view re-run with `--expect definitive`
+- an ordinary RuneLite restart followed by supported-view reacquisition,
+  re-run with `--expect definitive`
 - repeated runs with the supported camera restored after ordinary client restart
 
 PR #12 remains a draft until those gates pass.

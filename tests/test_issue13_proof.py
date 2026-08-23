@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from mining_automation.capture import Frame, RawFrame
 from mining_automation.perception import (
     ResourceVisualState,
@@ -77,8 +79,19 @@ def test_camera_drift_single_anchor_is_rejected(tmp_path: Path) -> None:
     real, unmutated pixels.
 
     Base behaviour: drift is averaged away, targets classify AVAILABLE.
-    Hardened behaviour: all targets UNCERTAIN, scene rejected.
+    Issue #13 behaviour: all targets UNCERTAIN via the per-anchor floor.
+
+    Issue #18 supersedes the mechanism: legacy mean-RGB anchors are no longer
+    gating, because they were measured to carry no view-discriminating
+    structure. A mutated anchor patch therefore no longer rejects the scene --
+    that case now lives in
+    tests/test_varrock_east_iron_real.py::test_legacy_anchor_patch_change_is_non_gating_under_schema_v3.
+    Genuine camera drift is still rejected, now by distributed structural
+    landmarks, proven in tests/test_scene_landmarks.py.
     """
+    pytest.skip(
+        "superseded by Issue #18: legacy anchors are non-gating under schema v3"
+    )
     source = _real_frame(tmp_path)
     profile = load_varrock_east_iron_profile()
     anchor = next(a for a in profile.anchors if a.anchor_id == "south-ground")
