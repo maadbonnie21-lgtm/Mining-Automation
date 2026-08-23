@@ -217,6 +217,49 @@ No landmark may sit inside `y <= 33` or `y >= 850`; this is asserted in
 **Backward compatibility.** A profile with no `scene_landmarks` keeps the exact
 v2 behaviour including the Issue #13 per-anchor floor. Schema v3 is additive.
 
+## Issue #22: real restored-frame diagnosis
+
+The stored `reacquire-restored-20260818.raw` capture is not a small-jitter
+version of the calibrated view. Its frozen-profile distances are:
+
+| landmark | distance | threshold | result |
+|---|---:|---:|---|
+| `west-ridge` | 0.719223 | 0.12 | fail |
+| `west-lower-ridge` | 0.591629 | 0.12 | fail |
+| `south-path` | 0.514805 | 0.12 | fail |
+| `south-central-edge` | 0.659996 | 0.12 | fail |
+| `north-east-wall` | 0.107727 | 0.12 | match |
+| `east-bank-edge` | 0.799425 | 0.12 | fail |
+
+A coherent +/-4px search peaks at offset `(0,-2)` but remains 1-of-6 in one
+zone. Independent local searches also recover only the same north-east
+landmark. More decisively, the claimed restored frame matches **all 36** known
+unsupported drift captures at 6-of-6 landmarks across all three zones when
+the existing descriptor threshold, quorum, and spatial-spread rule are used
+for frame-to-frame comparison. The capture therefore remained in the drifted
+north-west camera view; frozen landmark brittleness is not the cause of this
+real failure.
+
+No production threshold, quorum, zone rule, descriptor, profile schema, or
+detector version changes for Issue #22. Bounded coherent registration is
+diagnostic-only because the existing safety contract deliberately rejects a
+4px/2px translated frame. Independent local minima are never combined into a
+scene verdict. Diagnostic search envelopes must remain outside candidate
+regions, preserving resource-state independence.
+
+Run the complete owner-only validation and diagnosis without inspecting JSON:
+
+```bash
+python tools/validate_varrock_east_drift.py --drift-frames diagnostics/issue18-drift-v3 --restored-frame diagnostics/varrock-east-iron/frames/reacquire-restored-20260818.raw
+```
+
+The command prints per-landmark distances and thresholds, matched zones,
+production scene verdicts and rock states, the 36-frame safety total, bounded
+search evidence, known-drift similarity, the restored-frame result, and a
+plain-language diagnosis. When it reports `camera_not_actually_restored`, the
+next useful evidence is one fresh capture made after returning RuneLite to the
+reviewed supported view—not threshold tuning.
+
 ## Release boundary
 
 This is a calibrated development profile, not yet a claim of universal or
@@ -230,11 +273,11 @@ four-node release readiness. Before Issue #11 can close, collect and pass:
   Issue #13 occlusion defense is mechanism-validated against real pixels with
   a synthetic mutation — see above — not yet against a genuinely captured
   occlusion event)
-- the 36 real camera-drift frames re-run against schema v3 via
-  `tools/validate_varrock_east_drift.py --frames <dir>`: all rocks UNCERTAIN,
-  zero false definitive targets (this branch does **not** claim that baseline
-  was re-verified; the frames are not in the repository)
-- a freshly restored supported camera view re-run with `--expect definitive`
+- the 36 real camera-drift frames re-run through the Issue #22 combined command:
+  all 36 frames remain UNCERTAIN, with zero false definitive targets
+- one fresh supported-view capture, because the stored frame was proven to be
+  the same unsupported view as the drift set; rerun it through the combined
+  command as `--restored-frame`
 - an ordinary RuneLite restart followed by supported-view reacquisition,
   re-run with `--expect definitive`
 - repeated runs with the supported camera restored after ordinary client restart

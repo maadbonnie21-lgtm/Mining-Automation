@@ -22,8 +22,20 @@ Rules:
 
 `build_resource_replay_manifest.py` promotes reviewed drafts into the merged replay-schema-v1 format. See `docs/RESOURCE_PERCEPTION.md` for the complete workflow and privacy rules.
 
-- `validate_varrock_east_drift.py` — point the unmodified production detector at a
-  local directory of real frames (Issue #18). `--expect uncertain` is the
-  camera-drift gate; `--expect definitive` is the reacquisition gate. Reads
-  `.raw`/`.raw.gz` payloads at the profile geometry and writes nothing back into
-  the repository.
+- `validate_varrock_east_drift.py` — run the Issue #22 drift-safety and
+  reacquisition diagnosis in one command:
+
+  ```bash
+  python tools/validate_varrock_east_drift.py --drift-frames diagnostics/issue18-drift-v3 --restored-frame diagnostics/varrock-east-iron/frames/reacquire-restored-20260818.raw
+  ```
+
+  It requires the complete 36-frame drift set, runs the unmodified production
+  detector, prints every landmark distance/threshold/status and scene verdict,
+  and compares the restored candidate with known drift frames using the same
+  `0.12`, 5-of-6, three-zone structural rule. A shared +/-4px search and
+  independent local minima are clearly marked diagnostic-only and never turn
+  UNCERTAIN into a target. `--report <path>` additionally writes the same
+  evidence as versioned JSON; reading JSON is not required. Exit `0` means both
+  drift safety and restored-view production detection pass, `1` means an
+  analyzed gate failed, and `2` means the inputs or invocation are invalid.
+  The historical `--frames <dir> [--expect ...]` spelling remains available.
