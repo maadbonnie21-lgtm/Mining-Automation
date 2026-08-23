@@ -32,3 +32,12 @@ def test_full_inventory_transitions_toward_bank_workflow() -> None:
 def test_break_state_produces_no_action() -> None:
     state = WorldState(session_state=SessionState.BREAK)
     assert MiningController().decide(state) is None
+
+
+def test_acquiring_requests_the_canonical_inventory_observation() -> None:
+    state = WorldState(session_state=SessionState.ACQUIRING)
+
+    intent = MiningController().decide(state)
+
+    assert intent is not None
+    assert intent.expected_observation_kinds == ("location", "inventory_state")
