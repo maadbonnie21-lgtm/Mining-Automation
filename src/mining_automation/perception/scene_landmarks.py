@@ -1,37 +1,18 @@
-"""Structural scene landmarks.
+"""Structural scene landmarks and calibration guards.
 
-Issue #18. Replaces mean-RGB terrain anchors as the *gating* scene-validation
-mechanism.
+Issue #18 replaces generic mean-RGB terrain anchors as the gating scene-
+validation mechanism with spatially distributed structural landmarks.
 
-A single mean RGB over a patch of grass is both too weak and too strong. Too
-weak, because grass looks like grass everywhere in the scene, so one patch
-matching proves almost nothing about *this* camera view. Too strong, because
-under the Issue #13 per-anchor floor a single patch holds veto power, so one
-lighting shift, one bit of foliage, or one player standing on it blocks the
-whole scene with nothing able to outvote it -- fail-closed hard enough that a
-genuinely restored camera never reacquires.
-
-The replacement changes both halves:
-
-* **Structure, not colour.** A landmark is described by the *relative*
-  luminance pattern across a grid of sub-cells, mean-centred and normalised.
-  That encodes internal structure -- edges, boundaries, contrast layout -- and
-  is invariant to a uniform brightness shift. A flat terrain patch has almost
-  no pattern to match, and is rejected at calibration time rather than silently
-  used (:data:`MINIMUM_STRUCTURAL_VARIANCE`).
-
-* **Distributed quorum, not per-anchor veto.** The scene validates when enough
-  landmarks match *and* the matching ones span enough distinct macro zones. One
-  strong local or repeated-terrain match cannot carry the scene; one obstructed
-  landmark cannot sink it.
-
-Pure Python over the same ``memoryview`` access the rest of the perception
-package uses. No numpy, no OpenCV: the project ships ``dependencies = []`` and
-a 4x4 reduction over six small regions does not justify changing that.
+Landmarks describe the relative luminance structure inside a small frame-local
+region. Runtime validation requires both a landmark quorum and spatial spread.
+Calibration is deliberately stricter than runtime: featureless regions,
+candidate overlap, and caller-supplied excluded/sanitized regions are rejected
+before a descriptor can be frozen into a profile.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final
@@ -46,6 +27,7 @@ __all__ = [
     "SceneLandmarkProfile",
     "SceneVerdict",
     "SceneVerdictReason",
+    "calibrate_scene_landmark",
     "describe_region",
     "descriptor_distance",
     "evaluate_scene",
@@ -53,30 +35,17 @@ __all__ = [
     "structural_variance",
 ]
 
-#: Sub-cells per axis. 4x4 = 16 cells over a 48x48 landmark gives 12x12 pixel
-#: cells: large enough to average out per-pixel noise, small enough to retain
-#: the edge layout that makes a landmark distinguishable from flat terrain.
 DEFAULT_DESCRIPTOR_GRID: Final[int] = 4
-
-#: Minimum spread of cell luminances (in 0-255 units) for a landmark to be
-#: considered discriminative at calibration time. Enforces "no generic
-#: grass/dirt patches" mechanically instead of by convention -- all four legacy
-#: v2 anchors fall below this.
 MINIMUM_STRUCTURAL_VARIANCE: Final[float] = 8.0
 
 _LUMA_R: Final[float] = 0.299
 _LUMA_G: Final[float] = 0.587
 _LUMA_B: Final[float] = 0.114
+_REGION_COMPONENTS: Final[int] = 4
 
 
 class MacroZone(Enum):
-    """Coarse spatial region of the frame.
-
-    Deliberately coarse. The point is only to prove that surviving evidence is
-    *spread out*, so a cluster of matches in one corner cannot validate a
-    scene. Four zones is the smallest split that makes "at least 3 zones" a
-    meaningful distribution requirement.
-    """
+    """Coarse spatial region used to require distributed scene evidence."""
 
     NORTH_WEST = "north_west"
     NORTH_EAST = "north_east"
@@ -85,17 +54,25 @@ class MacroZone(Enum):
 
 
 class SceneVerdictReason(Enum):
-    """Why scene validation reached its conclusion.
-
-    Every failure is a distinct, specific reason so recovery policy and
-    diagnostics can branch on cause rather than parse a message.
-    """
+    """Typed reason for a scene-validation decision."""
 
     VALIDATED = "scene_validated"
     INSUFFICIENT_LANDMARK_QUORUM = "insufficient_landmark_quorum"
     INSUFFICIENT_SPATIAL_SPREAD = "insufficient_spatial_spread"
     MALFORMED_SCENE_EVIDENCE = "malformed_scene_evidence"
     NO_LANDMARKS_CONFIGURED = "no_landmarks_configured"
+
+
+def _is_integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_finite_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
 
 
 def _luma(red: int, green: int, blue: int) -> float:
@@ -115,28 +92,76 @@ def _read_rgb(
     raise ValueError(f"unsupported pixel format: {pixel_format}")
 
 
+def _validate_region_shape(region: tuple[int, int, int, int]) -> None:
+    if (
+        not isinstance(region, tuple)
+        or len(region) != _REGION_COMPONENTS
+        or any(not _is_integer(component) for component in region)
+    ):
+        raise ValueError("region must be a tuple of four integers")
+    x, y, width, height = region
+    if x < 0 or y < 0:
+        raise ValueError("region origin must be non-negative and frame-local")
+    if width <= 0 or height <= 0:
+        raise ValueError("region width and height must be positive")
+
+
+def _validated_region(
+    region: tuple[int, int, int, int], frame_width: int, frame_height: int
+) -> tuple[int, int, int, int]:
+    _validate_region_shape(region)
+    if not _is_integer(frame_width) or frame_width <= 0:
+        raise ValueError("frame_width must be a positive integer")
+    if not _is_integer(frame_height) or frame_height <= 0:
+        raise ValueError("frame_height must be a positive integer")
+    x, y, width, height = region
+    if x + width > frame_width or y + height > frame_height:
+        raise ValueError(
+            f"region {region} does not fit inside frame {frame_width}x{frame_height}"
+        )
+    return region
+
+
+def _regions_overlap(
+    first: tuple[int, int, int, int], second: tuple[int, int, int, int]
+) -> bool:
+    first_x, first_y, first_width, first_height = first
+    second_x, second_y, second_width, second_height = second
+    return (
+        first_x < second_x + second_width
+        and second_x < first_x + first_width
+        and first_y < second_y + second_height
+        and second_y < first_y + first_height
+    )
+
+
+def _region_with_margin(
+    region: tuple[int, int, int, int],
+    margin: int,
+    *,
+    frame_width: int,
+    frame_height: int,
+) -> tuple[int, int, int, int]:
+    _validated_region(region, frame_width, frame_height)
+    if not _is_integer(margin) or margin < 0:
+        raise ValueError("candidate_margin must be a non-negative integer")
+    x, y, width, height = region
+    left = max(0, x - margin)
+    top = max(0, y - margin)
+    right = min(frame_width, x + width + margin)
+    bottom = min(frame_height, y + height + margin)
+    return left, top, right - left, bottom - top
+
+
 def describe_region(
     frame: Frame,
     region: tuple[int, int, int, int],
     *,
     grid: int = DEFAULT_DESCRIPTOR_GRID,
 ) -> tuple[float, ...]:
-    """Structural descriptor of ``region``: normalised relative cell luminances.
+    """Return a normalized grid-luminance structural descriptor."""
 
-    The region is split into ``grid x grid`` equal cells. Each cell's mean
-    luminance is computed, the set is mean-centred, then divided by its largest
-    absolute deviation. The result describes *how luminance is arranged* inside
-    the region, independent of overall brightness -- so a uniform lighting
-    change leaves it unchanged while a different piece of scenery does not.
-
-    A perfectly flat region yields all zeros, which
-    :func:`structural_variance` is used to reject before it can be calibrated.
-
-    Raises:
-        ValueError: the grid is not positive, the region does not divide evenly
-            into it, or the region does not fit inside the frame.
-    """
-    if grid < 1:
+    if not _is_integer(grid) or grid < 1:
         raise ValueError("descriptor grid must be a positive integer")
     x, y, width, height = _validated_region(region, frame.width, frame.height)
     if width % grid or height % grid:
@@ -161,7 +186,9 @@ def describe_region(
                 row_offset = row * row_stride
                 for column in range(base_x, base_x + cell_width):
                     red, green, blue = _read_rgb(
-                        payload, row_offset + column * pixel_stride, frame.pixel_format
+                        payload,
+                        row_offset + column * pixel_stride,
+                        frame.pixel_format,
                     )
                     total += _luma(red, green, blue)
                     count += 1
@@ -181,13 +208,9 @@ def structural_variance(
     *,
     grid: int = DEFAULT_DESCRIPTOR_GRID,
 ) -> float:
-    """Spread of raw cell luminances, in 0-255 units.
+    """Return standard deviation of raw grid-cell luminances in 0..255 units."""
 
-    Measures how much internal structure a region actually has, *before*
-    normalisation flattens the scale away. Used at calibration time to reject
-    featureless terrain that would normalise into a meaningless descriptor.
-    """
-    if grid < 1:
+    if not _is_integer(grid) or grid < 1:
         raise ValueError("descriptor grid must be a positive integer")
     x, y, width, height = _validated_region(region, frame.width, frame.height)
     if width % grid or height % grid:
@@ -212,7 +235,9 @@ def structural_variance(
                 row_offset = row * row_stride
                 for column in range(base_x, base_x + cell_width):
                     red, green, blue = _read_rgb(
-                        payload, row_offset + column * pixel_stride, frame.pixel_format
+                        payload,
+                        row_offset + column * pixel_stride,
+                        frame.pixel_format,
                     )
                     total += _luma(red, green, blue)
                     count += 1
@@ -226,12 +251,8 @@ def structural_variance(
 def descriptor_distance(
     left: tuple[float, ...], right: tuple[float, ...]
 ) -> float:
-    """Mean absolute difference between two descriptors.
+    """Return mean absolute difference between comparable descriptors."""
 
-    Raises:
-        ValueError: the descriptors have different lengths, which means they
-            were produced with different grids and are not comparable.
-    """
     if len(left) != len(right):
         raise ValueError(
             f"descriptor length mismatch: {len(left)} vs {len(right)}; "
@@ -239,13 +260,17 @@ def descriptor_distance(
         )
     if not left:
         raise ValueError("descriptors must not be empty")
+    if any(not _is_finite_number(value) for value in (*left, *right)):
+        raise ValueError("descriptors must contain only finite real numbers")
     return sum(abs(a - b) for a, b in zip(left, right, strict=True)) / len(left)
 
 
 def macro_zone_for_region(
     region: tuple[int, int, int, int], frame_width: int, frame_height: int
 ) -> MacroZone:
-    """Which macro zone a region's centre falls in."""
+    """Return the macro zone containing the region center."""
+
+    _validated_region(region, frame_width, frame_height)
     x, y, width, height = region
     centre_x = x + width / 2
     centre_y = y + height / 2
@@ -258,24 +283,22 @@ def macro_zone_for_region(
 
 @dataclass(frozen=True, slots=True)
 class SceneLandmarkProfile:
-    """One calibrated structural landmark.
-
-    ``reference_descriptor`` is frozen into the versioned profile at
-    calibration time, so the same frame and the same profile always produce the
-    same verdict.
-    """
+    """One calibrated structural landmark with frozen spatial identity."""
 
     landmark_id: str
     region: tuple[int, int, int, int]
     reference_descriptor: tuple[float, ...]
     maximum_distance: float
     grid: int = DEFAULT_DESCRIPTOR_GRID
+    macro_zone: MacroZone = MacroZone.NORTH_WEST
 
     def __post_init__(self) -> None:
         if not isinstance(self.landmark_id, str) or not self.landmark_id.strip():
             raise ValueError("landmark_id must be a non-empty string")
-        if self.grid < 1:
+        if not _is_integer(self.grid) or self.grid < 1:
             raise ValueError("landmark grid must be a positive integer")
+        if not isinstance(self.macro_zone, MacroZone):
+            raise ValueError("landmark macro_zone must be MacroZone")
         _validate_region_shape(self.region)
         _, _, width, height = self.region
         if width % self.grid or height % self.grid:
@@ -289,25 +312,34 @@ class SceneLandmarkProfile:
                 f"landmark {self.landmark_id!r} descriptor has "
                 f"{len(self.reference_descriptor)} values, expected {expected_cells}"
             )
-        if any(
-            not isinstance(value, (int, float)) or isinstance(value, bool)
-            for value in self.reference_descriptor
+        if any(not _is_finite_number(value) for value in self.reference_descriptor):
+            raise ValueError(
+                f"landmark {self.landmark_id!r} descriptor must contain finite real numbers"
+            )
+        if (
+            not _is_finite_number(self.maximum_distance)
+            or not 0.0 < float(self.maximum_distance) <= 2.0
         ):
             raise ValueError(
-                f"landmark {self.landmark_id!r} descriptor must be real numbers"
-            )
-        if not 0.0 < self.maximum_distance <= 2.0:
-            raise ValueError(
-                f"landmark {self.landmark_id!r} maximum_distance must be in (0.0, 2.0]"
+                f"landmark {self.landmark_id!r} maximum_distance must be finite "
+                "and in (0.0, 2.0]"
             )
 
     def zone(self, frame_width: int, frame_height: int) -> MacroZone:
-        return macro_zone_for_region(self.region, frame_width, frame_height)
+        """Return the frozen zone, rejecting geometry/zone drift in configuration."""
+
+        derived = macro_zone_for_region(self.region, frame_width, frame_height)
+        if derived is not self.macro_zone:
+            raise ValueError(
+                f"landmark {self.landmark_id!r} zone {self.macro_zone.value!r} "
+                f"does not match region-derived zone {derived.value!r}"
+            )
+        return self.macro_zone
 
 
 @dataclass(frozen=True, slots=True)
 class LandmarkMatch:
-    """Per-landmark outcome, retained as evidence whether or not it matched."""
+    """Per-landmark runtime outcome retained as deterministic evidence."""
 
     landmark_id: str
     matched: bool
@@ -329,7 +361,6 @@ class SceneVerdict:
 
     @property
     def detail(self) -> str:
-        """Human-readable summary for diagnostics and evidence."""
         zones = ",".join(zone.value for zone in self.matched_zones)
         return (
             f"{self.reason.value}: {self.matched_count}/{len(self.matches)} landmarks "
@@ -337,6 +368,80 @@ class SceneVerdict:
             f"(required {self.required_zones})"
             + (f" [{zones}]" if zones else "")
         )
+
+
+def calibrate_scene_landmark(
+    frame: Frame,
+    *,
+    landmark_id: str,
+    region: tuple[int, int, int, int],
+    macro_zone: MacroZone,
+    maximum_distance: float,
+    grid: int = DEFAULT_DESCRIPTOR_GRID,
+    minimum_structural_variance: float = MINIMUM_STRUCTURAL_VARIANCE,
+    excluded_regions: tuple[tuple[int, int, int, int], ...] = (),
+    candidate_regions: tuple[tuple[int, int, int, int], ...] = (),
+    candidate_margin: int = 0,
+) -> SceneLandmarkProfile:
+    """Create a frozen landmark only after calibration-time safety checks.
+
+    ``excluded_regions`` is intended for privacy-sanitized fixture masks and
+    other coordinates that are stable in a fixture but not stable world pixels
+    on a live client. ``candidate_regions`` plus ``candidate_margin`` prevents
+    resource-state pixels from leaking into scene identity.
+    """
+
+    _validated_region(region, frame.width, frame.height)
+    if not isinstance(macro_zone, MacroZone):
+        raise ValueError("macro_zone must be MacroZone")
+    derived_zone = macro_zone_for_region(region, frame.width, frame.height)
+    if derived_zone is not macro_zone:
+        raise ValueError(
+            f"supplied macro_zone {macro_zone.value!r} does not match "
+            f"region-derived zone {derived_zone.value!r}"
+        )
+    if (
+        not _is_finite_number(minimum_structural_variance)
+        or float(minimum_structural_variance) <= 0.0
+    ):
+        raise ValueError("minimum_structural_variance must be finite and positive")
+    if not _is_integer(candidate_margin) or candidate_margin < 0:
+        raise ValueError("candidate_margin must be a non-negative integer")
+
+    for excluded in excluded_regions:
+        _validated_region(excluded, frame.width, frame.height)
+        if _regions_overlap(region, excluded):
+            raise ValueError(
+                f"landmark {landmark_id!r} overlaps an excluded/sanitized region"
+            )
+
+    for candidate in candidate_regions:
+        expanded = _region_with_margin(
+            candidate,
+            candidate_margin,
+            frame_width=frame.width,
+            frame_height=frame.height,
+        )
+        if _regions_overlap(region, expanded):
+            raise ValueError(
+                f"landmark {landmark_id!r} overlaps a candidate region or its margin"
+            )
+
+    variance = structural_variance(frame, region, grid=grid)
+    if variance < float(minimum_structural_variance):
+        raise ValueError(
+            f"landmark {landmark_id!r} structural variance {variance:.6f} is below "
+            f"minimum {float(minimum_structural_variance):.6f}"
+        )
+
+    return SceneLandmarkProfile(
+        landmark_id=landmark_id,
+        region=region,
+        reference_descriptor=describe_region(frame, region, grid=grid),
+        maximum_distance=maximum_distance,
+        grid=grid,
+        macro_zone=macro_zone,
+    )
 
 
 def evaluate_scene(
@@ -348,24 +453,22 @@ def evaluate_scene(
     frame_width: int,
     frame_height: int,
 ) -> SceneVerdict:
-    """Validate the scene from spatially distributed structural evidence.
+    """Validate a scene using landmark quorum plus frozen-zone spatial spread."""
 
-    The scene is validated only when **both** conditions hold:
-
-    * at least ``required_quorum`` landmarks match their frozen reference, and
-    * the matching landmarks span at least ``required_zones`` macro zones.
-
-    The zone requirement is what stops a cluster of matches in one corner --
-    or one strong repeated-terrain match -- from carrying the whole scene. The
-    quorum is what lets a single obstructed or altered landmark degrade safely
-    instead of vetoing a view that distributed evidence still proves.
-
-    Any malformed landmark (region off-frame, undivisible geometry, descriptor
-    length mismatch) fails the whole scene closed with
-    :attr:`SceneVerdictReason.MALFORMED_SCENE_EVIDENCE` rather than being
-    skipped -- silently ignoring broken evidence would shrink the quorum
-    denominator and make validation easier, which is backwards.
-    """
+    if not _is_integer(required_quorum) or required_quorum < 1:
+        raise ValueError("required_quorum must be a positive integer")
+    if not _is_integer(required_zones) or not 1 <= required_zones <= len(MacroZone):
+        raise ValueError(
+            f"required_zones must be an integer between 1 and {len(MacroZone)}"
+        )
+    if not _is_integer(frame_width) or frame_width <= 0:
+        raise ValueError("frame_width must be a positive integer")
+    if not _is_integer(frame_height) or frame_height <= 0:
+        raise ValueError("frame_height must be a positive integer")
+    if frame.width != frame_width or frame.height != frame_height:
+        raise ValueError(
+            "evaluate_scene frame dimensions must match the supplied profile dimensions"
+        )
     if not landmarks:
         return SceneVerdict(
             validated=False,
@@ -376,10 +479,23 @@ def evaluate_scene(
             matched_zones=(),
             required_zones=required_zones,
         )
+    if required_quorum > len(landmarks):
+        raise ValueError("required_quorum must not exceed the landmark count")
 
     matches: list[LandmarkMatch] = []
     for landmark in landmarks:
+        if not isinstance(landmark, SceneLandmarkProfile):
+            return SceneVerdict(
+                validated=False,
+                reason=SceneVerdictReason.MALFORMED_SCENE_EVIDENCE,
+                matches=tuple(matches),
+                matched_count=0,
+                required_quorum=required_quorum,
+                matched_zones=(),
+                required_zones=required_zones,
+            )
         try:
+            zone = landmark.zone(frame_width, frame_height)
             observed = describe_region(frame, landmark.region, grid=landmark.grid)
             distance = descriptor_distance(observed, landmark.reference_descriptor)
         except ValueError:
@@ -397,17 +513,14 @@ def evaluate_scene(
                 landmark_id=landmark.landmark_id,
                 matched=distance <= landmark.maximum_distance,
                 distance=distance,
-                zone=landmark.zone(frame_width, frame_height),
+                zone=zone,
             )
         )
 
     matched = [match for match in matches if match.matched]
     matched_count = len(matched)
-    # Ordered by enum definition, not by iteration order, so the evidence is
-    # byte-identical for the same frame and profile on every run.
-    zone_order = list(MacroZone)
     matched_zones = tuple(
-        zone for zone in zone_order if any(match.zone is zone for match in matched)
+        zone for zone in MacroZone if any(match.zone is zone for match in matched)
     )
 
     if matched_count < required_quorum:
@@ -426,32 +539,3 @@ def evaluate_scene(
         matched_zones=matched_zones,
         required_zones=required_zones,
     )
-
-
-def _validate_region_shape(region: tuple[int, int, int, int]) -> None:
-    if (
-        not isinstance(region, tuple)
-        or len(region) != 4
-        or any(
-            not isinstance(component, int) or isinstance(component, bool)
-            for component in region
-        )
-    ):
-        raise ValueError("region must be a tuple of four integers")
-    x, y, width, height = region
-    if x < 0 or y < 0:
-        raise ValueError("region origin must be non-negative and frame-local")
-    if width <= 0 or height <= 0:
-        raise ValueError("region width and height must be positive")
-
-
-def _validated_region(
-    region: tuple[int, int, int, int], frame_width: int, frame_height: int
-) -> tuple[int, int, int, int]:
-    _validate_region_shape(region)
-    x, y, width, height = region
-    if x + width > frame_width or y + height > frame_height:
-        raise ValueError(
-            f"region {region} does not fit inside frame {frame_width}x{frame_height}"
-        )
-    return region
