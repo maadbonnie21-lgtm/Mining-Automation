@@ -19,7 +19,10 @@ __all__ = [
 ]
 
 VARROCK_EAST_IRON_PROFILE_ID: Final[str] = "varrock-east-iron-v1"
-VARROCK_EAST_IRON_DETECTOR_VERSION: Final[str] = "1.0.0"
+# Issue #18 changes the production scene-validation decision boundary. Bump the
+# detector version so WorldState/provenance code can force reacquisition rather
+# than treating v2-anchor and v3-landmark evidence as semantically identical.
+VARROCK_EAST_IRON_DETECTOR_VERSION: Final[str] = "2.0.0"
 
 
 def load_varrock_east_iron_profile() -> ResourceDetectorProfile:
@@ -39,7 +42,7 @@ def load_varrock_east_iron_profile() -> ResourceDetectorProfile:
 
 
 def build_varrock_east_iron_detector() -> ProfiledResourceDetector:
-    """Build the first packaged production resource detector."""
+    """Build the packaged production resource detector."""
 
     return ProfiledResourceDetector(
         load_varrock_east_iron_profile(),
