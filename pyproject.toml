@@ -25,6 +25,9 @@ mining-automation = "mining_automation.app:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"mining_automation.perception" = ["profiles/*.json"]
+
 [tool.pytest.ini_options]
 minversion = "9.1"
 testpaths = ["tests"]
