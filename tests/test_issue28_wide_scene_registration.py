@@ -261,28 +261,26 @@ def test_too_few_recoverable_landmarks_stays_insufficient() -> None:
     assert analysis.diagnosis is WideRegistrationDiagnosis.INSUFFICIENT_REGISTRATION_EVIDENCE
 
 
-def test_excluded_shifted_region_cannot_be_used_as_registration_evidence() -> None:
+def test_fully_excluded_search_fails_closed() -> None:
     reference, landmarks = _synthetic_landmarks()
     landmark = landmarks[0]
     observed = _observed_with_offsets(reference, (landmark,), ((12, 0),))
     x, y, width, height = landmark.region
     forbidden = (x + 12, y, width, height)
 
-    analysis = analyze_wide_scene_registration(
-        observed,
-        (landmark,),
-        required_quorum=1,
-        required_zones=1,
-        frame_width=observed.width,
-        frame_height=observed.height,
-        search_radius=16,
-        coarse_step=4,
-        refinement_radius=3,
-        excluded_regions=(forbidden,),
-    )
-
-    assert not analysis.landmarks[0].matched
-    assert (analysis.landmarks[0].offset_x, analysis.landmarks[0].offset_y) != (12, 0)
+    with pytest.raises(ValueError, match="no valid wide-search positions"):
+        analyze_wide_scene_registration(
+            observed,
+            (landmark,),
+            required_quorum=1,
+            required_zones=1,
+            frame_width=observed.width,
+            frame_height=observed.height,
+            search_radius=16,
+            coarse_step=4,
+            refinement_radius=3,
+            excluded_regions=(forbidden,),
+        )
 
 
 def test_zone_crossing_exact_match_is_rejected() -> None:
