@@ -392,7 +392,7 @@ def analyze_wide_scene_registration(
                 matches = 0
                 valid_count = 0
                 normalized_sum = 0.0
-                matched_zones: set[MacroZone] = set()
+                shared_matched_zones: set[MacroZone] = set()
                 for index, landmark in enumerate(landmarks):
                     distance = distance_at(index, offset_x, offset_y)
                     if distance is None:
@@ -402,14 +402,16 @@ def analyze_wide_scene_registration(
                     normalized_sum += distance / landmark.maximum_distance
                     if distance <= landmark.maximum_distance:
                         matches += 1
-                        matched_zones.add(landmark.zone(frame_width, frame_height))
+                        shared_matched_zones.add(
+                            landmark.zone(frame_width, frame_height)
+                        )
                 shared_candidates.append(
                     WideSharedOffsetEvaluation(
                         offset_x=offset_x,
                         offset_y=offset_y,
                         matched_count=matches,
                         matched_zones=tuple(
-                            zone for zone in MacroZone if zone in matched_zones
+                            zone for zone in MacroZone if zone in shared_matched_zones
                         ),
                         required_quorum=required_quorum,
                         required_zones=required_zones,
