@@ -19,6 +19,9 @@ from mining_automation.perception import (
     load_varrock_east_iron_profile,
 )
 
+_MASKED_TOP_LAST_ROW = 33
+_MASKED_BOTTOM_FIRST_ROW = 850
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -71,6 +74,25 @@ def _load_frame(path: Path, profile: ResourceDetectorProfile) -> Frame:
         frame_id=1,
         captured_monotonic_s=0.0,
     )
+
+
+def _excluded_regions(
+    profile: ResourceDetectorProfile,
+) -> tuple[tuple[int, int, int, int], ...]:
+    """Return resource candidates plus reviewed privacy/UI mask bands."""
+
+    if profile.frame_height <= _MASKED_BOTTOM_FIRST_ROW:
+        raise ValueError("profile frame is too short for the reviewed sanitized mask policy")
+    masks = (
+        (0, 0, profile.frame_width, _MASKED_TOP_LAST_ROW + 1),
+        (
+            0,
+            _MASKED_BOTTOM_FIRST_ROW,
+            profile.frame_width,
+            profile.frame_height - _MASKED_BOTTOM_FIRST_ROW,
+        ),
+    )
+    return tuple(candidate.region for candidate in profile.candidates) + masks
 
 
 def _analysis_dict(analysis: WideSceneRegistrationAnalysis) -> dict[str, Any]:
@@ -160,6 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         profile = load_varrock_east_iron_profile()
         frame = _load_frame(arguments.frame, profile)
+        excluded_regions = _excluded_regions(profile)
         analysis = analyze_wide_scene_registration(
             frame,
             profile.scene_landmarks,
@@ -168,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
             frame_width=profile.frame_width,
             frame_height=profile.frame_height,
             search_radius=arguments.radius,
-            excluded_regions=tuple(candidate.region for candidate in profile.candidates),
+            excluded_regions=excluded_regions,
         )
         report_path = arguments.report or arguments.frame.with_name(
             f"{arguments.frame.stem}.wide-registration.json"
@@ -178,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
             "schema_version": 1,
             "frame": str(arguments.frame),
             "profile_id": profile.profile_id,
+            "excluded_regions": [list(region) for region in excluded_regions],
             **_analysis_dict(analysis),
         }
         report_path.parent.mkdir(parents=True, exist_ok=True)
