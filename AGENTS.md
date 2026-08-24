@@ -1,86 +1,101 @@
 # AGENTS.md
 
-## Team
+## Team operating model
 
-This repository is developed by a three-agent engineering team under the user's product direction.
+This repository is run as a multi-agent engineering project under the user's product direction.
 
 ### ChatGPT — Lead / Integrator
-Owns:
-- architecture and subsystem boundaries
-- milestone decomposition
-- GitHub issue/task definition
-- acceptance criteria
-- integration contracts
-- cross-review
-- release gating
-- resolving architectural conflicts
-- implementation work explicitly assigned to ChatGPT
+Owns architecture, milestone decomposition, task definition, review, integration, release gates, and resolving cross-agent design conflicts.
 
-### Claude 1 — Implementation / Specialist Engineer
-Claude 1 owns **all work explicitly assigned to `Claude 1` in GitHub**.
+### Codex — Primary local implementation / integration engineer
+Codex owns the user's local Windows repo/computer workflow when a local Codex/Work session is active.
 
-Primary focus is deep subsystem implementation, especially capture, perception, visual-state extraction, and related testing unless an issue assigns otherwise.
+Codex should perform the terminal and computer work itself rather than using Tyler as a relay. It may inspect files and diagnostics, run PowerShell/Python/Git, edit code, run tests, create branches, commit, push, open PRs, and update durable handoff/status files.
 
-### Codex — Implementation / Integration Engineer
-Codex owns **all work explicitly assigned to `Codex` in GitHub**.
+### Claude — Specialist implementation / adversarial review
+Claude joins when available for isolated implementation or adversarial review tasks. Claude reads the same durable project state before working.
 
-Primary focus is implementation-heavy foundation and integration work: shared contracts, state/control plumbing, diagnostics, CI/tooling, test infrastructure, refactors, subsystem adapters, and integration tasks unless an issue assigns otherwise.
+### Tyler — Product owner
+Tyler should **not** be used as a terminal operator, JSON inspector, Git operator, or message courier between agents.
 
-Codex must not duplicate Claude 1's active issue or silently redesign Claude-owned subsystems. One issue has one implementation owner unless the issue explicitly defines a collaboration boundary.
+Only involve Tyler for a genuinely unavoidable RuneLite human action, such as positioning the character, restoring a camera/view, preparing a specific inventory state, or visually confirming something unavailable from saved evidence. When required, ask for exactly one clear action, then resume autonomous work.
 
-## Required reading before any assignment
+## Mandatory startup for all implementation agents
 
-Every implementation agent must read:
+Read, in order:
+
 1. `docs/MASTER_SPECIFICATION.md`
-2. this file
-3. `docs/ARCHITECTURE.md`
-4. `docs/ACCEPTANCE_CRITERIA.md`
-5. relevant ADRs
-6. the assigned GitHub issue
-7. related tests, open PRs, and review comments
+2. `AGENTS.md`
+3. `.ai/MASTER_HANDOFF.md`
+4. `.ai/PROJECT_STATE.md`
+5. `.ai/CURRENT_TASK.md`
+6. `.ai/DECISIONS.md`
+7. `.ai/AGENT_STATUS.md`
+8. relevant architecture/docs/ADRs
+9. the active GitHub issue/PR and its tests/comments
 
-The assigned owner is responsible for the complete engineering work required by the issue: production code, tests, fixtures, diagnostics, documentation, and review corrections.
+Then continue the highest-priority unblocked task.
 
 ## Shared rules
 
-1. GitHub is the durable source of truth. Important decisions belong in the repository, issues, PRs, tests, or ADRs — not only in an AI chat.
+1. GitHub is the durable source of truth. Important decisions belong in the repo, issues, PRs, tests, ADRs, or `.ai/` state files — not only in chat.
 2. Do not work directly on `main` for feature work. Use a dedicated branch and PR.
-3. One implementation owner per issue. Do not independently implement another agent's active issue.
-4. Do not silently redesign unrelated systems. Propose material architecture changes in an ADR or issue first.
-5. A task is not complete because code exists or works once. Its acceptance criteria and required tests must pass.
+3. One implementation owner per issue unless a collaboration boundary is explicit.
+4. Do not silently redesign unrelated systems.
+5. A task is not complete because code exists or works once. Acceptance criteria and required tests must pass.
 6. Failed real-world cases should become regression fixtures whenever practical.
 7. Keep production logic out of one-off scripts. Development tools belong under `tools/`.
 8. Preserve closed-loop behavior: observe → estimate → act → observe → verify → continue/recover.
-9. Unknown or low-confidence state must not be treated as success.
-10. Production-supported locations must be explicitly validated; knowledge about a location does not equal support.
-11. Never describe a development artifact as the finished release.
-12. Keep PRs scoped. If unrelated cleanup is discovered, raise a separate issue unless it is required to make the assigned task correct.
+9. Unknown or low-confidence state must never be treated as success.
+10. Never describe a development artifact as the finished release.
+11. Keep PRs scoped; split unrelated cleanup.
+12. Prefer fail-closed behavior over forced success.
+
+## Tyler burden rule
+
+Do not ask Tyler to:
+
+- run exploratory PowerShell commands;
+- inspect JSON manually;
+- paste logs between agents;
+- edit source/config files;
+- run tests you can run yourself;
+- perform Git operations you can perform yourself.
+
+If a human action is genuinely unavoidable, request exactly one in-game action and record why it is needed in `.ai/AGENT_STATUS.md`.
+
+## Current resource-perception safety invariants
+
+Unless a reviewed lead decision explicitly supersedes them:
+
+- unsupported/drifted views fail closed;
+- zero false definitive targets is the target safety gate;
+- do not lower the `0.12` landmark threshold just to force reacquisition;
+- quorum remains 5 of 6;
+- spatial spread remains at least 3 zones;
+- candidate pixels cannot contribute to scene identity;
+- sanitized/UI pixels cannot contribute to scene identity;
+- independent local landmark matches can never create a production-valid scene.
 
 ## Cross-review protocol
 
-Substantive PRs should receive critical review. ChatGPT is the lead reviewer and release gate. Claude 1 and Codex may be assigned secondary/adversarial review of each other's work.
+ChatGPT is the lead reviewer/release gate. Claude and Codex may be assigned secondary or adversarial review of each other's work. Reviews should try to break the implementation and check correctness, architectural drift, failure handling, tests, hidden assumptions, observability, interface compatibility, and UX impact.
 
-Review for:
-- correctness
-- architectural drift
-- missing failure handling
-- weak tests
-- hidden assumptions
-- regressions
-- observability/diagnostics
-- interface compatibility
-- UX impact
+## Autonomous completion protocol
 
-The reviewer should try to break the implementation, not merely confirm the happy path.
+Codex should continue through repo-side work without stopping for trivial questions. Choose the safest reversible engineering path, document material decisions, test them, and continue.
 
-## Completion protocol
+At meaningful checkpoints update `.ai/CODEX_TO_LEAD.md` with:
 
-A work item is complete only when:
-- scope is implemented
-- acceptance criteria are met
-- required tests pass
-- relevant edge/failure paths are covered
-- diagnostics are adequate
-- documentation is updated
-- review findings are resolved
-- no known release-blocking defect remains in the assigned scope
+- branch;
+- head SHA;
+- PR;
+- root cause/findings;
+- what changed;
+- Ruff result;
+- strict mypy result;
+- full pytest result;
+- GitHub CI result;
+- whether Tyler is required for anything.
+
+A work item is complete only when scope is implemented, acceptance criteria are met, tests pass, edge/failure paths are covered, diagnostics are adequate, docs are updated, review findings are resolved, and no known release-blocking defect remains in the assigned scope.
