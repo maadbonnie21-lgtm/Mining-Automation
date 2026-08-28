@@ -40,61 +40,130 @@ Every camera plan execution receives a fresh focus and client-geometry
 preflight. A short or partial input receipt fails the run; it is never treated
 as successful camera motion.
 
-The reviewed capture/profile coordinates are RuneLite logical client
-coordinates. On the reviewed Windows installation RuneLite is DPI-unaware
-while the validator is per-monitor DPI-aware. Immediately before pointer
-input, the Windows adapter maps each logical point through RuneLite's DPI
-context and then into physical screen coordinates. This prevents display
-scaling from turning a reviewed compass or wheel coordinate into a world
-click. Focus, exact geometry, left-button state, and top-level-window ownership
-are rechecked at the mapped point before input.
+The camera-plan pointer coordinates are in the DPI-unaware target RuneLite
+window's **logical client** space. The captured perception frame is also
+indexed by its reviewed logical client pixels. Those are distinct from both
+target-logical **screen** coordinates and Windows **physical screen/client**
+coordinates; the validator does not treat a physical-client point as a frame
+pixel index.
 
-## Deterministic normalization plan
+On the reviewed Windows installation RuneLite is DPI-unaware while the
+validator is per-monitor DPI-aware. Immediately before pointer input, the
+Windows adapter obtains the physical screen position of client origin `(0,0)`,
+converts that origin into RuneLite's target-logical screen space, adds the
+reviewed logical-client delta there, and only then calls
+`LogicalToPhysicalPointForPerMonitorDPI`. It reverses the final point through
+`PhysicalToLogicalPointForPerMonitorDPI`, subtracts the same target-logical
+screen origin, and requires the exact original logical-client point. A caller
+that is not per-monitor aware, a failed transform, or a non-exact round trip
+fails closed before input. This avoids both unsafe alternatives: passing a
+client-relative point to an API that expects screen coordinates, and passing a
+physical-screen result back to `ClientToScreen` as if it were client-relative.
+Focus, exact geometry, button state, and top-level-window ownership are then
+rechecked at the proven physical screen point before input. After every
+`SetCursorPos`, the adapter reads the actual cursor position twice: once to
+prove Windows did not clamp or misland it and again immediately before the
+final root-window ownership check. A mismatch fails before mouse or wheel
+input.
 
-One normalization plan is frozen for an evidence run and is replayed in this
-order:
+Before live pointer trials, run the native no-input mapping audit:
 
-1. Click the reviewed fixed-UI compass point to face north.
+```powershell
+python tools/diagnose_camera_pointer_mapping.py --output diagnostics/issue31-camera-mapping.json --save-capture diagnostics/issue31-camera-mapping-logical.bmp --save-annotated-capture diagnostics/issue31-camera-mapping-logical-marked.bmp --save-physical-screen-capture diagnostics/issue31-camera-mapping-physical.bmp --save-physical-screen-annotated-capture diagnostics/issue31-camera-mapping-physical-marked.bmp
+```
+
+It captures one private RuneLite client frame but sends zero cursor, mouse,
+wheel, or key events. For the compass and wheel points it records the HWND,
+physical and estimated target-logical geometry, caller/process/target DPI
+awareness, target-reported and effective mapping DPI/scale, every corrected
+intermediate, the exact reverse logical-client round trip, and comparison-only
+values for the two rejected legacy orderings. The PrintWindow BMP marks
+`(608,49)` in magenta and `(400,50)` in cyan in RuneLite's target-logical
+raster. A separate foreground physical-screen client crop marks the final
+mapped physical points. That capture is bracketed by exact checks of foreground
+HWND, client origin, client geometry, and top-level ownership at both reviewed
+points. The report keeps the coordinate spaces separate and publishes images
+before JSON, so a report never claims a missing artifact. All paths are
+exclusive and must resolve to distinct files. Visual inspection is still
+required; the report never infers compass identity from a pixel hash.
+
+## Deterministic production-gated normalization strategy
+
+Acceptance runs use the explicit
+`varrock-east-production-gated-search-v1@1.0.0` strategy. It is a fixed,
+center-out list of eleven candidates. Every candidate is a complete independent
+reset in this order:
+
+1. Click the reviewed fixed-UI compass point to face north, holding the
+   injected left-button press for the fixed 100-millisecond semantic dwell.
 2. Wait for the bounded, recorded post-compass settle interval.
-3. Optionally apply one bounded yaw offset from compass north.
-4. Hold the selected pitch direction long enough to reach its endpoint and
-   optionally apply one bounded opposite-direction pitch offset.
-5. Establish zoom by either:
-   - scrolling enough bounded detents to a zoom endpoint, then optionally
-     moving a reviewed number of detents back from that endpoint; or
-   - using the RuneLite reset-zoom key only when that exact client setting and
-     resulting view have been reviewed.
+3. Apply the candidate's bounded right-yaw offset from compass north.
+4. Hold pitch up to its endpoint, then apply the candidate's bounded down-pitch
+   offset.
+5. Scroll `+96` individually paced detents to the zoom endpoint, then `-17`
+   detents back from it.
 
-The compass settle, yaw/pitch offsets, pitch endpoint, zoom mode, signed
-detent counts, wheel pacing interval, plan identifier, and plan version are
-recorded in the report. Endpoint saturation makes the result independent of
-the starting pitch or zoom. Each wheel detent crosses the Win32 boundary as a
-separate event with a fixed interval because RuneLite can coalesce a batch even
-when Windows acknowledges every event in it. The adapter recomputes the mapped
-screen point and rechecks its safety gates before every detent. The reset-key
-alternative is not a portable default: its RuneLite configuration and
-resulting view must be reviewed before evidence from it can be accepted.
+The ordered `(down-pitch seconds, right-yaw seconds)` candidates are:
+`(0.60,0.05)`, `(0.58,0.05)`, `(0.62,0.05)`, `(0.56,0.05)`,
+`(0.64,0.05)`, `(0.60,0.04)`, `(0.58,0.04)`, `(0.62,0.04)`,
+`(0.60,0.06)`, `(0.58,0.06)`, and `(0.62,0.06)`.
+
+After each complete candidate and settle, the tool captures a fresh frame and
+runs only the unchanged production camera evaluation. It stops at the first
+full production pass. Diagnostic registration, ORB features, similarity search,
+and local minima have no selection authority. Exhausting the list fails closed.
+The selected candidate frame is provisional search evidence and never counts
+as either required confirmation frame.
+
+The strategy ID/version, complete ordered candidate plans, every receipt and
+candidate production evaluation, selected one-based candidate index, compass
+click dwell, post-compass settle, yaw/pitch offsets, pitch endpoint, signed
+detent counts, and wheel pacing interval are recorded. A complete Win32
+event count proves only that Windows accepted the left-down and left-up events;
+live RuneLite sampling showed that it does not prove the compass observed an
+instantaneous pair. The adapter therefore waits 100 milliseconds between the
+acknowledged left-down and left-up and revalidates the unchanged point before
+release. The existing post-compass settle remains a distinct no-input plan
+action after the click completes.
+
+Endpoint saturation makes every candidate independent of the starting pitch or
+zoom. Each wheel detent crosses the Win32 boundary as a separate event with a
+fixed interval because RuneLite can coalesce a batch even when Windows
+acknowledges every event in it. The adapter recomputes the mapped screen point
+and rechecks its safety gates before every detent. The legacy `single-plan`
+mode remains available for bounded development experiments, including a
+separately reviewed reset key, but it is not the canonical Issue #31 acceptance
+command.
 
 Use `--dry-run` to inspect the bounded plans without opening capture or sending
 input. For example, this prints an illustrative endpoint plan only; it does not
 declare those values reviewed:
 
 ```powershell
-python tools/validate_varrock_east_camera.py --pitch-endpoint down --zoom-saturate-detents -96 --dry-run
+python tools/validate_varrock_east_camera.py --normalization-strategy varrock-east-production-gated-search-v1 --dry-run
+```
+
+The dry run prints all eleven full candidates, the three perturbations, and
+the worst-case bounded plan/input/frame counts while sending no input.
+
+The canonical live command is one invocation (use a new case prefix each run):
+
+```powershell
+python tools/validate_varrock_east_camera.py --normalization-strategy varrock-east-production-gated-search-v1 --case-prefix issue31-live-final
 ```
 
 ## Repeated trial protocol
 
 A complete run applies three distinct deliberate perturbations. The current
 protocol exercises yaw, the opposite pitch endpoint, and combined yaw/zoom.
-Before the first baseline capture, it applies and records the normalization
-plan once; the run therefore does not depend on Tyler manually preparing the
-starting camera. For each trial it:
+Before the first baseline capture, it runs and records the candidate strategy;
+the run therefore does not depend on Tyler manually preparing the starting
+camera. For each trial it:
 
 1. captures the starting view;
 2. applies one perturbation and captures the perturbed view;
 3. requires that the perturbed unsupported view fail closed;
-4. replays the same normalization plan; and
+4. replays the same ordered independent candidate strategy; and
 5. captures at least two fresh, separated confirmation frames.
 
 Every confirmation must pass the unchanged production detector. In particular,
@@ -106,6 +175,11 @@ before frame. A natural resource transition during a trial therefore makes
 that trial ineligible and requires a fresh run; definitive counts or confidence
 cannot substitute for exact state equality. A pass in one trial cannot
 compensate for a failure in another trial or confirmation.
+
+If a fresh before-frame is not a production pass, the session preserves that
+frame and stops before deliberate perturbation. Any focus, overlay, pointer,
+receipt, settle, capture, recording, or production-evaluation exception aborts
+immediately; only release cleanup is allowed after the error.
 
 The production scene identity remains world-only:
 
@@ -125,9 +199,10 @@ none of these artifacts should be added to Git.
 
 The report records frame SHA-256 values, production observations, each trial's
 ordered expected resource-state vector, per-confirmation exact-state equality,
-landmark distances and thresholds, input receipts, the exact plan, and trial
-verdicts. It does not embed raw pixel payloads. Its JSON is serialized
-deterministically with sorted keys, indentation, and one trailing newline. The
+landmark distances and thresholds, input receipts, every candidate attempt,
+selection identity, and trial verdicts. Candidate frames are explicitly marked
+as non-confirmations. It does not embed raw pixel payloads. Its version-2 JSON
+is serialized deterministically with sorted keys, indentation, and one trailing newline. The
 sidecar contains the SHA-256 of those exact report bytes; the digest is
 intentionally not stored inside the report it hashes.
 

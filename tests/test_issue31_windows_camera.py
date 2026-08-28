@@ -14,6 +14,7 @@ from mining_automation.validation import (
 )
 from mining_automation.validation.windows_camera import (
     CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
+    COMPASS_CLICK_DWELL_SECONDS,
     RealWindowsCameraApi,
     WindowsCameraControl,
     WindowsCameraError,
@@ -28,6 +29,9 @@ class FakeWindowsCameraApi:
         self.size = (EXPECTED_CLIENT_WIDTH, EXPECTED_CLIENT_HEIGHT)
         self.screen_offset = (20, 30)
         self.cursor_result = True
+        self.cursor = (0, 0)
+        self.cursor_after_move: tuple[int, int] | None = None
+        self.cursor_position_results: list[tuple[int, int]] = []
         self.root_at_point: int | None = 123
         self.foreground_after_cursor: int | None = None
         self.size_after_cursor: tuple[int, int] | None = None
@@ -76,7 +80,19 @@ class FakeWindowsCameraApi:
             self.size = self.size_after_cursor
         if self.mouse_after_cursor is not None:
             self.mouse_is_down = self.mouse_after_cursor
+        if self.cursor_result:
+            self.cursor = (
+                self.cursor_after_move
+                if self.cursor_after_move is not None
+                else (x, y)
+            )
         return self.cursor_result
+
+    def cursor_position(self) -> tuple[int, int]:
+        self.calls.append("cursor-position")
+        if self.cursor_position_results:
+            return self.cursor_position_results.pop(0)
+        return self.cursor
 
     def root_window_at_point(self, x: int, y: int) -> int | None:
         self.calls.append(("root-at-point", x, y))
@@ -155,7 +171,13 @@ def test_preflight_fails_closed_when_focus_cannot_be_verified() -> None:
 
 def test_compass_click_uses_client_to_screen_and_exact_event_counts() -> None:
     api = FakeWindowsCameraApi()
-    control = WindowsCameraControl(123, api)
+    sleeps: list[float] = []
+
+    def record_sleep(duration: float) -> None:
+        sleeps.append(duration)
+        api.calls.append(("click-sleep", duration))
+
+    control = WindowsCameraControl(123, api, click_sleeper=record_sleep)
 
     receipt = control.click_compass(608, 49)
 
@@ -164,7 +186,25 @@ def test_compass_click_uses_client_to_screen_and_exact_event_counts() -> None:
     assert receipt.completed_events == 2
     assert ("to-screen", 123, 608, 49) in api.calls
     assert ("cursor", 628, 79) in api.calls
-    assert api.calls[-2:] == [("mouse", False), ("mouse", True)]
+    assert [
+        item
+        for item in api.calls
+        if item == "cursor-position"
+        or (
+            isinstance(item, tuple)
+            and item[0] in {"cursor", "mouse", "click-sleep"}
+        )
+    ] == [
+        ("cursor", 628, 79),
+        "cursor-position",
+        "cursor-position",
+        ("mouse", False),
+        ("click-sleep", COMPASS_CLICK_DWELL_SECONDS),
+        "cursor-position",
+        "cursor-position",
+        ("mouse", True),
+    ]
+    assert sleeps == [COMPASS_CLICK_DWELL_SECONDS]
     assert not api.mouse_is_down
 
 
@@ -431,7 +471,11 @@ def test_partial_mouse_click_retries_button_up_until_released() -> None:
     receipt = control.click_compass(608, 49)
 
     assert receipt.complete
-    assert api.calls[-3:] == [
+    assert [
+        item
+        for item in api.calls
+        if isinstance(item, tuple) and item[0] == "mouse"
+    ] == [
         ("mouse", False),
         ("mouse", True),
         ("mouse", True),
@@ -447,7 +491,11 @@ def test_mouse_up_exception_is_retried_until_the_button_is_released() -> None:
     receipt = control.click_compass(608, 49)
 
     assert receipt.complete
-    assert api.calls[-3:] == [
+    assert [
+        item
+        for item in api.calls
+        if isinstance(item, tuple) and item[0] == "mouse"
+    ] == [
         ("mouse", False),
         ("mouse", True),
         ("mouse", True),
@@ -654,6 +702,116 @@ def test_cursor_move_failure_aborts_before_click() -> None:
     assert not any(
         isinstance(item, tuple) and item[0] == "mouse" for item in api.calls
     )
+
+
+@pytest.mark.parametrize("method", ["click", "wheel"])
+def test_pointer_input_rejects_successful_but_mislanded_cursor_move(
+    method: str,
+) -> None:
+    api = FakeWindowsCameraApi()
+    api.cursor_after_move = (1, 2)
+    control = WindowsCameraControl(123, api)
+
+    with pytest.raises(WindowsCameraError, match="did not reach"):
+        if method == "click":
+            control.click_compass(608, 49)
+        else:
+            control.scroll_camera(400, 50, 1)
+
+    assert "cursor-position" in api.calls
+    assert not any(
+        isinstance(item, tuple) and item[0] in {"mouse", "wheel", "root-at-point"}
+        for item in api.calls
+    )
+
+
+@pytest.mark.parametrize("method", ["click", "wheel"])
+def test_pointer_input_rejects_cursor_move_before_final_ownership_check(
+    method: str,
+) -> None:
+    api = FakeWindowsCameraApi()
+    expected = (628, 79) if method == "click" else (420, 80)
+    api.cursor_position_results = [expected, (1, 2)]
+    control = WindowsCameraControl(123, api)
+
+    with pytest.raises(WindowsCameraError, match="before final pointer ownership"):
+        if method == "click":
+            control.click_compass(608, 49)
+        else:
+            control.scroll_camera(400, 50, 1)
+
+    assert not any(
+        isinstance(item, tuple) and item[0] in {"mouse", "wheel", "root-at-point"}
+        for item in api.calls
+    )
+
+
+def test_compass_click_short_down_skips_dwell_but_compensates_up() -> None:
+    api = FakeWindowsCameraApi()
+    api.mouse_down_results = [0]
+
+    def unexpected_sleep(_duration: float) -> None:
+        raise AssertionError("short left-down must not dwell")
+
+    control = WindowsCameraControl(123, api, click_sleeper=unexpected_sleep)
+
+    receipt = control.click_compass(608, 49)
+
+    assert not receipt.complete
+    assert receipt.completed_events == 1
+    assert api.calls[-2:] == [("mouse", False), ("mouse", True)]
+
+
+def test_compass_click_dwell_failure_always_releases_owned_button() -> None:
+    api = FakeWindowsCameraApi()
+
+    def fail_dwell(_duration: float) -> None:
+        raise OSError("click dwell failed")
+
+    control = WindowsCameraControl(123, api, click_sleeper=fail_dwell)
+
+    with pytest.raises(OSError, match="click dwell failed"):
+        control.click_compass(608, 49)
+
+    assert api.calls[-1] == ("mouse", True)
+    assert not api.mouse_is_down
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("focus", "lost foreground focus"),
+        ("geometry", "geometry changed"),
+        ("button", "lost its owned left-button hold"),
+        ("overlay", "covered by another top-level window"),
+        ("cursor", "cursor moved during its bounded dwell"),
+    ],
+)
+def test_compass_click_revalidates_unchanged_point_after_dwell_and_releases(
+    mutation: str,
+    message: str,
+) -> None:
+    api = FakeWindowsCameraApi()
+
+    def mutate(_duration: float) -> None:
+        if mutation == "focus":
+            api.foreground = 999
+        elif mutation == "geometry":
+            api.size = (EXPECTED_CLIENT_WIDTH - 1, EXPECTED_CLIENT_HEIGHT)
+        elif mutation == "button":
+            api.mouse_is_down = False
+        elif mutation == "overlay":
+            api.root_at_point = 999
+        else:
+            api.cursor = (627, 79)
+
+    control = WindowsCameraControl(123, api, click_sleeper=mutate)
+
+    with pytest.raises(WindowsCameraError, match=message):
+        control.click_compass(608, 49)
+
+    assert api.calls[-1] == ("mouse", True)
+    assert not api.mouse_is_down
 
 
 def test_unknown_key_is_rejected_before_input() -> None:

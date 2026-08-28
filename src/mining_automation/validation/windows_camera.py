@@ -1,8 +1,8 @@
 """Narrow Windows camera-control adapter for development validation.
 
 This module is intentionally separate from both the production capture seam
-and perception.  It exposes only the four input operations representable by
-``camera_plan`` and keeps every actual Win32 call behind an injected protocol,
+and perception.  It exposes only the bounded input operations representable
+by ``camera_plan`` and keeps every actual Win32 call behind an injected protocol,
 so deterministic tests run on Linux without sending input.
 """
 
@@ -12,6 +12,7 @@ import sys
 import time
 from typing import Any, Protocol
 
+from .camera_coordinates import CameraCoordinateMapping, CameraDpiEnvironment
 from .camera_plan import (
     EXPECTED_CLIENT_HEIGHT,
     EXPECTED_CLIENT_WIDTH,
@@ -26,12 +27,14 @@ from .camera_plan import (
 __all__ = [
     "RealWindowsCameraApi",
     "CAMERA_WHEEL_EVENT_INTERVAL_SECONDS",
+    "COMPASS_CLICK_DWELL_SECONDS",
     "WindowsCameraApi",
     "WindowsCameraControl",
     "WindowsCameraError",
 ]
 
 CAMERA_WHEEL_EVENT_INTERVAL_SECONDS = 0.025
+COMPASS_CLICK_DWELL_SECONDS = 0.100
 
 _ARROW_KEYS: dict[str, int] = {
     "left": 0x25,
@@ -70,10 +73,13 @@ class WindowsCameraApi(Protocol):
         """Return current physical client width and height."""
 
     def client_to_screen(self, hwnd: int, x: int, y: int) -> tuple[int, int]:
-        """Convert a logical capture/client point to physical screen coordinates."""
+        """Convert a target-logical client point to physical screen coordinates."""
 
     def move_cursor(self, x: int, y: int) -> bool:
         """Move the system cursor to a physical screen point."""
+
+    def cursor_position(self) -> tuple[int, int]:
+        """Return the cursor's actual physical screen coordinate."""
 
     def root_window_at_point(self, x: int, y: int) -> int | None:
         """Return the root window that would receive pointer input there."""
@@ -130,8 +136,71 @@ class RealWindowsCameraApi:
         result: tuple[int, int] = self._calls.client_to_screen(hwnd, x, y)
         return result
 
+    def pointer_mapping(self, hwnd: int, x: int, y: int) -> CameraCoordinateMapping:
+        """Return the no-input coordinate trace used by production mapping."""
+
+        result: CameraCoordinateMapping = self._calls.pointer_mapping(hwnd, x, y)
+        return result
+
+    def dpi_environment(self, hwnd: int) -> CameraDpiEnvironment:
+        """Return native DPI/geometry facts without sending any input."""
+
+        result: CameraDpiEnvironment = self._calls.dpi_environment(hwnd)
+        return result
+
+    def physical_screen_to_physical_client(
+        self,
+        hwnd: int,
+        x: int,
+        y: int,
+    ) -> tuple[int, int]:
+        """Cross-check a physical screen point in physical client coordinates."""
+
+        result: tuple[int, int] = self._calls.physical_screen_to_physical_client(
+            hwnd,
+            x,
+            y,
+        )
+        return result
+
+    def capture_physical_screen_rect(
+        self,
+        left: int,
+        top: int,
+        width: int,
+        height: int,
+    ) -> bytes:
+        """Capture a physical screen rectangle without sending input."""
+
+        result: bytes = self._calls.capture_physical_screen_rect(
+            left,
+            top,
+            width,
+            height,
+        )
+        return result
+
+    def mapping_candidate_comparison(
+        self,
+        hwnd: int,
+        x: int,
+        y: int,
+    ) -> dict[str, object]:
+        """Return no-input legacy/corrected mapping candidates for audit only."""
+
+        result: dict[str, object] = self._calls.mapping_candidate_comparison(
+            hwnd,
+            x,
+            y,
+        )
+        return result
+
     def move_cursor(self, x: int, y: int) -> bool:
         result: bool = self._calls.move_cursor(x, y)
+        return result
+
+    def cursor_position(self) -> tuple[int, int]:
+        result: tuple[int, int] = self._calls.cursor_position()
         return result
 
     def root_window_at_point(self, x: int, y: int) -> int | None:
@@ -172,12 +241,14 @@ class WindowsCameraControl:
         api: WindowsCameraApi | None = None,
         *,
         wheel_sleeper: Sleeper = time.sleep,
+        click_sleeper: Sleeper = time.sleep,
     ) -> None:
         if isinstance(hwnd, bool) or not isinstance(hwnd, int) or hwnd <= 0:
             raise ValueError("hwnd must be a positive integer")
         self._hwnd = hwnd
         self._api = api if api is not None else RealWindowsCameraApi()
         self._wheel_sleeper = wheel_sleeper
+        self._click_sleeper = click_sleeper
         self._held_keys: dict[int, bool] = {}
         self._left_button_owned = False
         self._api.declare_dpi_awareness()
@@ -215,6 +286,13 @@ class WindowsCameraControl:
                 raise WindowsCameraError(
                     "Windows returned an invalid left-button-down event count"
                 )
+            if completed_down == 1:
+                # A down/up pair acknowledged back-to-back can be coalesced
+                # before RuneLite observes a semantic compass click. Hold the
+                # adapter-owned button for one fixed interval, then prove the
+                # unchanged point remains safe before releasing it.
+                self._click_sleeper(COMPASS_CLICK_DWELL_SECONDS)
+                self._require_owned_click_point_still_safe(x, y)
         finally:
             completed_up = self._release_mouse_button()
         return CameraInputReceipt(
@@ -371,7 +449,28 @@ class WindowsCameraControl:
         screen_x, screen_y = self._api.client_to_screen(self._hwnd, x, y)
         if not self._api.move_cursor(screen_x, screen_y):
             raise WindowsCameraError("Windows refused to move the cursor to the target")
-        return screen_x, screen_y
+        expected = screen_x, screen_y
+        actual = self._api.cursor_position()
+        if actual != expected:
+            raise WindowsCameraError(
+                "camera pointer did not reach the reviewed physical screen point: "
+                f"expected {expected}, got {actual}"
+            )
+        return actual
+
+    def _require_owned_click_point_still_safe(self, x: int, y: int) -> None:
+        """Revalidate an unchanged compass point while left-down is owned."""
+
+        self._require_ready()
+        self._require_owned_left_button_down()
+        expected_point = self._api.client_to_screen(self._hwnd, x, y)
+        actual_point = self._api.cursor_position()
+        if actual_point != expected_point:
+            raise WindowsCameraError(
+                "compass-click cursor moved during its bounded dwell: "
+                f"expected {expected_point}, got {actual_point}"
+            )
+        self._require_target_at_screen_point("compass click", actual_point)
 
     def _release_mouse_button(self) -> int:
         last_error: BaseException | None = None
@@ -400,12 +499,24 @@ class WindowsCameraControl:
                 f"refusing {operation} because the left button is already held"
             )
 
+    def _require_owned_left_button_down(self) -> None:
+        if not self._left_button_owned or not self._api.left_button_is_down():
+            raise WindowsCameraError(
+                "compass click lost its owned left-button hold before completion"
+            )
+
     def _require_target_at_screen_point(
         self,
         operation: str,
         screen_point: tuple[int, int],
     ) -> None:
-        root_window = self._api.root_window_at_point(*screen_point)
+        actual_point = self._api.cursor_position()
+        if actual_point != screen_point:
+            raise WindowsCameraError(
+                f"{operation} cursor moved before final pointer ownership check: "
+                f"expected {screen_point}, got {actual_point}"
+            )
+        root_window = self._api.root_window_at_point(*actual_point)
         if root_window != self._hwnd:
             raise WindowsCameraError(
                 f"refusing {operation} because the reviewed point is covered "

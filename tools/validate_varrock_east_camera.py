@@ -53,11 +53,13 @@ from mining_automation.validation.camera_report import (  # noqa: E402
 from mining_automation.validation.camera_session import (  # noqa: E402
     CameraFrameArtifact,
     CameraFrameRecord,
+    CameraNormalizationResult,
     CameraSessionResult,
     run_camera_validation_session,
 )
 from mining_automation.validation.windows_camera import (  # noqa: E402
     CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
+    COMPASS_CLICK_DWELL_SECONDS,
     WindowsCameraControl,
     WindowsCameraError,
 )
@@ -70,6 +72,25 @@ _DEFAULT_PITCH_HOLD_S = 3.0
 _DEFAULT_PERTURB_HOLD_S = 0.75
 _DEFAULT_POST_COMPASS_SETTLE_S = 0.5
 _CASE_PREFIX_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_SINGLE_PLAN_STRATEGY = "single-plan"
+_PRODUCTION_GATED_STRATEGY_ID = "varrock-east-production-gated-search-v1"
+_PRODUCTION_GATED_STRATEGY_VERSION = "1.0.0"
+_PRODUCTION_GATED_ZOOM_SATURATION = 96
+_PRODUCTION_GATED_ZOOM_OFFSET = -17
+_PRODUCTION_GATED_CANDIDATE_OFFSETS: tuple[tuple[float, float], ...] = (
+    (0.60, 0.05),
+    (0.58, 0.05),
+    (0.62, 0.05),
+    (0.56, 0.05),
+    (0.64, 0.05),
+    (0.60, 0.04),
+    (0.58, 0.04),
+    (0.62, 0.04),
+    (0.60, 0.06),
+    (0.58, 0.06),
+    (0.62, 0.06),
+)
+
 
 class _PrivateArtifactRecorder:
     def __init__(
@@ -137,10 +158,18 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"RuneLite title substring (default: {DEFAULT_TITLE_SUBSTRING!r})",
     )
     parser.add_argument(
+        "--normalization-strategy",
+        choices=(_SINGLE_PLAN_STRATEGY, _PRODUCTION_GATED_STRATEGY_ID),
+        default=_SINGLE_PLAN_STRATEGY,
+        help=(
+            "single reviewed plan, or the fixed bounded production-gated "
+            "Issue #31 candidate search"
+        ),
+    )
+    parser.add_argument(
         "--pitch-endpoint",
         choices=("up", "down"),
-        required=True,
-        help="deterministic pitch saturation endpoint",
+        help="single-plan pitch saturation endpoint",
     )
     parser.add_argument(
         "--pitch-offset-hold",
@@ -165,7 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=_DEFAULT_POST_COMPASS_SETTLE_S,
         help="explicit no-input settle after the compass click",
     )
-    zoom = parser.add_mutually_exclusive_group(required=True)
+    zoom = parser.add_mutually_exclusive_group()
     zoom.add_argument(
         "--reset-zoom",
         action="store_true",
@@ -238,7 +267,26 @@ def _validate_command_argv(command_argv: tuple[str, ...]) -> None:
             )
 
 
+def _strategy_identity(args: argparse.Namespace) -> tuple[str, str]:
+    if args.normalization_strategy == _PRODUCTION_GATED_STRATEGY_ID:
+        return _PRODUCTION_GATED_STRATEGY_ID, _PRODUCTION_GATED_STRATEGY_VERSION
+    return args.plan_id, args.plan_version
+
+
+def _require_single_plan_recipe(args: argparse.Namespace) -> None:
+    if args.pitch_endpoint is None:
+        raise ValueError(
+            "--pitch-endpoint is required with --normalization-strategy single-plan"
+        )
+    if not args.reset_zoom and args.zoom_saturate_detents is None:
+        raise ValueError(
+            "one of --reset-zoom or --zoom-saturate-detents is required with "
+            "--normalization-strategy single-plan"
+        )
+
+
 def _build_normalization_plan(args: argparse.Namespace) -> CameraPlan:
+    _require_single_plan_recipe(args)
     pitch = CameraHoldKey(args.pitch_endpoint)
     actions: list[CameraAction] = [
         CompassClick(*_COMPASS_POINT),
@@ -316,8 +364,75 @@ def _build_normalization_plan(args: argparse.Namespace) -> CameraPlan:
     return CameraPlan(args.plan_id, tuple(actions))
 
 
+def _production_gated_candidate_plan(
+    index: int,
+    *,
+    pitch_offset_s: float,
+    yaw_offset_s: float,
+) -> CameraPlan:
+    """Build one complete independent reset from fixed Issue #31 bounds."""
+
+    return CameraPlan(
+        f"{_PRODUCTION_GATED_STRATEGY_ID}-candidate-{index:02d}",
+        (
+            CompassClick(*_COMPASS_POINT),
+            CameraPause(_DEFAULT_POST_COMPASS_SETTLE_S),
+            CameraKeyHold(CameraHoldKey.RIGHT, yaw_offset_s),
+            CameraKeyHold(CameraHoldKey.UP, _DEFAULT_PITCH_HOLD_S),
+            CameraKeyHold(CameraHoldKey.DOWN, pitch_offset_s),
+            CameraWheel(
+                *_CAMERA_WHEEL_POINT,
+                _PRODUCTION_GATED_ZOOM_SATURATION,
+            ),
+            CameraWheel(*_CAMERA_WHEEL_POINT, _PRODUCTION_GATED_ZOOM_OFFSET),
+        ),
+    )
+
+
+def _require_no_single_plan_overrides(args: argparse.Namespace) -> None:
+    overrides = (
+        args.pitch_endpoint is not None
+        or args.pitch_offset_hold != 0.0
+        or args.yaw_offset_direction is not None
+        or args.yaw_offset_hold != 0.0
+        or args.post_compass_settle != _DEFAULT_POST_COMPASS_SETTLE_S
+        or args.reset_zoom
+        or args.zoom_saturate_detents is not None
+        or args.zoom_offset_detents != 0
+    )
+    if overrides:
+        raise ValueError(
+            f"--normalization-strategy {_PRODUCTION_GATED_STRATEGY_ID} uses a "
+            "frozen candidate ladder and cannot be combined with single-plan "
+            "pitch, yaw, settle, or zoom options"
+        )
+
+
+def _build_normalization_candidates(
+    args: argparse.Namespace,
+) -> tuple[CameraPlan, ...]:
+    if args.normalization_strategy == _SINGLE_PLAN_STRATEGY:
+        return (_build_normalization_plan(args),)
+    _require_no_single_plan_overrides(args)
+    return tuple(
+        _production_gated_candidate_plan(
+            index,
+            pitch_offset_s=pitch_offset_s,
+            yaw_offset_s=yaw_offset_s,
+        )
+        for index, (pitch_offset_s, yaw_offset_s) in enumerate(
+            _PRODUCTION_GATED_CANDIDATE_OFFSETS,
+            start=1,
+        )
+    )
+
+
 def _build_perturbation_plans(args: argparse.Namespace) -> tuple[CameraPlan, ...]:
-    endpoint = CameraHoldKey(args.pitch_endpoint)
+    endpoint = (
+        CameraHoldKey.UP
+        if args.normalization_strategy == _PRODUCTION_GATED_STRATEGY_ID
+        else CameraHoldKey(args.pitch_endpoint)
+    )
     opposite = CameraHoldKey.DOWN if endpoint is CameraHoldKey.UP else CameraHoldKey.UP
     return (
         CameraPlan(
@@ -466,6 +581,46 @@ def _plan_dict(plan: CameraPlan) -> dict[str, Any]:
     return {"name": plan.name, "actions": [_action_dict(action) for action in plan.actions]}
 
 
+def _plan_input_event_count(plan: CameraPlan) -> int:
+    total = 0
+    for action in plan.actions:
+        if isinstance(action, CompassClick | CameraKeyHold | ResetZoomKey):
+            total += 2
+        elif isinstance(action, CameraWheel):
+            total += abs(action.detents)
+    return total
+
+
+def _worst_case_bounds(
+    candidates: tuple[CameraPlan, ...],
+    perturbations: tuple[CameraPlan, ...],
+    *,
+    confirmations: int,
+) -> dict[str, int]:
+    normalization_boundaries = 1 + len(perturbations)
+    normalization_plan_executions = len(candidates) * normalization_boundaries
+    normalization_input_events = (
+        sum(_plan_input_event_count(plan) for plan in candidates)
+        * normalization_boundaries
+    )
+    perturbation_input_events = sum(
+        _plan_input_event_count(plan) for plan in perturbations
+    )
+    return {
+        "normalization_candidates_per_boundary": len(candidates),
+        "normalization_boundaries": normalization_boundaries,
+        "normalization_plan_executions": normalization_plan_executions,
+        "normalization_input_events": normalization_input_events,
+        "perturbation_input_events": perturbation_input_events,
+        "total_input_events": normalization_input_events
+        + perturbation_input_events,
+        "candidate_evaluation_frames": normalization_plan_executions,
+        "required_confirmation_frames": len(perturbations) * confirmations,
+        "maximum_protocol_frames": normalization_plan_executions
+        + len(perturbations) * (2 + confirmations),
+    }
+
+
 def _input_receipt_dict(receipt: CameraInputReceipt) -> dict[str, Any]:
     return {
         "operation": receipt.operation.value,
@@ -522,36 +677,126 @@ def _frame_record_dict(
     return payload
 
 
+def _normalization_result_dict(
+    result: CameraNormalizationResult,
+) -> dict[str, Any]:
+    return {
+        "attempts": [
+            {
+                "index_1_based": attempt.index,
+                "identity": attempt.plan.name,
+                "plan": _plan_dict(attempt.plan),
+                "receipt": _plan_receipt_dict(attempt.receipt),
+                "candidate_frame": _frame_record_dict(attempt.frame),
+                "production_gate_passed": attempt.passed,
+                "counts_as_confirmation": False,
+            }
+            for attempt in result.attempts
+        ],
+        "selected_candidate_index_1_based": (
+            result.selected_candidate_index_1_based
+        ),
+        "selected_identity": result.selected_identity,
+        "production_gate_passed": result.passed,
+    }
+
+
 def _session_dict(
     result: CameraSessionResult,
     args: argparse.Namespace,
     *,
+    strategy_id: str,
+    strategy_version: str,
     tracked_worktree_clean: bool,
 ) -> dict[str, Any]:
     camera_evidence_eligible = result.passed and tracked_worktree_clean
+    production_gated_search = (
+        args.normalization_strategy == _PRODUCTION_GATED_STRATEGY_ID
+    )
     return {
         "camera_assumptions": {
             "compass_point": list(_COMPASS_POINT),
             "wheel_point": list(_CAMERA_WHEEL_POINT),
-            "pitch_endpoint": args.pitch_endpoint,
+            "pointer_coordinate_space": "runelite_target_logical_client",
+            "compass_click_dwell_s": COMPASS_CLICK_DWELL_SECONDS,
+            "pitch_endpoint": "up" if production_gated_search else args.pitch_endpoint,
             "pitch_hold_s": _DEFAULT_PITCH_HOLD_S,
-            "pitch_offset_hold_s": args.pitch_offset_hold,
-            "yaw_offset_direction": args.yaw_offset_direction,
-            "yaw_offset_hold_s": args.yaw_offset_hold,
-            "post_compass_settle_s": args.post_compass_settle,
-            "zoom_mode": "reset_key" if args.reset_zoom else "wheel_endpoint",
-            "zoom_saturate_detents": args.zoom_saturate_detents,
-            "zoom_offset_detents": args.zoom_offset_detents,
+            "pitch_offset_hold_s": (
+                "candidate_specific"
+                if production_gated_search
+                else args.pitch_offset_hold
+            ),
+            "yaw_offset_direction": (
+                "right" if production_gated_search else args.yaw_offset_direction
+            ),
+            "yaw_offset_hold_s": (
+                "candidate_specific"
+                if production_gated_search
+                else args.yaw_offset_hold
+            ),
+            "post_compass_settle_s": (
+                _DEFAULT_POST_COMPASS_SETTLE_S
+                if production_gated_search
+                else args.post_compass_settle
+            ),
+            "zoom_mode": (
+                "wheel_endpoint"
+                if production_gated_search or not args.reset_zoom
+                else "reset_key"
+            ),
+            "zoom_saturate_detents": (
+                _PRODUCTION_GATED_ZOOM_SATURATION
+                if production_gated_search
+                else args.zoom_saturate_detents
+            ),
+            "zoom_offset_detents": (
+                _PRODUCTION_GATED_ZOOM_OFFSET
+                if production_gated_search
+                else args.zoom_offset_detents
+            ),
             "wheel_delivery": "paced_individual_detents",
             "wheel_event_interval_s": CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
             "diagnostics_can_override_production": False,
         },
-        "normalization_plan": _plan_dict(result.normalization_plan),
-        "initial_normalization_receipt": _plan_receipt_dict(
-            result.initial_normalization_receipt
+        "normalization_strategy": {
+            "id": strategy_id,
+            "version": strategy_version,
+            "selection_authority": "unchanged_production_camera_evaluation",
+            "diagnostic_registration_used": False,
+            "candidates": [
+                {
+                    "index_1_based": index,
+                    **_plan_dict(plan),
+                }
+                for index, plan in enumerate(
+                    result.normalization_candidates,
+                    start=1,
+                )
+            ],
+            "worst_case_bounds": _worst_case_bounds(
+                result.normalization_candidates,
+                tuple(trial.perturbation_plan for trial in result.trials)
+                if len(result.trials) == result.required_trials
+                else _build_perturbation_plans(args),
+                confirmations=result.required_confirmations,
+            ),
+        },
+        "initial_normalization": _normalization_result_dict(
+            result.initial_normalization
         ),
         "required_trials": result.required_trials,
         "required_confirmations": result.required_confirmations,
+        "pre_perturbation_failure": (
+            {
+                "trial_index_1_based": (
+                    result.pre_perturbation_failure_trial_index_1_based
+                ),
+                "frame": _frame_record_dict(result.pre_perturbation_failure),
+                "further_input_sent": False,
+            }
+            if result.pre_perturbation_failure is not None
+            else None
+        ),
         "trials": [
             {
                 "trial_index": trial.trial_index,
@@ -567,9 +812,7 @@ def _session_dict(
                 "perturbation_receipt": _plan_receipt_dict(trial.perturbation_receipt),
                 "perturbed": _frame_record_dict(trial.perturbed),
                 "perturbation_fail_closed": trial.perturbation_fail_closed,
-                "normalization_receipt": _plan_receipt_dict(
-                    trial.normalization_receipt
-                ),
+                "normalization": _normalization_result_dict(trial.normalization),
                 "confirmations": [
                     _frame_record_dict(
                         confirmation,
@@ -596,6 +839,19 @@ def _session_dict(
     }
 
 
+def _last_production_evaluation(result: CameraSessionResult) -> CameraEvaluation:
+    """Return the latest serialized evaluation for provenance on pass or fail."""
+
+    if result.pre_perturbation_failure is not None:
+        return result.pre_perturbation_failure.evaluation
+    if result.trials:
+        trial = result.trials[-1]
+        if trial.confirmations:
+            return trial.confirmations[-1].evaluation
+        return trial.normalization.attempts[-1].frame.evaluation
+    return result.initial_normalization.attempts[-1].frame.evaluation
+
+
 def _print_summary(
     result: CameraSessionResult,
     *,
@@ -611,6 +867,13 @@ def _print_summary(
         f"(protocol_passed={result.passed}; clean={tracked_worktree_clean})"
     )
     print(f"Head: {git_head_sha}")
+    initial = result.initial_normalization
+    print(
+        "  initial normalization: "
+        f"attempts={len(initial.attempts)}; "
+        f"selected={initial.selected_candidate_index_1_based}; "
+        f"pass={initial.passed}"
+    )
     for trial in result.trials:
         confirmations = ", ".join(
             f"{item.evaluation.matched_landmark_count}/6"
@@ -619,7 +882,15 @@ def _print_summary(
         print(
             f"  trial {trial.trial_index}: perturb fail-closed="
             f"{trial.perturbation_fail_closed}; confirmations={confirmations}; "
+            "normalization="
+            f"{trial.normalization.selected_candidate_index_1_based}; "
             f"pass={trial.passed}"
+        )
+    if result.pre_perturbation_failure is not None:
+        print(
+            "  pre-perturbation production failure: trial="
+            f"{result.pre_perturbation_failure_trial_index_1_based}; "
+            "no further input sent"
         )
     print(f"Report: {report_path}")
     print(f"Report SHA-256: {report_sha256}")
@@ -634,19 +905,48 @@ def main(argv: list[str] | None = None) -> int:
         _validate_cli_text("--plan-version", args.plan_version)
         command_argv = _exact_command_argv(command_args)
         _validate_command_argv(command_argv)
-        normalization_plan = _build_normalization_plan(args)
+        strategy_id, strategy_version = _strategy_identity(args)
+        normalization_candidates = _build_normalization_candidates(args)
         perturbation_plans = _build_perturbation_plans(args)
     except (ValueError, CameraPlanError) as exc:
         print(f"Invalid camera plan: {exc}", file=sys.stderr)
         return 2
 
     if args.dry_run:
+        dry_run_payload: dict[str, Any] = {
+            "normalization_strategy": {
+                "id": strategy_id,
+                "version": strategy_version,
+                "selection_authority": (
+                    "unchanged_production_camera_evaluation"
+                ),
+                "diagnostic_registration_used": False,
+            },
+            "normalization_candidates": [
+                {
+                    "index_1_based": index,
+                    **_plan_dict(plan),
+                }
+                for index, plan in enumerate(
+                    normalization_candidates,
+                    start=1,
+                )
+            ],
+            "perturbations": [_plan_dict(plan) for plan in perturbation_plans],
+            "worst_case_bounds": _worst_case_bounds(
+                normalization_candidates,
+                perturbation_plans,
+                confirmations=args.confirmations,
+            ),
+        }
+        if len(normalization_candidates) == 1:
+            # Compatibility alias for the original single-plan dry-run shape.
+            dry_run_payload["normalization"] = _plan_dict(
+                normalization_candidates[0]
+            )
         print(
             json.dumps(
-                {
-                    "normalization": _plan_dict(normalization_plan),
-                    "perturbations": [_plan_dict(plan) for plan in perturbation_plans],
-                },
+                dry_run_payload,
                 indent=2,
                 sort_keys=True,
             )
@@ -698,14 +998,14 @@ def main(argv: list[str] | None = None) -> int:
             output_root,
             case_prefix=case_prefix,
             git_head_sha=git_head_before,
-            plan_id=args.plan_id,
-            plan_version=args.plan_version,
+            plan_id=strategy_id,
+            plan_version=strategy_version,
         )
         control = WindowsCameraControl(selected.hwnd)
         result = run_camera_validation_session(
             source,
             control,
-            normalization_plan=normalization_plan,
+            normalization_candidates=normalization_candidates,
             perturbation_plans=perturbation_plans,
             sleeper=time.sleep,
             settle_s=args.settle,
@@ -763,7 +1063,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Git HEAD changed during camera validation; refusing report.", file=sys.stderr)
         return 2
 
-    final_evaluation = result.trials[-1].confirmations[-1].evaluation
+    final_evaluation = _last_production_evaluation(result)
     tracked_worktree_clean = tracked_clean_before and tracked_clean_after
     camera_evidence_eligible = result.passed and tracked_worktree_clean
     provenance = CameraReportProvenance(
@@ -771,8 +1071,8 @@ def main(argv: list[str] | None = None) -> int:
         detector_id=final_evaluation.detector_id,
         detector_version=final_evaluation.detector_version,
         profile_id=final_evaluation.profile_id,
-        plan_id=args.plan_id,
-        plan_version=args.plan_version,
+        plan_id=strategy_id,
+        plan_version=strategy_version,
         command_argv=command_argv,
         tracked_worktree_clean=tracked_worktree_clean,
     )
@@ -782,6 +1082,8 @@ def main(argv: list[str] | None = None) -> int:
             _session_dict(
                 result,
                 args,
+                strategy_id=strategy_id,
+                strategy_version=strategy_version,
                 tracked_worktree_clean=tracked_worktree_clean,
             ),
             provenance,

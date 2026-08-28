@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-CAMERA_VALIDATION_REPORT_SCHEMA_VERSION = 1
+CAMERA_VALIDATION_REPORT_SCHEMA_VERSION = 2
 
 _FULL_LOWERCASE_GIT_SHA = re.compile(r"[0-9a-f]{40}")
 

@@ -256,6 +256,107 @@ def test_dry_run_prints_exact_plans_without_capture(
     assert len(payload["perturbations"]) == 3
 
 
+def test_production_gated_strategy_has_exact_independent_candidate_order(
+    tool: ModuleType,
+) -> None:
+    args = _args(
+        tool,
+        "--normalization-strategy",
+        "varrock-east-production-gated-search-v1",
+    )
+
+    candidates = tool._build_normalization_candidates(args)
+    perturbations = tool._build_perturbation_plans(args)
+
+    assert len(candidates) == 11
+    assert len({candidate.actions for candidate in candidates}) == 11
+    assert [
+        (candidate.actions[4].duration_s, candidate.actions[2].duration_s)
+        for candidate in candidates
+    ] == [
+        (0.60, 0.05),
+        (0.58, 0.05),
+        (0.62, 0.05),
+        (0.56, 0.05),
+        (0.64, 0.05),
+        (0.60, 0.04),
+        (0.58, 0.04),
+        (0.62, 0.04),
+        (0.60, 0.06),
+        (0.58, 0.06),
+        (0.62, 0.06),
+    ]
+    for candidate in candidates:
+        assert candidate.actions[:4] == (
+            CompassClick(608, 49),
+            CameraPause(0.5),
+            CameraKeyHold(CameraHoldKey.RIGHT, candidate.actions[2].duration_s),
+            CameraKeyHold(CameraHoldKey.UP, 3.0),
+        )
+        assert isinstance(candidate.actions[4], CameraKeyHold)
+        assert candidate.actions[4].key is CameraHoldKey.DOWN
+        assert candidate.actions[5:] == (
+            CameraWheel(400, 50, 96),
+            CameraWheel(400, 50, -17),
+        )
+    assert tool._worst_case_bounds(
+        candidates,
+        perturbations,
+        confirmations=2,
+    ) == {
+        "normalization_candidates_per_boundary": 11,
+        "normalization_boundaries": 4,
+        "normalization_plan_executions": 44,
+        "normalization_input_events": 5324,
+        "perturbation_input_events": 18,
+        "total_input_events": 5342,
+        "candidate_evaluation_frames": 44,
+        "required_confirmation_frames": 6,
+        "maximum_protocol_frames": 56,
+    }
+
+
+def test_production_gated_strategy_rejects_single_plan_overrides(
+    tool: ModuleType,
+) -> None:
+    args = _args(
+        tool,
+        "--normalization-strategy",
+        "varrock-east-production-gated-search-v1",
+        "--pitch-endpoint",
+        "up",
+        "--reset-zoom",
+    )
+
+    with pytest.raises(ValueError, match="frozen candidate ladder"):
+        tool._build_normalization_candidates(args)
+
+
+def test_production_gated_dry_run_is_no_input_and_records_full_bound(
+    tool: ModuleType,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = tool.main(
+        [
+            "--normalization-strategy",
+            "varrock-east-production-gated-search-v1",
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["normalization_strategy"] == {
+        "id": "varrock-east-production-gated-search-v1",
+        "version": "1.0.0",
+        "selection_authority": "unchanged_production_camera_evaluation",
+        "diagnostic_registration_used": False,
+    }
+    assert len(payload["normalization_candidates"]) == 11
+    assert payload["worst_case_bounds"]["total_input_events"] == 5342
+    assert "normalization" not in payload
+
+
 def test_git_state_counts_untracked_code_but_ignores_private_diagnostics(
     tool: ModuleType,
     tmp_path: Path,
@@ -399,7 +500,7 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
     report_path = output / "reports" / "integration.camera.json"
     report_bytes = report_path.read_bytes()
     payload = json.loads(report_bytes)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["provenance"]["git_head_sha"] == "a" * 40
     assert payload["provenance"]["command_argv"] == [
         str(Path(sys.executable).resolve()),
@@ -415,12 +516,24 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
         "reviewed_live_resource_states_included": False,
         "same_head_drift_proof_included": False,
     }
-    assert evidence["initial_normalization_receipt"]["plan"] == evidence[
-        "normalization_plan"
+    initial = evidence["initial_normalization"]
+    assert initial["selected_candidate_index_1_based"] == 1
+    assert initial["selected_identity"] == "varrock-east-camera-endpoint"
+    assert initial["production_gate_passed"] is True
+    assert initial["attempts"][0]["plan"] == initial["attempts"][0]["receipt"][
+        "plan"
     ]
+    assert initial["attempts"][0]["counts_as_confirmation"] is False
+    assert evidence["normalization_strategy"]["selection_authority"] == (
+        "unchanged_production_camera_evaluation"
+    )
+    assert evidence["normalization_strategy"]["diagnostic_registration_used"] is False
+    assert evidence["pre_perturbation_failure"] is None
     assert evidence["camera_assumptions"] == {
         "compass_point": [608, 49],
         "wheel_point": [400, 50],
+        "pointer_coordinate_space": "runelite_target_logical_client",
+        "compass_click_dwell_s": 0.1,
         "pitch_endpoint": "down",
         "pitch_hold_s": 3.0,
         "pitch_offset_hold_s": 0.0,
@@ -434,7 +547,7 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
         "wheel_event_interval_s": 0.025,
         "diagnostics_can_override_production": False,
     }
-    assert evidence["initial_normalization_receipt"]["actions"][1] == {
+    assert initial["attempts"][0]["receipt"]["actions"][1] == {
         "action_index": 1,
         "action": {"kind": "pause", "duration_s": 0.5},
         "input_receipts": [],
@@ -493,6 +606,58 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
     assert (Path(f"{report_path}.sha256")).read_text(encoding="ascii") == f"{digest}\n"
 
 
+def test_canonical_production_gated_command_reports_selected_candidates(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _search_second_candidate_frames())
+    command_args = [
+        "--output",
+        str(output),
+        "--case-prefix",
+        "production-gated",
+        "--normalization-strategy",
+        "varrock-east-production-gated-search-v1",
+        "--settle",
+        "0.001",
+    ]
+
+    assert tool.main(command_args) == 0
+
+    payload = json.loads(
+        (output / "reports" / "production-gated.camera.json").read_text()
+    )
+    evidence = payload["evidence"]
+    assert payload["provenance"]["plan_id"] == (
+        "varrock-east-production-gated-search-v1"
+    )
+    assert payload["provenance"]["plan_version"] == "1.0.0"
+    assert evidence["normalization_strategy"]["id"] == (
+        "varrock-east-production-gated-search-v1"
+    )
+    normalizations = [evidence["initial_normalization"]] + [
+        trial["normalization"] for trial in evidence["trials"]
+    ]
+    assert len(normalizations) == 4
+    assert all(
+        normalization["selected_candidate_index_1_based"] == 2
+        and len(normalization["attempts"]) == 2
+        and normalization["attempts"][0]["production_gate_passed"] is False
+        and normalization["attempts"][1]["production_gate_passed"] is True
+        and all(
+            attempt["counts_as_confirmation"] is False
+            for attempt in normalization["attempts"]
+        )
+        for normalization in normalizations
+    )
+    assert all(
+        len(trial["confirmations"]) == 2 for trial in evidence["trials"]
+    )
+    assert evidence["camera_protocol_passed"] is True
+
+
 def test_report_records_definitive_confirmation_state_mismatch(
     tool: ModuleType,
     tmp_path: Path,
@@ -501,7 +666,7 @@ def test_report_records_definitive_confirmation_state_mismatch(
     output = tmp_path / "private"
     frames = _passing_frames()
     mismatch = _reviewed_payload("lower-left-full-cycle-020")
-    frames[3] = Frame.from_raw(
+    frames[5] = Frame.from_raw(
         RawFrame(mismatch, 1005, 1078, PixelFormat.BGRA8888),
         frame_id=4,
         captured_monotonic_s=4.0,
@@ -782,8 +947,16 @@ def _passing_frames() -> list[Frame]:
         )
     ]
     frame_id = 2
+    frames.append(
+        Frame.from_raw(
+            RawFrame(reviewed, 1005, 1078, PixelFormat.BGRA8888),
+            frame_id=frame_id,
+            captured_monotonic_s=float(frame_id),
+        )
+    )
+    frame_id += 1
     for _trial in range(3):
-        for payload in (reviewed, unsupported, reviewed, reviewed):
+        for payload in (reviewed, unsupported, reviewed, reviewed, reviewed):
             frames.append(
                 Frame.from_raw(
                     RawFrame(payload, 1005, 1078, PixelFormat.BGRA8888),
@@ -793,6 +966,24 @@ def _passing_frames() -> list[Frame]:
             )
             frame_id += 1
     return frames
+
+
+def _search_second_candidate_frames() -> list[Frame]:
+    reviewed = _reviewed_payload("available-01")
+    unsupported = bytes(len(reviewed))
+    payloads = [unsupported, unsupported, reviewed]
+    for _trial in range(3):
+        payloads.extend(
+            (reviewed, unsupported, unsupported, reviewed, reviewed, reviewed)
+        )
+    return [
+        Frame.from_raw(
+            RawFrame(payload, 1005, 1078, PixelFormat.BGRA8888),
+            frame_id=index,
+            captured_monotonic_s=float(index),
+        )
+        for index, payload in enumerate(payloads, start=1)
+    ]
 
 
 def _reviewed_payload(case_id: str) -> bytes:

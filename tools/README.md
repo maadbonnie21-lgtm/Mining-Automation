@@ -51,11 +51,12 @@ Rules:
 ## Camera reacquisition validation
 
 `validate_varrock_east_camera.py` is the development-only Issue #31 real-client
-harness. At exact `1005 x 1078` client geometry it applies one bounded,
-deterministic north/pitch/zoom normalization plan across three distinct camera
-perturbations, then requires at least two fresh production-detector
-confirmations per perturbation. Candidate pixels, fixed UI, and diagnostic
-searches cannot establish or override scene identity.
+harness. At exact `1005 x 1078` client geometry it applies a bounded,
+deterministic, production-gated list of independent north/pitch/zoom reset
+candidates across three distinct camera perturbations, then requires at least
+two fresh production-detector confirmations per perturbation. The selected
+candidate frame is provisional and is never a confirmation. Candidate pixels,
+fixed UI, and diagnostic searches cannot establish or override scene identity.
 
 The tool writes private raw/BMP/draft evidence plus a canonical JSON report and
 exact `.sha256` sidecar under ignored `diagnostics/`. Acceptance evidence must
@@ -65,3 +66,15 @@ the complete 36-frame real drift set both pass without weakening production
 policy. See
 [`docs/CAMERA_REACQUISITION_VALIDATION.md`](../docs/CAMERA_REACQUISITION_VALIDATION.md)
 for the boundary, protocol, privacy rules, and acceptance gate.
+
+`diagnose_camera_pointer_mapping.py` is the Issue #31 native **no-input** DPI
+mapping audit. It captures one private RuneLite client frame but sends no
+cursor, mouse-button, wheel, or keyboard events. It records the rejected
+legacy coordinate candidates and the production origin-based forward/reverse
+mapping for the reviewed compass and wheel points. Its optional private raw
+and annotated BMPs support visual review in two separate spaces: RuneLite's
+PrintWindow target-logical raster and a no-input physical screen crop of the
+foreground client. The latter marks final physical pointer points and is
+bracketed by unchanged origin/geometry/focus/ownership checks. Output paths are
+distinct and exclusive; the JSON report is written only after every requested
+image succeeds.
