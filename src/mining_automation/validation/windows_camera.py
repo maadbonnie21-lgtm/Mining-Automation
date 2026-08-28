@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 import time
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .camera_coordinates import CameraCoordinateMapping, CameraDpiEnvironment
@@ -28,6 +29,7 @@ __all__ = [
     "RealWindowsCameraApi",
     "CAMERA_WHEEL_EVENT_INTERVAL_SECONDS",
     "COMPASS_CLICK_DWELL_SECONDS",
+    "WindowsCameraTargetIdentity",
     "WindowsCameraApi",
     "WindowsCameraControl",
     "WindowsCameraError",
@@ -46,12 +48,51 @@ _RESET_KEYS: dict[str, int] = {
     "control": 0x11,
     "ctrl": 0x11,
 }
+_CONTROLLED_VIRTUAL_KEYS = tuple(
+    sorted(set(_ARROW_KEYS.values()) | set(_RESET_KEYS.values()))
+)
 _KEY_RELEASE_ATTEMPTS = 3
 _MOUSE_RELEASE_ATTEMPTS = 3
 
 
+def _require_complete_window_title_snapshot(
+    value: str,
+    *,
+    expected_length: int,
+    copied_length: int,
+    final_length: int,
+) -> str:
+    if (
+        expected_length <= 0
+        or copied_length != expected_length
+        or final_length != expected_length
+    ):
+        raise OSError("target RuneLite window title changed while being read")
+    return value
+
+
 class WindowsCameraError(RuntimeError):
     """The target window or Win32 input boundary is not safe to use."""
+
+
+@dataclass(frozen=True, slots=True)
+class WindowsCameraTargetIdentity:
+    """Stable facts that distinguish the reviewed target from an HWND reuse."""
+
+    process_id: int
+    thread_id: int
+    class_name: str
+    title: str
+
+    def __post_init__(self) -> None:
+        if self.process_id <= 0:
+            raise ValueError("window process_id must be positive")
+        if self.thread_id <= 0:
+            raise ValueError("window thread_id must be positive")
+        if not self.class_name:
+            raise ValueError("window class_name must not be empty")
+        if not self.title:
+            raise ValueError("window title must not be empty")
 
 
 class WindowsCameraApi(Protocol):
@@ -62,6 +103,9 @@ class WindowsCameraApi(Protocol):
 
     def is_window(self, hwnd: int) -> bool:
         """Return whether ``hwnd`` still identifies a window."""
+
+    def window_identity(self, hwnd: int) -> WindowsCameraTargetIdentity:
+        """Return owner and metadata used to detect a recycled HWND."""
 
     def focus_window(self, hwnd: int) -> bool:
         """Try to make ``hwnd`` the foreground window."""
@@ -119,6 +163,15 @@ class RealWindowsCameraApi:
     def is_window(self, hwnd: int) -> bool:
         result: bool = self._calls.is_window(hwnd)
         return result
+
+    def window_identity(self, hwnd: int) -> WindowsCameraTargetIdentity:
+        process_id, thread_id, class_name, title = self._calls.window_identity(hwnd)
+        return WindowsCameraTargetIdentity(
+            process_id=process_id,
+            thread_id=thread_id,
+            class_name=class_name,
+            title=title,
+        )
 
     def focus_window(self, hwnd: int) -> bool:
         result: bool = self._calls.focus_window(hwnd)
@@ -240,6 +293,8 @@ class WindowsCameraControl:
         hwnd: int,
         api: WindowsCameraApi | None = None,
         *,
+        expected_class_name: str | None = None,
+        expected_title: str | None = None,
         wheel_sleeper: Sleeper = time.sleep,
         click_sleeper: Sleeper = time.sleep,
     ) -> None:
@@ -252,6 +307,25 @@ class WindowsCameraControl:
         self._held_keys: dict[int, bool] = {}
         self._left_button_owned = False
         self._api.declare_dpi_awareness()
+        try:
+            self._target_identity = self._api.window_identity(self._hwnd)
+        except (OSError, ValueError) as exc:
+            raise WindowsCameraError(
+                "could not bind the target RuneLite window identity"
+            ) from exc
+        if (
+            expected_class_name is not None
+            and self._target_identity.class_name != expected_class_name
+        ):
+            raise WindowsCameraError(
+                "discovery-time RuneLite window class no longer matches the "
+                "target HWND identity"
+            )
+        if expected_title is not None and self._target_identity.title != expected_title:
+            raise WindowsCameraError(
+                "discovery-time RuneLite window title no longer matches the "
+                "target HWND identity"
+            )
 
     @property
     def hwnd(self) -> int:
@@ -262,9 +336,15 @@ class WindowsCameraControl:
 
         if not self._api.is_window(self._hwnd):
             raise WindowsCameraError("target RuneLite window no longer exists")
+        self._require_target_identity()
+        self._require_all_control_inputs_released()
+        self._require_target_identity()
         self._api.focus_window(self._hwnd)
+        self._require_target_identity()
         focused = self._api.foreground_window() == self._hwnd
         width, height = self._api.client_size(self._hwnd)
+        self._require_target_identity()
+        self._require_all_control_inputs_released()
         return CameraPreflightReceipt(focused, width, height)
 
     def click_compass(self, x: int, y: int) -> CameraInputReceipt:
@@ -436,6 +516,7 @@ class WindowsCameraControl:
     def _require_ready(self) -> None:
         if not self._api.is_window(self._hwnd):
             raise WindowsCameraError("target RuneLite window no longer exists")
+        self._require_target_identity()
         if self._api.foreground_window() != self._hwnd:
             raise WindowsCameraError("target RuneLite window lost foreground focus")
         width, height = self._api.client_size(self._hwnd)
@@ -443,6 +524,39 @@ class WindowsCameraControl:
             raise WindowsCameraError(
                 "target RuneLite client geometry changed during the camera plan: "
                 f"{width}x{height}"
+            )
+        # HWND values may be recycled without changing the foreground handle or
+        # geometry. Re-read identity after the other readiness queries so a
+        # replacement during the check cannot inherit their approval.
+        self._require_target_identity()
+
+    def _require_target_identity(self) -> None:
+        try:
+            current = self._api.window_identity(self._hwnd)
+        except (OSError, ValueError) as exc:
+            raise WindowsCameraError(
+                "could not revalidate the target RuneLite window identity"
+            ) from exc
+        if current != self._target_identity:
+            raise WindowsCameraError(
+                "target RuneLite window identity changed while the HWND was reused"
+            )
+
+    def _require_all_control_inputs_released(self) -> None:
+        if self._api.left_button_is_down():
+            raise WindowsCameraError(
+                "refusing camera preflight because the global left button is held"
+            )
+        held_keys = [
+            virtual_key
+            for virtual_key in _CONTROLLED_VIRTUAL_KEYS
+            if self._api.key_is_down(virtual_key)
+        ]
+        if held_keys:
+            rendered = ", ".join(f"0x{key:02x}" for key in held_keys)
+            raise WindowsCameraError(
+                "refusing camera preflight because validator-controlled global "
+                f"keys are held: {rendered}"
             )
 
     def _move_to_client_point(self, x: int, y: int) -> tuple[int, int]:
@@ -522,6 +636,9 @@ class WindowsCameraControl:
                 f"refusing {operation} because the reviewed point is covered "
                 "by another top-level window"
             )
+        # This is the final seam before global pointer injection. A recycled
+        # handle can still own the reviewed point and retain the same geometry.
+        self._require_target_identity()
 
     def _release_owned_key(self, virtual_key: int, *, extended: bool) -> int:
         last_error: BaseException | None = None

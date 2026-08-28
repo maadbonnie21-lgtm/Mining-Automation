@@ -40,12 +40,41 @@ Every camera plan execution receives a fresh focus and client-geometry
 preflight. A short or partial input receipt fails the run; it is never treated
 as successful camera motion.
 
+The live validator also owns the machine-global Windows named mutex
+`Global\MiningAutomation.VarrockEastCameraValidationInput.v1` before it opens
+capture, focuses RuneLite, or sends input. A concurrent invocation fails
+immediately and performs none of those operations. The owner retains the lease
+through input release, capture cleanup, provenance recheck, and exclusive,
+fsynced report-and-digest publication. Dry runs remain no-input and do not
+acquire the lease.
+
+Inside that lease, and before constructing capture, the validator rejects any
+legacy raw/BMP/draft/report artifact for the requested case prefix and creates
+an exclusive, fsynced reservation marker. The reservation is permanent even
+when the attempt fails, making the entire prefix single-use and preventing a
+retry from discovering stale evidence only after moving the camera.
+
+An abandoned mutex is not recovered as a clean handoff: the predecessor may
+have died after a key/button down, so that invocation releases the transferred
+mutex ownership and fails closed without capture, focus, or input. Every later
+plan preflight proves the left button plus Control and all four arrow keys are
+globally up before focus or input, so an abandoned held input cannot leak into
+a subsequent run. Failed or cross-thread mutex release keeps the local process
+poisoned against another validator. Report targets are rechecked inside the
+lease; if lease release fails after publication, only artifacts proven to have
+been created by that invocation are retracted.
+
 The camera-plan pointer coordinates are in the DPI-unaware target RuneLite
 window's **logical client** space. The captured perception frame is also
 indexed by its reviewed logical client pixels. Those are distinct from both
 target-logical **screen** coordinates and Windows **physical screen/client**
 coordinates; the validator does not treat a physical-client point as a frame
 pixel index.
+
+The control also binds the discovery-time RuneLite title and window class to a
+fresh PID/thread/class/title identity snapshot. It revalidates that identity at
+every readiness and final pointer seam; a recycled HWND cannot inherit focus or
+geometry approval, and a growing title cannot pass via truncated-prefix reads.
 
 On the reviewed Windows installation RuneLite is DPI-unaware while the
 validator is per-monitor DPI-aware. Immediately before pointer input, the
@@ -226,9 +255,10 @@ The validator refuses a dirty-worktree run by default. `--allow-dirty` exists
 only for development diagnosis: such a report is non-acceptance evidence even
 if its camera trials pass.
 
-Report and sidecar paths are exclusive. Existing evidence is never
-overwritten. Use a new case prefix for a new run instead of deleting or reusing
-prior evidence.
+The complete case-prefix namespace is exclusive. Existing evidence is never
+overwritten, and the durable reservation remains after both successful and
+failed attempts. Always use a new case prefix for a new run instead of deleting
+or reusing prior evidence.
 
 ## Acceptance gate
 

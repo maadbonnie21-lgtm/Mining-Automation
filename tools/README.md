@@ -57,6 +57,18 @@ candidates across three distinct camera perturbations, then requires at least
 two fresh production-detector confirmations per perturbation. The selected
 candidate frame is provisional and is never a confirmation. Candidate pixels,
 fixed UI, and diagnostic searches cannot establish or override scene identity.
+Only one live validator process may operate at a time: a machine-global Windows
+named mutex is acquired before capture/focus/input and held through cleanup and
+report publication; a contender fails immediately without touching RuneLite.
+Abandoned ownership also fails closed because global key/button state is then
+indeterminate; every later plan preflight proves all validator-controlled keys
+and the left button are released before focus/input. Failed mutex release
+poisons the local process, and canonical evidence is retained only when report
+publication ownership and lease release are both proven.
+While holding the lease and before constructing capture, the tool durably
+reserves the complete case prefix after rejecting any stale private artifacts.
+That reservation remains after every outcome, so each case prefix is
+permanently single-use.
 
 The tool writes private raw/BMP/draft evidence plus a canonical JSON report and
 exact `.sha256` sidecar under ignored `diagnostics/`. Acceptance evidence must

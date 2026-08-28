@@ -410,7 +410,11 @@ class _FakeBackend:
     def __init__(self, *, title_substring: str) -> None:
         del title_substring
         type(self).constructed += 1
-        self.selected_window = SimpleNamespace(hwnd=3131)
+        self.selected_window = SimpleNamespace(
+            hwnd=3131,
+            class_name="SunAwtFrame",
+            title="RuneLite - Chief Luma",
+        )
 
 
 class _FakeSource:
@@ -440,8 +444,16 @@ class _FakeControl:
     last: _FakeControl | None = None
     cleanup_error: BaseException | None = None
 
-    def __init__(self, hwnd: int) -> None:
+    def __init__(
+        self,
+        hwnd: int,
+        *,
+        expected_class_name: str,
+        expected_title: str,
+    ) -> None:
         assert hwnd == 3131
+        assert expected_class_name == "SunAwtFrame"
+        assert expected_title == "RuneLite - Chief Luma"
         self.released = False
         type(self).last = self
 
@@ -471,6 +483,33 @@ class _FakeControl:
         error = type(self).cleanup_error
         if error is not None:
             raise error
+
+
+class _FakeInputLease:
+    active = False
+    events: list[str] | None = None
+
+    @property
+    def acquired(self) -> bool:
+        return type(self).active
+
+    def __enter__(self) -> _FakeInputLease:
+        assert not type(self).active
+        type(self).active = True
+        if type(self).events is not None:
+            type(self).events.append("lease_acquired")
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> None:
+        del exc_type, exc, traceback
+        if type(self).events is not None:
+            type(self).events.append("lease_released")
+        type(self).active = False
 
 
 def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
@@ -507,6 +546,15 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
         str(Path(tool.__file__).resolve()),
         *command_args,
     ]
+    reservation_path = (
+        output / "reservations" / "integration.camera-reservation.json"
+    )
+    assert json.loads(reservation_path.read_text(encoding="utf-8")) == {
+        "case_prefix": "integration",
+        "git_head_sha": "a" * 40,
+        "owner": "validate_varrock_east_camera.py",
+        "schema_version": 1,
+    }
     evidence = payload["evidence"]
     assert evidence["camera_protocol_passed"] is True
     assert evidence["tracked_worktree_clean"] is True
@@ -604,6 +652,376 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
     )
     digest = hashlib.sha256(report_bytes).hexdigest()
     assert (Path(f"{report_path}.sha256")).read_text(encoding="ascii") == f"{digest}\n"
+
+
+def test_input_lease_remains_held_through_cleanup_and_report_publication(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _passing_frames())
+    events: list[str] = []
+    _FakeInputLease.events = events
+    original_control_cleanup = _FakeControl.release_all_held_keys
+    original_source_cleanup = _FakeSource.close
+    original_report_writer = tool.write_camera_validation_report
+
+    def control_cleanup(control: _FakeControl) -> None:
+        assert _FakeInputLease.active
+        events.append("input_cleanup")
+        original_control_cleanup(control)
+
+    def source_cleanup(source: _FakeSource) -> None:
+        assert _FakeInputLease.active
+        events.append("capture_cleanup")
+        original_source_cleanup(source)
+
+    def report_writer(*args: object, **kwargs: object) -> object:
+        assert _FakeInputLease.active
+        events.append("report_published")
+        return original_report_writer(*args, **kwargs)
+
+    monkeypatch.setattr(_FakeControl, "release_all_held_keys", control_cleanup)
+    monkeypatch.setattr(_FakeSource, "close", source_cleanup)
+    monkeypatch.setattr(tool, "write_camera_validation_report", report_writer)
+
+    assert tool.main(
+        [
+            "--output",
+            str(output),
+            "--case-prefix",
+            "lease-lifetime",
+            "--pitch-endpoint",
+            "down",
+            "--reset-zoom",
+            "--settle",
+            "0.001",
+        ]
+    ) == 0
+
+    assert events == [
+        "lease_acquired",
+        "input_cleanup",
+        "capture_cleanup",
+        "report_published",
+        "lease_released",
+    ]
+    assert _FakeInputLease.active is False
+
+
+def test_second_invocation_with_held_lease_sends_no_capture_focus_or_input(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _passing_frames())
+
+    class HeldInputLease:
+        def __enter__(self) -> HeldInputLease:
+            raise tool.CameraInputLeaseError(
+                "another camera validator owns the lease; no capture, focus, or "
+                "input was attempted"
+            )
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: object,
+        ) -> None:
+            del exc_type, exc, traceback
+
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", HeldInputLease)
+
+    result = tool.main(
+        [
+            "--output",
+            str(output),
+            "--case-prefix",
+            "lease-contender",
+            "--pitch-endpoint",
+            "down",
+            "--reset-zoom",
+        ]
+    )
+
+    assert result == 2
+    assert _FakeBackend.constructed == 0
+    assert _FakeSource.last is None
+    assert _FakeControl.last is None
+    assert not (output / "reports" / "lease-contender.camera.json").exists()
+    assert "no capture, focus, or input was attempted" in capsys.readouterr().err
+
+
+def test_same_prefix_collision_created_during_lease_entry_sends_no_input(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _passing_frames())
+    report_path = output / "reports" / "lease-race.camera.json"
+
+    class RacingInputLease(_FakeInputLease):
+        def __enter__(self) -> RacingInputLease:
+            super().__enter__()
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text("winner", encoding="utf-8")
+            return self
+
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", RacingInputLease)
+
+    assert tool.main(
+        [
+            "--output",
+            str(output),
+            "--case-prefix",
+            "lease-race",
+            "--pitch-endpoint",
+            "down",
+            "--reset-zoom",
+        ]
+    ) == 2
+    assert _FakeBackend.constructed == 0
+    assert _FakeSource.last is None
+    assert _FakeControl.last is None
+    assert report_path.read_text(encoding="utf-8") == "winner"
+
+
+def test_case_prefix_is_reserved_inside_lease_before_backend_construction(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _passing_frames())
+    reservation_path = (
+        output / "reservations" / "reservation-order.camera-reservation.json"
+    )
+
+    def guarded_backend(*, title_substring: str) -> _FakeBackend:
+        assert _FakeInputLease.active
+        assert reservation_path.exists()
+        return _FakeBackend(title_substring=title_substring)
+
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", guarded_backend)
+
+    assert tool.main(
+        [
+            "--output",
+            str(output),
+            "--case-prefix",
+            "reservation-order",
+            "--pitch-endpoint",
+            "down",
+            "--reset-zoom",
+            "--settle",
+            "0.001",
+        ]
+    ) == 0
+
+
+def test_release_failure_retracts_published_canonical_report(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _passing_frames())
+
+    class ReleaseFailingInputLease(_FakeInputLease):
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: object,
+        ) -> None:
+            del exc_type, exc, traceback
+            # Deliberately retain active/acquired state, mirroring the real
+            # poison-on-ReleaseMutex-failure behavior.
+            raise tool.CameraInputLeaseError("ReleaseMutex failed; process poisoned")
+
+    monkeypatch.setattr(
+        tool,
+        "WindowsCameraInputLease",
+        ReleaseFailingInputLease,
+    )
+
+    assert tool.main(
+        [
+            "--output",
+            str(output),
+            "--case-prefix",
+            "lease-release-failure",
+            "--pitch-endpoint",
+            "down",
+            "--reset-zoom",
+            "--settle",
+            "0.001",
+        ]
+    ) == 2
+    report_path = output / "reports" / "lease-release-failure.camera.json"
+    assert not report_path.exists()
+    assert not Path(f"{report_path}.sha256").exists()
+    assert "process poisoned" in capsys.readouterr().err
+
+
+def test_body_and_release_failure_still_retract_published_report(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _passing_frames())
+
+    class DualFailingInputLease(_FakeInputLease):
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: object,
+        ) -> None:
+            del exc_type, traceback
+            assert isinstance(exc, KeyboardInterrupt)
+            raise tool.CameraInputLeaseError(
+                "ReleaseMutex failed after summary; process poisoned"
+            ) from exc
+
+    def interrupt_summary(*_args: object, **_kwargs: object) -> None:
+        raise KeyboardInterrupt("summary interrupted")
+
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", DualFailingInputLease)
+    monkeypatch.setattr(tool, "_print_summary", interrupt_summary)
+
+    assert tool.main(
+        [
+            "--output",
+            str(output),
+            "--case-prefix",
+            "dual-failure",
+            "--pitch-endpoint",
+            "down",
+            "--reset-zoom",
+            "--settle",
+            "0.001",
+        ]
+    ) == 2
+    report_path = output / "reports" / "dual-failure.camera.json"
+    assert not report_path.exists()
+    assert not Path(f"{report_path}.sha256").exists()
+    assert (
+        output / "reservations" / "dual-failure.camera-reservation.json"
+    ).exists()
+    assert "process poisoned" in capsys.readouterr().err
+
+
+def test_outer_guard_retracts_if_context_manager_preserves_body_error(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _passing_frames())
+
+    class NoteOnlyFailingInputLease(_FakeInputLease):
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: object,
+        ) -> None:
+            del exc_type, traceback
+            assert isinstance(exc, KeyboardInterrupt)
+            exc.add_note("ReleaseMutex failed; ownership retained")
+            # Deliberately retain active/acquired state while preserving the
+            # body exception, modeling a faulty alternate context boundary.
+
+    def interrupt_summary(*_args: object, **_kwargs: object) -> None:
+        raise KeyboardInterrupt("summary interrupted")
+
+    monkeypatch.setattr(
+        tool,
+        "WindowsCameraInputLease",
+        NoteOnlyFailingInputLease,
+    )
+    monkeypatch.setattr(tool, "_print_summary", interrupt_summary)
+
+    with pytest.raises(KeyboardInterrupt, match="summary interrupted"):
+        tool.main(
+            [
+                "--output",
+                str(output),
+                "--case-prefix",
+                "fallback-dual-failure",
+                "--pitch-endpoint",
+                "down",
+                "--reset-zoom",
+                "--settle",
+                "0.001",
+            ]
+        )
+    report_path = output / "reports" / "fallback-dual-failure.camera.json"
+    assert not report_path.exists()
+    assert not Path(f"{report_path}.sha256").exists()
+    assert (
+        output
+        / "reservations"
+        / "fallback-dual-failure.camera-reservation.json"
+    ).exists()
+
+
+def test_release_failure_never_retracts_another_invocation_report(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _passing_frames())
+    report_path = output / "reports" / "lease-race-release.camera.json"
+    digest_path = Path(f"{report_path}.sha256")
+
+    class RacingReleaseFailingLease(_FakeInputLease):
+        def __enter__(self) -> RacingReleaseFailingLease:
+            super().__enter__()
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text("winner-report", encoding="utf-8")
+            digest_path.write_text("winner-digest", encoding="ascii")
+            return self
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: object,
+        ) -> None:
+            del exc_type, exc, traceback
+            raise tool.CameraInputLeaseError("ReleaseMutex failed; process poisoned")
+
+    monkeypatch.setattr(
+        tool,
+        "WindowsCameraInputLease",
+        RacingReleaseFailingLease,
+    )
+
+    assert tool.main(
+        [
+            "--output",
+            str(output),
+            "--case-prefix",
+            "lease-race-release",
+            "--pitch-endpoint",
+            "down",
+            "--reset-zoom",
+        ]
+    ) == 2
+    assert _FakeBackend.constructed == 0
+    assert report_path.read_text(encoding="utf-8") == "winner-report"
+    assert digest_path.read_text(encoding="ascii") == "winner-digest"
 
 
 def test_canonical_production_gated_command_reports_selected_candidates(
@@ -832,6 +1250,122 @@ def test_existing_report_stops_before_capture_or_input(
     assert report.read_text(encoding="utf-8") == "keep"
 
 
+@pytest.mark.parametrize(
+    ("directory", "filename"),
+    [
+        ("frames", "stale-before-normalization.raw"),
+        ("previews", "stale-before-normalization.bmp"),
+        ("drafts", "stale-before-normalization.json"),
+    ],
+)
+def test_stale_case_artifact_stops_before_capture_focus_or_input(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    directory: str,
+    filename: str,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _passing_frames())
+    stale = output / directory / filename
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"prior-private-artifact")
+
+    result = tool.main(
+        [
+            "--output",
+            str(output),
+            "--case-prefix",
+            "stale",
+            "--pitch-endpoint",
+            "down",
+            "--reset-zoom",
+        ]
+    )
+
+    assert result == 2
+    assert _FakeBackend.constructed == 0
+    assert _FakeSource.last is None
+    assert _FakeControl.last is None
+    assert stale.read_bytes() == b"prior-private-artifact"
+    assert not (
+        output / "reservations" / "stale.camera-reservation.json"
+    ).exists()
+
+
+def test_case_prefix_is_permanently_single_use_after_attempt(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _passing_frames())
+    arguments = [
+        "--output",
+        str(output),
+        "--case-prefix",
+        "single-use",
+        "--pitch-endpoint",
+        "down",
+        "--reset-zoom",
+        "--settle",
+        "0.001",
+    ]
+
+    assert tool.main(arguments) == 0
+    reservation = (
+        output / "reservations" / "single-use.camera-reservation.json"
+    )
+    original_reservation = reservation.read_bytes()
+    _FakeBackend.constructed = 0
+    _FakeSource.last = None
+    _FakeControl.last = None
+
+    assert tool.main(arguments) == 2
+    assert _FakeBackend.constructed == 0
+    assert _FakeSource.last is None
+    assert _FakeControl.last is None
+    assert reservation.read_bytes() == original_reservation
+
+
+def test_failed_attempt_permanently_consumes_case_prefix_before_capture(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _passing_frames())
+    construction_attempts = 0
+
+    def fail_backend(*, title_substring: str) -> None:
+        nonlocal construction_attempts
+        del title_substring
+        construction_attempts += 1
+        raise RuntimeError("capture backend construction failed")
+
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", fail_backend)
+    arguments = [
+        "--output",
+        str(output),
+        "--case-prefix",
+        "failed-single-use",
+        "--pitch-endpoint",
+        "down",
+        "--reset-zoom",
+    ]
+
+    assert tool.main(arguments) == 2
+    reservation = (
+        output / "reservations" / "failed-single-use.camera-reservation.json"
+    )
+    original_reservation = reservation.read_bytes()
+    assert construction_attempts == 1
+
+    assert tool.main(arguments) == 2
+    assert construction_attempts == 1
+    assert reservation.read_bytes() == original_reservation
+
+
 @pytest.mark.parametrize("case_prefix", ["../escape", "bad/name", "-leading", "x" * 129])
 def test_unsafe_case_prefix_stops_before_capture_or_file_creation(
     tool: ModuleType,
@@ -904,11 +1438,14 @@ def _install_main_fakes(
     _FakeSource.last = None
     _FakeControl.last = None
     _FakeControl.cleanup_error = None
+    _FakeInputLease.active = False
+    _FakeInputLease.events = None
     monkeypatch.setattr(tool, "_resolve_private_output_root", lambda _path: output)
     monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, clean))
     monkeypatch.setattr(tool, "WindowsCaptureBackend", _FakeBackend)
     monkeypatch.setattr(tool, "CaptureSource", _FakeSource)
     monkeypatch.setattr(tool, "WindowsCameraControl", _FakeControl)
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _FakeInputLease)
     monkeypatch.setattr(tool.time, "sleep", lambda _seconds: None)
 
     def write_draft(

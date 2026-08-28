@@ -16,6 +16,13 @@ from .camera_evaluation import (
     CameraResourceEvaluation,
     evaluate_varrock_east_camera,
 )
+from .camera_input_lease import (
+    CAMERA_INPUT_LEASE_NAME,
+    CameraInputLeaseApi,
+    CameraInputLeaseError,
+    CameraInputLeaseHeldError,
+    WindowsCameraInputLease,
+)
 from .camera_plan import (
     EXPECTED_CLIENT_HEIGHT,
     EXPECTED_CLIENT_WIDTH,
@@ -81,6 +88,7 @@ from .windows_camera import (
 )
 
 __all__ = [
+    "CAMERA_INPUT_LEASE_NAME",
     "EXPECTED_CLIENT_HEIGHT",
     "EXPECTED_CLIENT_WIDTH",
     "MAX_CAMERA_ACTIONS",
@@ -97,6 +105,9 @@ __all__ = [
     "CameraActionReceipt",
     "CameraControl",
     "CameraHoldKey",
+    "CameraInputLeaseApi",
+    "CameraInputLeaseError",
+    "CameraInputLeaseHeldError",
     "CameraInputOperation",
     "CameraInputReceipt",
     "CameraKeyHold",
@@ -138,6 +149,7 @@ __all__ = [
     "WindowsCameraApi",
     "WindowsCameraControl",
     "WindowsCameraError",
+    "WindowsCameraInputLease",
     "camera_validation_report_bytes",
     "evaluate_varrock_east_camera",
     "record_frame_digest",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from types import ModuleType
 
 import pytest
 
@@ -18,12 +19,25 @@ from mining_automation.validation.windows_camera import (
     RealWindowsCameraApi,
     WindowsCameraControl,
     WindowsCameraError,
+    WindowsCameraTargetIdentity,
+    _require_complete_window_title_snapshot,
 )
 
 
 class FakeWindowsCameraApi:
     def __init__(self) -> None:
         self.exists = True
+        self.identity = WindowsCameraTargetIdentity(
+            process_id=456,
+            thread_id=789,
+            class_name="SunAwtFrame",
+            title="RuneLite - Chief Luma",
+        )
+        self.identity_after_focus: WindowsCameraTargetIdentity | None = None
+        self.identity_after_cursor: WindowsCameraTargetIdentity | None = None
+        self.identity_after_key_state: WindowsCameraTargetIdentity | None = None
+        self.identity_after_root: WindowsCameraTargetIdentity | None = None
+        self.identity_after_size: WindowsCameraTargetIdentity | None = None
         self.focus_result = True
         self.foreground: int | None = 123
         self.size = (EXPECTED_CLIENT_WIDTH, EXPECTED_CLIENT_HEIGHT)
@@ -54,10 +68,16 @@ class FakeWindowsCameraApi:
         self.calls.append(("exists", hwnd))
         return self.exists
 
+    def window_identity(self, hwnd: int) -> WindowsCameraTargetIdentity:
+        self.calls.append(("identity", hwnd))
+        return self.identity
+
     def focus_window(self, hwnd: int) -> bool:
         self.calls.append(("focus", hwnd))
         if self.focus_result:
             self.foreground = hwnd
+        if self.identity_after_focus is not None:
+            self.identity = self.identity_after_focus
         return self.focus_result
 
     def foreground_window(self) -> int | None:
@@ -66,6 +86,8 @@ class FakeWindowsCameraApi:
 
     def client_size(self, hwnd: int) -> tuple[int, int]:
         self.calls.append(("size", hwnd))
+        if self.identity_after_size is not None:
+            self.identity = self.identity_after_size
         return self.size
 
     def client_to_screen(self, hwnd: int, x: int, y: int) -> tuple[int, int]:
@@ -80,6 +102,8 @@ class FakeWindowsCameraApi:
             self.size = self.size_after_cursor
         if self.mouse_after_cursor is not None:
             self.mouse_is_down = self.mouse_after_cursor
+        if self.identity_after_cursor is not None:
+            self.identity = self.identity_after_cursor
         if self.cursor_result:
             self.cursor = (
                 self.cursor_after_move
@@ -96,6 +120,8 @@ class FakeWindowsCameraApi:
 
     def root_window_at_point(self, x: int, y: int) -> int | None:
         self.calls.append(("root-at-point", x, y))
+        if self.identity_after_root is not None:
+            self.identity = self.identity_after_root
         return self.root_at_point
 
     def send_mouse_button(self, *, button_up: bool) -> int:
@@ -139,7 +165,18 @@ class FakeWindowsCameraApi:
             self.foreground = self.foreground_after_key_state
         if self.size_after_key_state is not None:
             self.size = self.size_after_key_state
+        if self.identity_after_key_state is not None:
+            self.identity = self.identity_after_key_state
         return result
+
+
+def _replacement_identity() -> WindowsCameraTargetIdentity:
+    return WindowsCameraTargetIdentity(
+        process_id=654,
+        thread_id=987,
+        class_name="ReplacementWindow",
+        title="Not RuneLite",
+    )
 
 
 def test_preflight_focuses_exact_window_and_reports_fresh_geometry() -> None:
@@ -151,10 +188,27 @@ def test_preflight_focuses_exact_window_and_reports_fresh_geometry() -> None:
     assert receipt.supported
     assert api.calls == [
         "dpi",
+        ("identity", 123),
         ("exists", 123),
+        ("identity", 123),
+        "left-button-is-down",
+        ("is-down", 0x11),
+        ("is-down", 0x25),
+        ("is-down", 0x26),
+        ("is-down", 0x27),
+        ("is-down", 0x28),
+        ("identity", 123),
         ("focus", 123),
+        ("identity", 123),
         "foreground",
         ("size", 123),
+        ("identity", 123),
+        "left-button-is-down",
+        ("is-down", 0x11),
+        ("is-down", 0x25),
+        ("is-down", 0x26),
+        ("is-down", 0x27),
+        ("is-down", 0x28),
     ]
 
 
@@ -167,6 +221,227 @@ def test_preflight_fails_closed_when_focus_cannot_be_verified() -> None:
 
     assert not receipt.focused
     assert not receipt.supported
+
+
+@pytest.mark.parametrize(
+    ("expected_class_name", "expected_title", "message"),
+    [
+        ("ReplacementWindow", "RuneLite - Chief Luma", "class no longer matches"),
+        ("SunAwtFrame", "Not RuneLite", "title no longer matches"),
+    ],
+)
+def test_control_rejects_replacement_between_discovery_and_identity_binding(
+    expected_class_name: str,
+    expected_title: str,
+    message: str,
+) -> None:
+    api = FakeWindowsCameraApi()
+
+    with pytest.raises(WindowsCameraError, match=message):
+        WindowsCameraControl(
+            123,
+            api,
+            expected_class_name=expected_class_name,
+            expected_title=expected_title,
+        )
+
+    assert not any(
+        isinstance(item, tuple) and item[0] in {"focus", "mouse", "key", "wheel"}
+        for item in api.calls
+    )
+
+
+@pytest.mark.parametrize("held_key", [None, 0x11, 0x25, 0x26, 0x27, 0x28])
+def test_preflight_proves_every_controlled_global_input_is_released_before_focus(
+    held_key: int | None,
+) -> None:
+    api = FakeWindowsCameraApi()
+    control = WindowsCameraControl(123, api)
+    api.calls.clear()
+    if held_key is None:
+        api.mouse_is_down = True
+    else:
+        api.down_keys.add(held_key)
+
+    with pytest.raises(WindowsCameraError, match="global left button|global keys"):
+        control.preflight()
+
+    assert ("focus", 123) not in api.calls
+    assert not any(
+        isinstance(item, tuple) and item[0] in {"mouse", "key", "wheel"}
+        for item in api.calls
+    )
+
+
+def test_preflight_rechecks_identity_after_global_input_scan_before_focus() -> None:
+    api = FakeWindowsCameraApi()
+    api.identity_after_key_state = _replacement_identity()
+    control = WindowsCameraControl(123, api)
+
+    with pytest.raises(WindowsCameraError, match="window identity changed"):
+        control.preflight()
+
+    assert ("focus", 123) not in api.calls
+
+
+def test_complete_title_snapshot_rejects_same_prefix_growth_race() -> None:
+    with pytest.raises(OSError, match="title changed"):
+        _require_complete_window_title_snapshot(
+            "RuneLite - Chief Luma",
+            expected_length=21,
+            copied_length=21,
+            final_length=27,
+        )
+
+    assert (
+        _require_complete_window_title_snapshot(
+            "RuneLite - Chief Luma",
+            expected_length=21,
+            copied_length=21,
+            final_length=21,
+        )
+        == "RuneLite - Chief Luma"
+    )
+
+
+def test_preflight_rejects_hwnd_reuse_observed_while_focusing() -> None:
+    api = FakeWindowsCameraApi()
+    api.identity_after_focus = _replacement_identity()
+    control = WindowsCameraControl(123, api)
+
+    with pytest.raises(WindowsCameraError, match="window identity changed"):
+        control.preflight()
+
+    assert not any(
+        isinstance(item, tuple) and item[0] in {"mouse", "key", "wheel"}
+        for item in api.calls
+    )
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        WindowsCameraTargetIdentity(
+            457, 789, "SunAwtFrame", "RuneLite - Chief Luma"
+        ),
+        WindowsCameraTargetIdentity(
+            456, 790, "SunAwtFrame", "RuneLite - Chief Luma"
+        ),
+        WindowsCameraTargetIdentity(
+            456, 789, "ReplacementWindow", "RuneLite - Chief Luma"
+        ),
+        WindowsCameraTargetIdentity(456, 789, "SunAwtFrame", "Not RuneLite"),
+    ],
+    ids=["process", "thread", "class", "title"],
+)
+@pytest.mark.parametrize("method", ["click", "key", "wheel"])
+def test_each_input_rejects_reused_hwnd_with_unchanged_focus_and_geometry(
+    replacement: WindowsCameraTargetIdentity,
+    method: str,
+) -> None:
+    api = FakeWindowsCameraApi()
+    control = WindowsCameraControl(123, api)
+    api.identity = replacement
+
+    with pytest.raises(WindowsCameraError, match="window identity changed"):
+        if method == "click":
+            control.click_compass(608, 49)
+        elif method == "key":
+            control.key_down("right")
+        else:
+            control.scroll_camera(400, 50, 1)
+
+    assert api.exists
+    assert api.foreground == 123
+    assert api.size == (EXPECTED_CLIENT_WIDTH, EXPECTED_CLIENT_HEIGHT)
+    assert not any(
+        isinstance(item, tuple) and item[0] in {"mouse", "key", "wheel"}
+        for item in api.calls
+    )
+
+
+@pytest.mark.parametrize("method", ["click", "key", "wheel"])
+def test_each_input_rejects_hwnd_reuse_during_unchanged_geometry_check(
+    method: str,
+) -> None:
+    api = FakeWindowsCameraApi()
+    api.identity_after_size = _replacement_identity()
+    control = WindowsCameraControl(123, api)
+
+    with pytest.raises(WindowsCameraError, match="window identity changed"):
+        if method == "click":
+            control.click_compass(608, 49)
+        elif method == "key":
+            control.key_down("right")
+        else:
+            control.scroll_camera(400, 50, 1)
+
+    assert api.size == (EXPECTED_CLIENT_WIDTH, EXPECTED_CLIENT_HEIGHT)
+    assert not any(
+        isinstance(item, tuple) and item[0] in {"mouse", "key", "wheel", "cursor"}
+        for item in api.calls
+    )
+
+
+@pytest.mark.parametrize("method", ["click", "wheel"])
+def test_pointer_input_rejects_hwnd_reuse_after_cursor_move_without_send_input(
+    method: str,
+) -> None:
+    api = FakeWindowsCameraApi()
+    api.identity_after_cursor = _replacement_identity()
+    control = WindowsCameraControl(123, api)
+
+    with pytest.raises(WindowsCameraError, match="window identity changed"):
+        if method == "click":
+            control.click_compass(608, 49)
+        else:
+            control.scroll_camera(400, 50, 1)
+
+    assert any(
+        isinstance(item, tuple) and item[0] == "cursor" for item in api.calls
+    )
+    assert not any(
+        isinstance(item, tuple) and item[0] in {"mouse", "key", "wheel"}
+        for item in api.calls
+    )
+
+
+def test_key_input_rejects_hwnd_reuse_after_key_state_query_without_send_input() -> None:
+    api = FakeWindowsCameraApi()
+    api.identity_after_key_state = _replacement_identity()
+    control = WindowsCameraControl(123, api)
+
+    with pytest.raises(WindowsCameraError, match="window identity changed"):
+        control.key_down("right")
+
+    assert ("is-down", 0x27) in api.calls
+    assert not any(
+        isinstance(item, tuple) and item[0] == "key" for item in api.calls
+    )
+
+
+@pytest.mark.parametrize("method", ["click", "wheel"])
+def test_pointer_input_rejects_hwnd_reuse_after_root_check_without_send_input(
+    method: str,
+) -> None:
+    api = FakeWindowsCameraApi()
+    api.identity_after_root = _replacement_identity()
+    control = WindowsCameraControl(123, api)
+
+    with pytest.raises(WindowsCameraError, match="window identity changed"):
+        if method == "click":
+            control.click_compass(608, 49)
+        else:
+            control.scroll_camera(400, 50, 1)
+
+    assert any(
+        isinstance(item, tuple) and item[0] == "root-at-point"
+        for item in api.calls
+    )
+    assert not any(
+        isinstance(item, tuple) and item[0] in {"mouse", "wheel"}
+        for item in api.calls
+    )
 
 
 def test_compass_click_uses_client_to_screen_and_exact_event_counts() -> None:
@@ -261,7 +536,7 @@ def test_plan_runner_never_releases_preexisting_control_key() -> None:
     control = WindowsCameraControl(123, api)
     plan = CameraPlan("reset", (ResetZoomKey("control"),))
 
-    with pytest.raises(WindowsCameraError, match="already held"):
+    with pytest.raises(WindowsCameraError, match="global keys are held"):
         CameraPlanRunner(control, lambda _seconds: None).run(plan)
 
     assert 0x11 in api.down_keys
@@ -689,7 +964,7 @@ def test_adapter_rejects_nonreviewed_pointer_coordinates_before_input(
         else:
             control.scroll_camera(x, y, 1)
 
-    assert api.calls == ["dpi"]
+    assert api.calls == ["dpi", ("identity", 123)]
 
 
 def test_cursor_move_failure_aborts_before_click() -> None:
@@ -830,6 +1105,25 @@ def test_real_api_rejects_non_windows_before_loading_win32(monkeypatch: pytest.M
 
     with pytest.raises(RuntimeError, match="requires Windows"):
         RealWindowsCameraApi()
+
+
+def test_real_api_materializes_stable_window_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module_name = "mining_automation.validation._camera_win32_calls"
+    calls = ModuleType(module_name)
+    calls.window_identity = lambda hwnd: (456, 789, "SunAwtFrame", f"RuneLite {hwnd}")  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module_name, calls)
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    identity = RealWindowsCameraApi().window_identity(123)
+
+    assert identity == WindowsCameraTargetIdentity(
+        process_id=456,
+        thread_id=789,
+        class_name="SunAwtFrame",
+        title="RuneLite 123",
+    )
 
 
 @pytest.mark.parametrize("hwnd", [0, -1, True, 1.5])

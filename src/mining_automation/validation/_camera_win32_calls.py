@@ -25,6 +25,7 @@ from .camera_coordinates import (
     map_logical_client_point,
     require_exact_round_trip,
 )
+from .windows_camera import _require_complete_window_title_snapshot
 
 
 def _load_dll(name: str) -> Any:  # noqa: ANN401 - ctypes DLL handles are untyped
@@ -129,6 +130,17 @@ class _BITMAPINFO(ctypes.Structure):
 
 _user32.IsWindow.restype = wintypes.BOOL
 _user32.IsWindow.argtypes = [wintypes.HWND]
+_user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+_user32.GetWindowThreadProcessId.argtypes = [
+    wintypes.HWND,
+    ctypes.POINTER(wintypes.DWORD),
+]
+_user32.GetWindowTextLengthW.restype = ctypes.c_int
+_user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+_user32.GetWindowTextW.restype = ctypes.c_int
+_user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+_user32.GetClassNameW.restype = ctypes.c_int
+_user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
 _user32.SetForegroundWindow.restype = wintypes.BOOL
 _user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 _user32.GetForegroundWindow.restype = wintypes.HWND
@@ -250,6 +262,60 @@ def declare_dpi_awareness() -> None:
 
 def is_window(hwnd: int) -> bool:
     return bool(_user32.IsWindow(hwnd))
+
+
+def window_identity(hwnd: int) -> tuple[int, int, str, str]:
+    """Read stable owner/class/title facts for one live HWND.
+
+    The owner is sampled on both sides of the metadata reads.  This is not an
+    OS-level atomic transaction, but it rejects a handle replacement observed
+    while the identity snapshot is being assembled.  The control rechecks the
+    complete snapshot at every input-readiness boundary.
+    """
+
+    if not is_window(hwnd):
+        raise OSError("target RuneLite window no longer exists")
+    owner_before = _window_owner(hwnd)
+    class_name = _window_class_name(hwnd)
+    title = _window_title(hwnd)
+    owner_after = _window_owner(hwnd)
+    if owner_after != owner_before or not is_window(hwnd):
+        raise OSError("target RuneLite window identity changed while being read")
+    process_id, thread_id = owner_before
+    return process_id, thread_id, class_name, title
+
+
+def _window_owner(hwnd: int) -> tuple[int, int]:
+    process_id = wintypes.DWORD()
+    thread_id = int(
+        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+    )
+    if thread_id <= 0 or process_id.value <= 0:
+        raise OSError("GetWindowThreadProcessId failed for the target RuneLite window")
+    return int(process_id.value), thread_id
+
+
+def _window_class_name(hwnd: int) -> str:
+    buffer = ctypes.create_unicode_buffer(256)
+    copied = int(_user32.GetClassNameW(hwnd, buffer, len(buffer)))
+    if copied <= 0:
+        raise OSError("GetClassNameW failed for the target RuneLite window")
+    return str(buffer.value)
+
+
+def _window_title(hwnd: int) -> str:
+    expected_length = int(_user32.GetWindowTextLengthW(hwnd))
+    if expected_length <= 0:
+        raise OSError("target RuneLite window has no readable title")
+    buffer = ctypes.create_unicode_buffer(expected_length + 1)
+    copied = int(_user32.GetWindowTextW(hwnd, buffer, len(buffer)))
+    final_length = int(_user32.GetWindowTextLengthW(hwnd))
+    return _require_complete_window_title_snapshot(
+        str(buffer.value),
+        expected_length=expected_length,
+        copied_length=copied,
+        final_length=final_length,
+    )
 
 
 def focus_window(hwnd: int) -> bool:

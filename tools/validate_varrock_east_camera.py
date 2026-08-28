@@ -12,10 +12,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,10 @@ from mining_automation.capture.windows import (  # noqa: E402
 )
 from mining_automation.perception import write_resource_fixture_draft  # noqa: E402
 from mining_automation.validation.camera_evaluation import CameraEvaluation  # noqa: E402
+from mining_automation.validation.camera_input_lease import (  # noqa: E402
+    CameraInputLeaseError,
+    WindowsCameraInputLease,
+)
 from mining_automation.validation.camera_plan import (  # noqa: E402
     MAX_CAMERA_WHEEL_DETENTS,
     MAX_KEY_HOLD_SECONDS,
@@ -67,6 +73,13 @@ from mining_automation.validation.windows_camera import (  # noqa: E402
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _COMPASS_POINT = REVIEWED_COMPASS_POINT
 _CAMERA_WHEEL_POINT = REVIEWED_CAMERA_WHEEL_POINT
+
+
+@dataclass(slots=True)
+class _ReportPublicationState:
+    published_by_this_invocation: bool = False
+
+
 _MINIMUM_SATURATION_DETENTS = 80
 _DEFAULT_PITCH_HOLD_S = 3.0
 _DEFAULT_PERTURB_HOLD_S = 0.75
@@ -151,7 +164,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("diagnostics/issue31-camera-reacquisition"),
         help="private diagnostics root",
     )
-    parser.add_argument("--case-prefix", help="unique artifact/report prefix")
+    parser.add_argument(
+        "--case-prefix",
+        help="permanently single-use artifact/report prefix",
+    )
     parser.add_argument(
         "--title",
         default=DEFAULT_TITLE_SUBSTRING,
@@ -498,13 +514,101 @@ def _report_paths(output_root: Path, case_prefix: str) -> tuple[Path, Path]:
     return report, report.with_name(f"{report.name}.sha256")
 
 
-def _preflight_report_targets(report_path: Path, digest_path: Path) -> None:
-    """Reject known report collisions before capture or global input."""
+def _case_reservation_path(output_root: Path, case_prefix: str) -> Path:
+    return (
+        output_root
+        / "reservations"
+        / f"{case_prefix}.camera-reservation.json"
+    )
 
-    if report_path.exists():
-        raise FileExistsError(report_path)
-    if digest_path.exists():
-        raise FileExistsError(digest_path)
+
+def _case_namespace_artifacts(
+    output_root: Path,
+    case_prefix: str,
+    report_path: Path,
+    digest_path: Path,
+) -> tuple[Path, ...]:
+    """Return every existing path owned by a case-prefix namespace."""
+
+    candidates = [
+        report_path,
+        digest_path,
+        _case_reservation_path(output_root, case_prefix),
+    ]
+    patterns = (
+        ("frames", f"{case_prefix}-*.raw"),
+        ("previews", f"{case_prefix}-*.bmp"),
+        ("drafts", f"{case_prefix}-*.json"),
+    )
+    for directory, pattern in patterns:
+        candidates.extend(sorted((output_root / directory).glob(pattern)))
+    return tuple(path for path in candidates if path.exists())
+
+
+def _preflight_case_namespace(
+    output_root: Path,
+    case_prefix: str,
+    report_path: Path,
+    digest_path: Path,
+) -> None:
+    """Reject any previously used case-prefix before capture or input."""
+
+    existing = _case_namespace_artifacts(
+        output_root,
+        case_prefix,
+        report_path,
+        digest_path,
+    )
+    if existing:
+        raise FileExistsError(existing[0])
+
+
+def _reserve_case_namespace(
+    output_root: Path,
+    case_prefix: str,
+    report_path: Path,
+    digest_path: Path,
+    *,
+    git_head_sha: str,
+) -> Path:
+    """Durably make a case prefix single-use while the input lease is held."""
+
+    _preflight_case_namespace(
+        output_root,
+        case_prefix,
+        report_path,
+        digest_path,
+    )
+    reservation_path = _case_reservation_path(output_root, case_prefix)
+    reservation_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "case_prefix": case_prefix,
+        "git_head_sha": git_head_sha,
+        "owner": "validate_varrock_east_camera.py",
+        "schema_version": 1,
+    }
+    with reservation_path.open("xb") as reservation:
+        reservation.write(
+            (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        )
+        reservation.flush()
+        os.fsync(reservation.fileno())
+    return reservation_path
+
+
+def _retract_report_targets_after_lease_failure(
+    report_path: Path,
+    digest_path: Path,
+) -> tuple[str, ...]:
+    """Remove only this run's newly published canonical report artifacts."""
+
+    errors: list[str] = []
+    for path in (digest_path, report_path):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            errors.append(f"could not retract {path}: {exc}")
+    return tuple(errors)
 
 
 def _exact_command_argv(command_args: list[str]) -> tuple[str, ...]:
@@ -896,85 +1000,23 @@ def _print_summary(
     print(f"Report SHA-256: {report_sha256}")
 
 
-def main(argv: list[str] | None = None) -> int:
-    command_args = list(sys.argv[1:] if argv is None else argv)
-    args = build_parser().parse_args(command_args)
-    try:
-        _validate_cli_text("--title", args.title)
-        _validate_cli_text("--plan-id", args.plan_id)
-        _validate_cli_text("--plan-version", args.plan_version)
-        command_argv = _exact_command_argv(command_args)
-        _validate_command_argv(command_argv)
-        strategy_id, strategy_version = _strategy_identity(args)
-        normalization_candidates = _build_normalization_candidates(args)
-        perturbation_plans = _build_perturbation_plans(args)
-    except (ValueError, CameraPlanError) as exc:
-        print(f"Invalid camera plan: {exc}", file=sys.stderr)
-        return 2
-
-    if args.dry_run:
-        dry_run_payload: dict[str, Any] = {
-            "normalization_strategy": {
-                "id": strategy_id,
-                "version": strategy_version,
-                "selection_authority": (
-                    "unchanged_production_camera_evaluation"
-                ),
-                "diagnostic_registration_used": False,
-            },
-            "normalization_candidates": [
-                {
-                    "index_1_based": index,
-                    **_plan_dict(plan),
-                }
-                for index, plan in enumerate(
-                    normalization_candidates,
-                    start=1,
-                )
-            ],
-            "perturbations": [_plan_dict(plan) for plan in perturbation_plans],
-            "worst_case_bounds": _worst_case_bounds(
-                normalization_candidates,
-                perturbation_plans,
-                confirmations=args.confirmations,
-            ),
-        }
-        if len(normalization_candidates) == 1:
-            # Compatibility alias for the original single-plan dry-run shape.
-            dry_run_payload["normalization"] = _plan_dict(
-                normalization_candidates[0]
-            )
-        print(
-            json.dumps(
-                dry_run_payload,
-                indent=2,
-                sort_keys=True,
-            )
-        )
-        return 0
-
-    try:
-        case_prefix = _validate_case_prefix(
-            args.case_prefix if args.case_prefix is not None else _default_case_prefix()
-        )
-    except ValueError as exc:
-        print(f"Invalid camera plan: {exc}", file=sys.stderr)
-        return 2
-    try:
-        output_root = _resolve_private_output_root(args.output)
-        report_path, digest_path = _report_paths(output_root, case_prefix)
-        _preflight_report_targets(report_path, digest_path)
-        git_head_before, tracked_clean_before = _git_state()
-    except (FileExistsError, OSError, subprocess.CalledProcessError, ValueError) as exc:
-        print(f"Cannot establish Git provenance: {exc}", file=sys.stderr)
-        return 2
-    if not tracked_clean_before and not args.allow_dirty:
-        print(
-            "Refusing camera input with worktree changes; commit first or use "
-            "--allow-dirty for non-release development evidence.",
-            file=sys.stderr,
-        )
-        return 2
+def _run_live_validation(
+    args: argparse.Namespace,
+    *,
+    output_root: Path,
+    report_path: Path,
+    digest_path: Path,
+    case_prefix: str,
+    git_head_before: str,
+    tracked_clean_before: bool,
+    strategy_id: str,
+    strategy_version: str,
+    command_argv: tuple[str, ...],
+    normalization_candidates: tuple[CameraPlan, ...],
+    perturbation_plans: tuple[CameraPlan, ...],
+    publication_state: _ReportPublicationState,
+) -> int:
+    """Run capture through report publication while the caller owns the lease."""
 
     backend: WindowsCaptureBackend | None = None
     source: CaptureSource | None = None
@@ -984,6 +1026,18 @@ def main(argv: list[str] | None = None) -> int:
     unhandled_error: BaseException | None = None
     cleanup_errors: list[str] = []
     try:
+        # The first check happens before taking the machine-global lease for a
+        # cheap deterministic refusal. While holding the lease, recheck every
+        # legacy artifact location and durably reserve the complete prefix.
+        # Reservations are permanent: even a failed attempt makes its prefix
+        # single-use, so no retry can collide only after camera input begins.
+        _reserve_case_namespace(
+            output_root,
+            case_prefix,
+            report_path,
+            digest_path,
+            git_head_sha=git_head_before,
+        )
         backend = WindowsCaptureBackend(title_substring=args.title)
         source = CaptureSource(backend, max_consecutive_failures=1)
         source.open()
@@ -1001,7 +1055,11 @@ def main(argv: list[str] | None = None) -> int:
             plan_id=strategy_id,
             plan_version=strategy_version,
         )
-        control = WindowsCameraControl(selected.hwnd)
+        control = WindowsCameraControl(
+            selected.hwnd,
+            expected_class_name=selected.class_name,
+            expected_title=selected.title,
+        )
         result = run_camera_validation_session(
             source,
             control,
@@ -1088,6 +1146,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             provenance,
         )
+        publication_state.published_by_this_invocation = True
     except (FileExistsError, OSError, TypeError, ValueError) as exc:
         print(f"Cannot write camera-validation report: {exc}", file=sys.stderr)
         return 2
@@ -1101,6 +1160,148 @@ def main(argv: list[str] | None = None) -> int:
         git_head_sha=git_head_before,
     )
     return 0 if camera_evidence_eligible else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    command_args = list(sys.argv[1:] if argv is None else argv)
+    args = build_parser().parse_args(command_args)
+    try:
+        _validate_cli_text("--title", args.title)
+        _validate_cli_text("--plan-id", args.plan_id)
+        _validate_cli_text("--plan-version", args.plan_version)
+        command_argv = _exact_command_argv(command_args)
+        _validate_command_argv(command_argv)
+        strategy_id, strategy_version = _strategy_identity(args)
+        normalization_candidates = _build_normalization_candidates(args)
+        perturbation_plans = _build_perturbation_plans(args)
+    except (ValueError, CameraPlanError) as exc:
+        print(f"Invalid camera plan: {exc}", file=sys.stderr)
+        return 2
+
+    if args.dry_run:
+        dry_run_payload: dict[str, Any] = {
+            "normalization_strategy": {
+                "id": strategy_id,
+                "version": strategy_version,
+                "selection_authority": (
+                    "unchanged_production_camera_evaluation"
+                ),
+                "diagnostic_registration_used": False,
+            },
+            "normalization_candidates": [
+                {
+                    "index_1_based": index,
+                    **_plan_dict(plan),
+                }
+                for index, plan in enumerate(
+                    normalization_candidates,
+                    start=1,
+                )
+            ],
+            "perturbations": [_plan_dict(plan) for plan in perturbation_plans],
+            "worst_case_bounds": _worst_case_bounds(
+                normalization_candidates,
+                perturbation_plans,
+                confirmations=args.confirmations,
+            ),
+        }
+        if len(normalization_candidates) == 1:
+            # Compatibility alias for the original single-plan dry-run shape.
+            dry_run_payload["normalization"] = _plan_dict(
+                normalization_candidates[0]
+            )
+        print(
+            json.dumps(
+                dry_run_payload,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    try:
+        case_prefix = _validate_case_prefix(
+            args.case_prefix if args.case_prefix is not None else _default_case_prefix()
+        )
+    except ValueError as exc:
+        print(f"Invalid camera plan: {exc}", file=sys.stderr)
+        return 2
+    try:
+        output_root = _resolve_private_output_root(args.output)
+        report_path, digest_path = _report_paths(output_root, case_prefix)
+        _preflight_case_namespace(
+            output_root,
+            case_prefix,
+            report_path,
+            digest_path,
+        )
+        git_head_before, tracked_clean_before = _git_state()
+    except (FileExistsError, OSError, subprocess.CalledProcessError, ValueError) as exc:
+        print(f"Cannot establish Git provenance: {exc}", file=sys.stderr)
+        return 2
+    if not tracked_clean_before and not args.allow_dirty:
+        print(
+            "Refusing camera input with worktree changes; commit first or use "
+            "--allow-dirty for non-release development evidence.",
+            file=sys.stderr,
+        )
+        return 2
+
+    lease = WindowsCameraInputLease()
+    lease_entered = False
+    publication_state = _ReportPublicationState()
+    try:
+        with lease:
+            lease_entered = True
+            return _run_live_validation(
+                args,
+                output_root=output_root,
+                report_path=report_path,
+                digest_path=digest_path,
+                case_prefix=case_prefix,
+                git_head_before=git_head_before,
+                tracked_clean_before=tracked_clean_before,
+                strategy_id=strategy_id,
+                strategy_version=strategy_version,
+                command_argv=command_argv,
+                normalization_candidates=normalization_candidates,
+                perturbation_plans=perturbation_plans,
+                publication_state=publication_state,
+            )
+    except CameraInputLeaseError as exc:
+        retraction_errors: tuple[str, ...] = ()
+        if (
+            lease_entered
+            and lease.acquired
+            and publication_state.published_by_this_invocation
+        ):
+            # A failed ReleaseMutex leaves ownership indeterminate. Canonical
+            # evidence may have been published while the lease was still held;
+            # retract it so no apparently eligible report survives that gate.
+            retraction_errors = _retract_report_targets_after_lease_failure(
+                report_path,
+                digest_path,
+            )
+        print(f"Camera validation lease unavailable: {exc}", file=sys.stderr)
+        if retraction_errors:
+            print("; ".join(retraction_errors), file=sys.stderr)
+        return 2
+    except BaseException as exc:
+        # Defensive fallback for an alternate/faulty context-manager boundary
+        # that preserves a body exception despite failed lease release. The
+        # real lease raises CameraInputLeaseError in this state, but canonical
+        # evidence must never survive whenever ownership is still retained.
+        if (
+            lease_entered
+            and lease.acquired
+            and publication_state.published_by_this_invocation
+        ):
+            for retraction_error in _retract_report_targets_after_lease_failure(
+                report_path,
+                digest_path,
+            ):
+                exc.add_note(retraction_error)
+        raise
 
 
 if __name__ == "__main__":
