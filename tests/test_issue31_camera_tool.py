@@ -156,6 +156,10 @@ def test_yaw_and_pitch_offsets_follow_settle_and_precede_zoom(
         "arming_settle_s": 0.05,
         "post_move_settle_s": 0.05,
         "final_move_settle_included": True,
+        "post_release_settle_s": 0.05,
+        "post_release_verification": (
+            "middle_up_focus_geometry_cursor_and_target_root"
+        ),
     }
     assert tool._plan_input_event_count(plan) == 126
 
@@ -727,11 +731,18 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
         "drag_arming_settle_s": 0.05,
         "drag_post_move_settle_s": 0.05,
         "drag_final_move_settle_included": True,
+        "drag_post_release_settle_s": 0.05,
+        "drag_post_release_verification": (
+            "middle_up_focus_geometry_cursor_and_target_root"
+        ),
         "post_compass_settle_s": 0.5,
         "zoom_mode": "reset_key",
         "zoom_saturate_detents": None,
         "zoom_offset_detents": 0,
         "wheel_delivery": "paced_individual_detents",
+        "wheel_pointer_button_gate": (
+            "left_and_middle_before_and_after_relocation"
+        ),
         "wheel_event_interval_s": 0.025,
         "diagnostics_can_override_production": False,
     }
@@ -752,6 +763,10 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
             "path": [[204, 600], [208, 600]],
             "pixels": 8,
             "post_move_settle_s": 0.05,
+            "post_release_settle_s": 0.05,
+            "post_release_verification": (
+                "middle_up_focus_geometry_cursor_and_target_root"
+            ),
             "reviewed_open_viewport": {
                 "left": 0,
                 "top": 34,

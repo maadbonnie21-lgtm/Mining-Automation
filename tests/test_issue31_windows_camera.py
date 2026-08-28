@@ -15,6 +15,7 @@ from mining_automation.validation import (
 )
 from mining_automation.validation.windows_camera import (
     CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+    CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS,
     CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
     COMPASS_CLICK_DWELL_SECONDS,
     RealWindowsCameraApi,
@@ -53,6 +54,7 @@ class FakeWindowsCameraApi:
         self.foreground_after_cursor: int | None = None
         self.size_after_cursor: tuple[int, int] | None = None
         self.mouse_after_cursor: bool | None = None
+        self.middle_after_cursor: bool | None = None
         self.foreground_after_key_state: int | None = None
         self.size_after_key_state: tuple[int, int] | None = None
         self.mouse_down_results: list[int | BaseException] = []
@@ -65,6 +67,7 @@ class FakeWindowsCameraApi:
         self.down_keys: set[int] = set()
         self.mouse_is_down = False
         self.middle_mouse_is_down = False
+        self.defer_middle_up_observation = False
         self.calls: list[object] = []
 
     def declare_dpi_awareness(self) -> None:
@@ -110,6 +113,8 @@ class FakeWindowsCameraApi:
             self.size = self.size_after_cursor
         if self.mouse_after_cursor is not None:
             self.mouse_is_down = self.mouse_after_cursor
+        if self.middle_after_cursor is not None:
+            self.middle_mouse_is_down = self.middle_after_cursor
         if self.identity_after_cursor is not None:
             self.identity = self.identity_after_cursor
         if self.cursor_result:
@@ -152,7 +157,9 @@ class FakeWindowsCameraApi:
         result = results.pop(0) if results else 1
         if isinstance(result, BaseException):
             raise result
-        if result == 1:
+        if result == 1 and not (
+            button_up and self.defer_middle_up_observation
+        ):
             self.middle_mouse_is_down = not button_up
         return result
 
@@ -720,6 +727,7 @@ def test_wheel_rejects_invalid_individual_event_count() -> None:
         ("focus", "lost foreground focus"),
         ("geometry", "geometry changed"),
         ("button", "left button is already held"),
+        ("middle", "middle button is already held"),
         ("overlay", "covered by another top-level window"),
     ],
 )
@@ -736,6 +744,8 @@ def test_wheel_revalidates_safety_between_paced_detents(
             api.size = (EXPECTED_CLIENT_WIDTH - 1, EXPECTED_CLIENT_HEIGHT)
         elif mutation == "button":
             api.mouse_is_down = True
+        elif mutation == "middle":
+            api.middle_mouse_is_down = True
         else:
             api.root_at_point = 999
 
@@ -760,6 +770,32 @@ def test_wheel_recomputes_screen_point_after_each_pacing_interval() -> None:
     assert receipt.complete
     assert ("cursor", 420, 80) in api.calls
     assert ("cursor", 520, 280) in api.calls
+
+
+def test_wheel_never_relocates_cursor_while_middle_button_is_down() -> None:
+    api = FakeWindowsCameraApi()
+    api.middle_mouse_is_down = True
+    control = WindowsCameraControl(123, api, wheel_sleeper=lambda _duration: None)
+
+    with pytest.raises(WindowsCameraError, match="middle button is already held"):
+        control.scroll_camera(400, 50, 1)
+
+    assert not any(
+        isinstance(call, tuple) and call[0] in {"cursor", "wheel"}
+        for call in api.calls
+    )
+
+
+def test_wheel_rechecks_middle_button_after_cursor_relocation() -> None:
+    api = FakeWindowsCameraApi()
+    api.middle_after_cursor = True
+    control = WindowsCameraControl(123, api, wheel_sleeper=lambda _duration: None)
+
+    with pytest.raises(WindowsCameraError, match="middle button is already held"):
+        control.scroll_camera(400, 50, 1)
+
+    assert ("cursor", 420, 80) in api.calls
+    assert ("wheel", 1) not in api.calls
 
 
 def test_middle_drag_preflights_and_executes_exact_logical_path() -> None:
@@ -794,7 +830,13 @@ def test_middle_drag_preflights_and_executes_exact_logical_path() -> None:
         ("middle", False),
         ("middle", True),
     ]
-    assert sleeps == [CAMERA_DRAG_STEP_INTERVAL_SECONDS] * 4
+    assert sleeps == [
+        CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+        CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+        CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+        CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+        CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS,
+    ]
     assert not api.middle_mouse_is_down
 
 
@@ -853,7 +895,11 @@ def test_middle_drag_rechecks_destination_root_before_held_cursor_move() -> None
         call for call in api.calls if isinstance(call, tuple) and call[0] == "cursor"
     ] == [("cursor", 220, 630)]
     assert ("middle", False) in api.calls
-    assert api.calls[-1] == ("middle", True)
+    assert [
+        call
+        for call in api.calls
+        if isinstance(call, tuple) and call[0] == "middle"
+    ][-1] == ("middle", True)
     assert not api.middle_mouse_is_down
 
 
@@ -891,7 +937,11 @@ def test_middle_drag_revalidates_safety_after_arming_settle(
         control.drag_camera(200, 600, 8, 0)
 
     assert ("middle", False) in api.calls
-    assert api.calls[-1] == ("middle", True)
+    assert [
+        call
+        for call in api.calls
+        if isinstance(call, tuple) and call[0] == "middle"
+    ][-1] == ("middle", True)
     assert not api.middle_mouse_is_down
 
 
@@ -988,7 +1038,11 @@ def test_middle_drag_path_cursor_readback_failure_releases_middle() -> None:
         control.drag_camera(200, 600, 8, 0)
 
     assert ("middle", False) in api.calls
-    assert api.calls[-1] == ("middle", True)
+    assert [
+        call
+        for call in api.calls
+        if isinstance(call, tuple) and call[0] == "middle"
+    ][-1] == ("middle", True)
     assert not api.middle_mouse_is_down
 
 
@@ -1001,7 +1055,7 @@ def test_middle_drag_short_down_skips_motion_and_returns_fail_closed_receipt() -
     receipts = control.drag_camera(200, 600, 8, 0)
 
     assert tuple(receipt.completed_events for receipt in receipts) == (0, 0, 1)
-    assert sleeps == []
+    assert sleeps == [CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS]
     assert [
         call for call in api.calls if isinstance(call, tuple) and call[0] == "cursor"
     ] == [("cursor", 220, 630)]
@@ -1016,7 +1070,11 @@ def test_middle_drag_down_exception_still_attempts_compensating_up() -> None:
     with pytest.raises(OSError, match="middle down failed"):
         control.drag_camera(200, 600, 8, 0)
 
-    assert api.calls[-2:] == [("middle", False), ("middle", True)]
+    assert [
+        call
+        for call in api.calls
+        if isinstance(call, tuple) and call[0] == "middle"
+    ] == [("middle", False), ("middle", True)]
     assert not api.middle_mouse_is_down
 
 
@@ -1047,6 +1105,101 @@ def test_middle_drag_short_up_remains_owned_for_lifecycle_cleanup() -> None:
     api.middle_up_results = [1]
     assert control.release_all_held_keys() == ()
     assert not api.middle_mouse_is_down
+
+
+def test_middle_drag_waits_for_observable_release_before_returning() -> None:
+    api = FakeWindowsCameraApi()
+    api.defer_middle_up_observation = True
+    sleeps: list[float] = []
+
+    def observe_release_after_settle(duration_s: float) -> None:
+        sleeps.append(duration_s)
+        if api.calls[-1] == ("middle", True):
+            api.middle_mouse_is_down = False
+
+    control = WindowsCameraControl(
+        123,
+        api,
+        drag_sleeper=observe_release_after_settle,
+    )
+
+    receipts = control.drag_camera(200, 600, 4, 0)
+
+    assert all(receipt.complete for receipt in receipts)
+    assert sleeps[-1] == CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS
+    assert not api.middle_mouse_is_down
+    assert control.release_all_held_keys() == ()
+    assert [
+        call
+        for call in api.calls
+        if isinstance(call, tuple) and call[0] == "middle"
+    ] == [("middle", False), ("middle", True)]
+
+
+def test_unobservable_middle_release_fails_closed_and_retains_ownership() -> None:
+    api = FakeWindowsCameraApi()
+    api.defer_middle_up_observation = True
+    sleeps: list[float] = []
+    control = WindowsCameraControl(123, api, drag_sleeper=sleeps.append)
+
+    with pytest.raises(WindowsCameraError, match="release was not observable"):
+        control.drag_camera(200, 600, 4, 0)
+
+    assert sleeps[-1] == CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS
+    assert api.middle_mouse_is_down
+    api.defer_middle_up_observation = False
+    assert control.release_all_held_keys() == ()
+    assert not api.middle_mouse_is_down
+    assert [
+        call
+        for call in api.calls
+        if isinstance(call, tuple) and call[0] == "middle"
+    ][-2:] == [("middle", True), ("middle", True)]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("focus", "lost foreground focus"),
+        ("geometry", "geometry changed"),
+        ("cursor", "cursor moved during its post-release settle"),
+        ("overlay", "covered by another top-level window"),
+    ],
+)
+def test_middle_drag_revalidates_final_endpoint_after_release_settle(
+    mutation: str,
+    message: str,
+) -> None:
+    api = FakeWindowsCameraApi()
+    mutated = False
+
+    def mutate_after_release(_duration_s: float) -> None:
+        nonlocal mutated
+        if api.calls[-1] != ("middle", True) or mutated:
+            return
+        mutated = True
+        if mutation == "focus":
+            api.foreground = 999
+        elif mutation == "geometry":
+            api.size = (EXPECTED_CLIENT_WIDTH - 1, EXPECTED_CLIENT_HEIGHT)
+        elif mutation == "cursor":
+            api.cursor = (0, 0)
+        else:
+            api.foreign_root_points.add((224, 630))
+
+    control = WindowsCameraControl(123, api, drag_sleeper=mutate_after_release)
+
+    with pytest.raises(WindowsCameraError, match=message):
+        control.drag_camera(200, 600, 4, 0)
+
+    assert api.calls.count(("middle", True)) == 1
+    assert not api.middle_mouse_is_down
+    api.foreground = 123
+    api.size = (EXPECTED_CLIENT_WIDTH, EXPECTED_CLIENT_HEIGHT)
+    api.cursor = (224, 630)
+    api.foreign_root_points.clear()
+    assert control.release_all_held_keys() == ()
+    assert api.calls.count(("middle", True)) == 2
 
 
 def test_partial_mouse_click_retries_button_up_until_released() -> None:

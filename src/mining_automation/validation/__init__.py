@@ -88,6 +88,7 @@ from .camera_session import (
 )
 from .windows_camera import (
     CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+    CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS,
     CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
     COMPASS_CLICK_DWELL_SECONDS,
     RealWindowsCameraApi,
@@ -161,6 +162,7 @@ __all__ = [
     "CameraTrialResult",
     "CAMERA_WHEEL_EVENT_INTERVAL_SECONDS",
     "CAMERA_DRAG_STEP_INTERVAL_SECONDS",
+    "CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS",
     "COMPASS_CLICK_DWELL_SECONDS",
     "RealWindowsCameraApi",
     "WindowsCameraApi",

@@ -31,6 +31,7 @@ from .camera_plan import (
 __all__ = [
     "RealWindowsCameraApi",
     "CAMERA_DRAG_STEP_INTERVAL_SECONDS",
+    "CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS",
     "CAMERA_WHEEL_EVENT_INTERVAL_SECONDS",
     "COMPASS_CLICK_DWELL_SECONDS",
     "WindowsCameraTargetIdentity",
@@ -41,6 +42,7 @@ __all__ = [
 
 CAMERA_WHEEL_EVENT_INTERVAL_SECONDS = 0.025
 CAMERA_DRAG_STEP_INTERVAL_SECONDS = 0.050
+CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS = 0.050
 COMPASS_CLICK_DWELL_SECONDS = 0.100
 
 _ARROW_KEYS: dict[str, int] = {
@@ -468,10 +470,10 @@ class WindowsCameraControl:
             # messages. Deliver one detent at a time, and re-establish every
             # pointer safety invariant after each bounded pacing interval.
             self._require_ready()
-            self._require_left_button_released("camera wheel")
+            self._require_pointer_buttons_released("camera wheel")
             screen_point = self._move_to_client_point(x, y)
             self._require_ready()
-            self._require_left_button_released("camera wheel")
+            self._require_pointer_buttons_released("camera wheel")
             self._require_target_at_screen_point("camera wheel", screen_point)
             completed = self._api.send_wheel(direction)
             if completed not in (0, 1):
@@ -533,7 +535,13 @@ class WindowsCameraControl:
                     self._drag_sleeper(CAMERA_DRAG_STEP_INTERVAL_SECONDS)
                     self._require_drag_point_still_safe(point_x, point_y)
         finally:
-            completed_up = self._release_middle_button()
+            completed_up = self._release_middle_button(
+                verified_endpoint=(
+                    path[-1]
+                    if completed_down == 1 and completed_moves == len(path)
+                    else None
+                ),
+            )
 
         return (
             CameraInputReceipt(
@@ -809,7 +817,11 @@ class WindowsCameraControl:
             ) from last_error
         return 0
 
-    def _release_middle_button(self) -> int:
+    def _release_middle_button(
+        self,
+        *,
+        verified_endpoint: tuple[int, int] | None = None,
+    ) -> int:
         last_error: BaseException | None = None
         for _attempt in range(_MOUSE_RELEASE_ATTEMPTS):
             try:
@@ -818,6 +830,21 @@ class WindowsCameraControl:
                 last_error = exc
                 continue
             if completed == 1:
+                # SendInput acknowledges insertion into the global input
+                # stream, not semantic consumption by RuneLite's AWT event
+                # thread. Keep ownership while one fixed settle elapses, then
+                # prove the up is globally observable before a later action is
+                # allowed to relocate the cursor.
+                self._drag_sleeper(CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS)
+                if verified_endpoint is not None:
+                    self._require_released_drag_endpoint_still_safe(
+                        *verified_endpoint,
+                    )
+                elif self._api.middle_button_is_down():
+                    raise WindowsCameraError(
+                        "middle-button release was not observable after the "
+                        "fixed post-release settle"
+                    )
                 self._middle_button_owned = False
                 return 1
             if completed != 0:
@@ -829,6 +856,32 @@ class WindowsCameraControl:
                 f"middle-button release failed after {_MOUSE_RELEASE_ATTEMPTS} attempts"
             ) from last_error
         return 0
+
+    def _require_released_drag_endpoint_still_safe(self, x: int, y: int) -> None:
+        """Prove semantic middle-up and unchanged endpoint after its settle."""
+
+        operation = "camera drag post-release verification"
+        self._require_ready()
+        self._require_left_button_released(operation)
+        self._require_observable_middle_button_release()
+        self._require_ready()
+        expected_point = self._api.client_to_screen(self._hwnd, x, y)
+        actual_point = self._api.cursor_position()
+        if actual_point != expected_point:
+            raise WindowsCameraError(
+                "camera-drag cursor moved during its post-release settle: "
+                f"expected {expected_point}, got {actual_point}"
+            )
+        self._require_left_button_released(operation)
+        self._require_observable_middle_button_release()
+        self._require_target_at_screen_point(operation, actual_point)
+
+    def _require_observable_middle_button_release(self) -> None:
+        if self._api.middle_button_is_down():
+            raise WindowsCameraError(
+                "middle-button release was not observable after the fixed "
+                "post-release settle"
+            )
 
     def _require_left_button_released(self, operation: str) -> None:
         if self._api.left_button_is_down():

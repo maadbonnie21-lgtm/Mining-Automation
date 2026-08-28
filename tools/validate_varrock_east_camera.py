@@ -72,6 +72,7 @@ from mining_automation.validation.camera_session import (  # noqa: E402
 )
 from mining_automation.validation.windows_camera import (  # noqa: E402
     CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+    CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS,
     CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
     COMPASS_CLICK_DWELL_SECONDS,
     WindowsCameraControl,
@@ -726,6 +727,10 @@ def _action_dict(action: CameraAction) -> dict[str, Any]:
             "arming_settle_s": CAMERA_DRAG_STEP_INTERVAL_SECONDS,
             "post_move_settle_s": CAMERA_DRAG_STEP_INTERVAL_SECONDS,
             "final_move_settle_included": True,
+            "post_release_settle_s": CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS,
+            "post_release_verification": (
+                "middle_up_focus_geometry_cursor_and_target_root"
+            ),
         }
     if isinstance(action, ResetZoomKey):
         return {"kind": "reset_zoom_key", "key": action.key, "dwell_s": action.dwell_s}
@@ -913,6 +918,10 @@ def _session_dict(
             "drag_arming_settle_s": CAMERA_DRAG_STEP_INTERVAL_SECONDS,
             "drag_post_move_settle_s": CAMERA_DRAG_STEP_INTERVAL_SECONDS,
             "drag_final_move_settle_included": True,
+            "drag_post_release_settle_s": CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS,
+            "drag_post_release_verification": (
+                "middle_up_focus_geometry_cursor_and_target_root"
+            ),
             "post_compass_settle_s": (
                 _DEFAULT_POST_COMPASS_SETTLE_S
                 if production_gated_search
@@ -934,6 +943,9 @@ def _session_dict(
                 else args.zoom_offset_detents
             ),
             "wheel_delivery": "paced_individual_detents",
+            "wheel_pointer_button_gate": (
+                "left_and_middle_before_and_after_relocation"
+            ),
             "wheel_event_interval_s": CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
             "diagnostics_can_override_production": False,
         },

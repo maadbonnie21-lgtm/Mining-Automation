@@ -127,18 +127,29 @@ corridor scan therefore stops the drag before the cursor enters that point.
 
 After an acknowledged middle-down, RuneLite receives one 50-millisecond
 arming settle. Each path move is followed by another 50-millisecond settle,
-including the final endpoint before middle-up. The adapter marks provisional
-middle-button ownership before `SendInput`, attempts bounded middle-up cleanup
-in `finally` after every short count or exception, and retains unresolved
-ownership for the outer lifecycle cleanup. It never releases a left or middle
-button that preflight found already held by the user. Any short down, move, or
-up receipt fails the camera plan closed.
+including the final endpoint before middle-up. An acknowledged middle-up then
+receives a fixed 50-millisecond post-release settle because `SendInput` proves
+insertion into the Windows input stream, not that RuneLite's event thread has
+consumed the release. The adapter retains ownership until the global middle
+state is observably up and focus, exact geometry, cursor position, and target-
+root ownership are all reverified at the unchanged final endpoint. A later
+wheel action proves both left and middle buttons released before and after its
+cursor relocation. This prevents that relocation from becoming unintended
+camera motion while RuneLite still considers the drag active.
+
+The adapter marks provisional middle-button ownership before `SendInput`,
+attempts bounded middle-up cleanup in `finally` after every short count or
+exception, and retains unresolved ownership for the outer lifecycle cleanup.
+It never releases a left or middle button that preflight found already held by
+the user. Any short down, move, or up receipt, unobservable release, or failed
+post-release endpoint check fails the camera plan closed.
 
 The report serializes the exact reviewed start, coordinate space, signed axis
 delta, complete logical path, step count, step bound, arming settle, per-move
-settle, final-settle inclusion, and the separate `1 / step_count / 1`
-middle-down/move/middle-up receipts. These receipts prove attempted delivery;
-only the unchanged production camera evaluation can prove reacquisition.
+settle, final-settle inclusion, post-release settle and verification contract,
+and the separate `1 / step_count / 1` middle-down/move/middle-up receipts. These
+receipts prove attempted delivery; only the unchanged production camera
+evaluation can prove reacquisition.
 
 An illustrative no-input single plan can be inspected with:
 
