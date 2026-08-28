@@ -128,10 +128,14 @@ corridor scan therefore stops the drag before the cursor enters that point.
 After an acknowledged middle-down, RuneLite receives one 50-millisecond
 arming settle. Each path move is followed by another 50-millisecond settle,
 including the final endpoint before middle-up. An acknowledged middle-up then
-receives a fixed 50-millisecond post-release settle because `SendInput` proves
+receives a fixed 250-millisecond post-release settle because `SendInput` proves
 insertion into the Windows input stream, not that RuneLite's event thread has
-consumed the release. The adapter retains ownership until the global middle
-state is observably up and focus, exact geometry, cursor position, and target-
+consumed the release. Live back-to-back drag calibration demonstrated that a
+50-millisecond release interval could still let RuneLite consume the next
+cursor relocation as prior-drag motion, so this larger interval is a reviewed
+semantic boundary rather than a throughput optimization. The adapter retains
+ownership until the global middle state is observably up and focus, exact
+geometry, cursor position, and target-
 root ownership are all reverified at the unchanged final endpoint. A later
 wheel action proves both left and middle buttons released before and after its
 cursor relocation. This prevents that relocation from becoming unintended
