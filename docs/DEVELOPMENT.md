@@ -56,3 +56,17 @@ reach control logic. Interaction regions use `(x, y, width, height)`: width and 
 positive, while x and y may be negative for virtual desktops whose origin is left of or above the
 primary display. OSRS worlds are sanity-checked as three-digit values from 301 through 999; this is
 not a live-world or supported-world allowlist.
+
+## Real-client camera validation
+
+Issue #31's deterministic Varrock East camera harness is a development-only
+validation composition point. It does not add camera input to production
+perception or change the production scene thresholds, quorum, macro-zone, or
+fail-closed policies. Read
+[Camera reacquisition validation](CAMERA_REACQUISITION_VALIDATION.md) before
+running it.
+
+All raw frames, BMP previews, unreviewed drafts, JSON reports, and report digest
+sidecars stay beneath ignored `diagnostics/`. The camera recipe remains pending
+until repeated real RuneLite trials and the complete 36-frame drift set both
+pass on the same clean exact Git head.

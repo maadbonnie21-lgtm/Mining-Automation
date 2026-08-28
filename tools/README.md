@@ -47,3 +47,21 @@ Rules:
   scene translations without changing the production detector. It uses the
   same centralized candidate and fixed-UI exclusions as the drift validator;
   a frozen landmark inside UI is rejected as unsafe rather than searched.
+
+## Camera reacquisition validation
+
+`validate_varrock_east_camera.py` is the development-only Issue #31 real-client
+harness. At exact `1005 x 1078` client geometry it applies one bounded,
+deterministic north/pitch/zoom normalization plan across three distinct camera
+perturbations, then requires at least two fresh production-detector
+confirmations per perturbation. Candidate pixels, fixed UI, and diagnostic
+searches cannot establish or override scene identity.
+
+The tool writes private raw/BMP/draft evidence plus a canonical JSON report and
+exact `.sha256` sidecar under ignored `diagnostics/`. Acceptance evidence must
+identify a clean exact Git head, detector/profile versions, plan version, and
+command. The recipe is not accepted until the repeated real-client trials and
+the complete 36-frame real drift set both pass without weakening production
+policy. See
+[`docs/CAMERA_REACQUISITION_VALIDATION.md`](../docs/CAMERA_REACQUISITION_VALIDATION.md)
+for the boundary, protocol, privacy rules, and acceptance gate.
