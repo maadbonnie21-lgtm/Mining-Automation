@@ -1056,6 +1056,45 @@ def test_middle_drag_sends_no_move_before_full_arming_settle() -> None:
     assert sleep_calls == 3
 
 
+def test_middle_drag_completes_each_step_settle_before_the_next_move() -> None:
+    api = FakeWindowsCameraApi()
+    settle_cursor_paths: list[list[tuple[object, ...]]] = []
+
+    def inspect_before_each_settle_returns(duration_s: float) -> None:
+        assert duration_s == CAMERA_DRAG_STEP_INTERVAL_SECONDS
+        settle_cursor_paths.append(
+            [
+                call
+                for call in api.calls
+                if isinstance(call, tuple) and call[0] == "cursor"
+            ]
+        )
+
+    control = WindowsCameraControl(
+        123,
+        api,
+        drag_sleeper=inspect_before_each_settle_returns,
+    )
+
+    receipts = control.drag_camera(200, 600, 8, 0)
+
+    assert all(receipt.complete for receipt in receipts)
+    assert settle_cursor_paths == [
+        [("cursor", 220, 630)],
+        [("cursor", 220, 630), ("cursor", 224, 630)],
+        [
+            ("cursor", 220, 630),
+            ("cursor", 224, 630),
+            ("cursor", 228, 630),
+        ],
+        [
+            ("cursor", 220, 630),
+            ("cursor", 224, 630),
+            ("cursor", 228, 630),
+        ],
+    ]
+
+
 @pytest.mark.parametrize("blocked_logical_point", [(200, 600), (204, 600), (209, 600)])
 def test_middle_drag_preflights_start_path_and_endpoint_root_ownership(
     blocked_logical_point: tuple[int, int],

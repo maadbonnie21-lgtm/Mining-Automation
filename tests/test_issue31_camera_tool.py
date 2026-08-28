@@ -154,7 +154,7 @@ def test_yaw_and_pitch_offsets_follow_settle_and_precede_zoom(
         "step_count": 2,
         "max_step_pixels": 4,
         "arming_settle_s": 1.0,
-        "post_move_settle_s": 0.05,
+        "post_move_settle_s": 1.0,
         "final_move_settle_included": True,
         "post_release_settle_s": 1.0,
         "post_release_verification": (
@@ -752,7 +752,7 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
         "drag_max_step_pixels": 4,
         "drag_path_excludes_start": True,
         "drag_arming_settle_s": 1.0,
-        "drag_post_move_settle_s": 0.05,
+        "drag_post_move_settle_s": 1.0,
         "drag_final_move_settle_included": True,
         "drag_post_release_settle_s": 1.0,
         "drag_post_release_verification": (
@@ -785,7 +785,7 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
             "max_step_pixels": 4,
             "path": [[204, 600], [208, 600]],
             "pixels": 8,
-            "post_move_settle_s": 0.05,
+            "post_move_settle_s": 1.0,
             "post_release_settle_s": 1.0,
             "post_release_verification": (
                 "middle_up_focus_geometry_cursor_and_target_root"

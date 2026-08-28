@@ -147,16 +147,18 @@ checks repeat after each pacing settle. An overlay appearing after the initial
 corridor scan therefore stops the drag before the cursor enters that point.
 
 After an acknowledged middle-down, RuneLite receives one fixed one-second
-arming settle before the first path move. Each path move is followed by a
-separate 50-millisecond settle, including the final endpoint before middle-up.
-An acknowledged middle-up then receives a fixed one-second post-release settle
-because `SendInput` proves insertion into the Windows input stream, not that
-RuneLite's event thread has consumed the button transition. Live calibration
-demonstrated both timing boundaries: a shorter arming interval could drop the
-first drag motion, while a shorter release interval could let RuneLite consume
-the next cursor relocation as prior-drag motion. The one-second arming and
-release boundaries are reviewed semantic gates rather than throughput
-optimizations; they do not change a camera recipe. The adapter retains
+arming settle before the first path move. Each path move is followed by its
+own fixed one-second client-consumption settle, including the final endpoint
+before middle-up. An acknowledged middle-up then receives a fixed one-second
+post-release settle because `SendInput` proves insertion into the Windows input
+stream, not that RuneLite's event thread has consumed the button transition or
+cursor motion. Live calibration demonstrated all three timing boundaries: a
+shorter arming interval could drop the first drag motion, a 50-millisecond
+per-move interval let exact repeated paths produce different camera geometry,
+and a shorter release interval could let RuneLite consume the next cursor
+relocation as prior-drag motion. The one-second arming, per-move, and release
+boundaries are reviewed semantic gates rather than throughput optimizations;
+they do not change a camera recipe. The adapter retains
 ownership until the global middle state is observably up and focus, exact
 geometry, cursor position, and target-root ownership are all reverified at the
 unchanged final endpoint. A later
