@@ -36,8 +36,9 @@ Rules:
   independent local minima are clearly marked diagnostic-only and never turn
   UNCERTAIN into a target. Candidate pixels and the reviewed fixed RuneLite UI
   rectangles are excluded from every diagnostic search. `--report <path>`
-  additionally writes the same evidence as versioned JSON; reading JSON is not
-  required. Exit `0` means both drift safety and restored-view production
+  additionally writes the same evidence as versioned JSON, including detector
+  provenance and the objective frozen-coordinate policy values; reading JSON
+  is not required. Exit `0` means both drift safety and restored-view production
   detection pass, `1` means an analyzed gate failed, and `2` means the inputs
   or invocation are invalid. The historical
   `--frames <dir> [--expect ...]` spelling remains available.

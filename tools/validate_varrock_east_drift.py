@@ -45,7 +45,7 @@ from mining_automation.perception import (  # noqa: E402
     varrock_east_iron_scene_excluded_regions,
 )
 
-_REPORT_SCHEMA_VERSION = 1
+_REPORT_SCHEMA_VERSION = 2
 _EXPECTED_DRIFT_FRAME_COUNT = 36
 _DEFINITIVE = {
     ResourceVisualState.AVAILABLE.value,
@@ -288,7 +288,7 @@ def _analysis_dict(
 ) -> dict[str, Any]:
     return {
         "search_radius_pixels": analysis.search_radius,
-        "production_decision_unchanged": True,
+        "diagnostic_search_does_not_override_production": True,
         "frozen_coordinate_scene": _scene_dict(analysis.frozen, profile),
         "bounded_coherent_search": _scene_dict(analysis.best_coherent, profile),
         "independent_local_search_diagnostic_only": [
@@ -400,8 +400,14 @@ def _print_local_table(analysis: SceneReacquisitionAnalysis) -> None:
     )
 
 
-def _print_profile(profile: ResourceDetectorProfile) -> None:
+def _print_profile(
+    profile: ResourceDetectorProfile,
+    detector: ProfiledResourceDetector,
+) -> None:
     print(f"PROFILE: {profile.profile_id} (schema v{RESOURCE_PROFILE_SCHEMA_VERSION})")
+    print(
+        f"DETECTOR: {detector.metadata.detector_id}@{detector.metadata.version}"
+    )
     print(
         f"LANDMARK POLICY: {len(profile.scene_landmarks)} landmarks, quorum "
         f"{profile.minimum_landmark_quorum}, zones {profile.minimum_landmark_zones}"
@@ -439,6 +445,7 @@ def _nearest_comparison(comparisons: list[NamedComparison]) -> NamedComparison:
 def _combined_report(
     *,
     profile: ResourceDetectorProfile,
+    detector: ProfiledResourceDetector,
     drift_directory: Path,
     drift_checks: list[FrameCheck],
     drift_count_ok: bool,
@@ -462,11 +469,17 @@ def _combined_report(
         "profile": {
             "profile_id": profile.profile_id,
             "profile_schema_version": RESOURCE_PROFILE_SCHEMA_VERSION,
+            "detector_id": detector.metadata.detector_id,
+            "detector_version": detector.metadata.version,
             "landmark_count": len(profile.scene_landmarks),
             "required_quorum": profile.minimum_landmark_quorum,
             "required_zones": profile.minimum_landmark_zones,
+            "production_coordinate_mode": "frozen",
+            "landmark_maximum_distances": {
+                landmark.landmark_id: landmark.maximum_distance
+                for landmark in profile.scene_landmarks
+            },
             "diagnostic_search_radius_pixels": DEFAULT_DIAGNOSTIC_SEARCH_RADIUS,
-            "production_decision_unchanged": True,
         },
         "drift_set": {
             "directory": str(drift_directory),
@@ -561,7 +574,7 @@ def _run_combined(
         bounded_drift_set_complete=count_ok,
     )
 
-    _print_profile(profile)
+    _print_profile(profile, detector)
     print(
         f"\nDRIFT SET: {len(paths)} frame(s) from {args.drift_frames}; "
         f"required count {_EXPECTED_DRIFT_FRAME_COUNT}"
@@ -612,6 +625,7 @@ def _run_combined(
 
     return _combined_report(
         profile=profile,
+        detector=detector,
         drift_directory=args.drift_frames,
         drift_checks=drift_checks,
         drift_count_ok=count_ok,
@@ -639,7 +653,7 @@ def _run_legacy(
         )
         for path in paths
     ]
-    _print_profile(profile)
+    _print_profile(profile, detector)
     print(f"\nLEGACY FRAME SET: expected {expectation.upper()}")
     for check in checks:
         _print_frame(check, profile)
@@ -659,6 +673,8 @@ def _run_legacy(
             "report_schema_version": _REPORT_SCHEMA_VERSION,
             "mode": "legacy_single_set",
             "profile_id": profile.profile_id,
+            "detector_id": detector.metadata.detector_id,
+            "detector_version": detector.metadata.version,
             "schema_version": RESOURCE_PROFILE_SCHEMA_VERSION,
             "profile_schema_version": RESOURCE_PROFILE_SCHEMA_VERSION,
             "expectation": expectation,

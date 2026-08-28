@@ -397,4 +397,4 @@ def test_one_command_tool_writes_deterministic_report(
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["diagnosis"]["code"] == "larger_coherent_translation"
     assert payload["best_shared_offset"]["validated"] is True
-    assert payload["production_decision_unchanged"] is True
+    assert payload["diagnostic_search_does_not_override_production"] is True

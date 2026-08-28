@@ -22,6 +22,7 @@ from mining_automation.perception import (
     load_replay_dataset,
     load_varrock_east_iron_profile,
     materialize_gzip_replay_dataset,
+    resource_state_from_observation,
     varrock_east_iron_scene_excluded_regions,
 )
 from mining_automation.perception.scene_landmarks import (
@@ -192,30 +193,69 @@ def test_supported_view_validates_at_frozen_coordinates(reviewed_frame: Frame) -
     assert conclusion.diagnosis is ReacquisitionDiagnosis.SUPPORTED_VIEW
 
 
-def test_reviewed_two_pixel_horizontal_jitter_remains_bounded(
+@pytest.mark.parametrize(
+    ("offset_x", "offset_y", "expected_matches"),
+    ((2, 0, 5), (-2, 0, 5), (0, 2, 6), (0, -2, 6)),
+)
+def test_reviewed_two_pixel_cardinal_jitter_remains_bounded(
     reviewed_frame: Frame,
+    offset_x: int,
+    offset_y: int,
+    expected_matches: int,
 ) -> None:
-    shifted = _translate(reviewed_frame, 2, 0)
+    shifted = _translate(reviewed_frame, offset_x, offset_y)
     analysis = _analyze(shifted)
 
     assert analysis.frozen.verdict.validated
-    assert analysis.frozen.verdict.matched_count == 5
+    assert analysis.frozen.verdict.matched_count == expected_matches
     assert len(analysis.frozen.verdict.matched_zones) == 3
     assert _states(shifted).isdisjoint({ResourceVisualState.UNCERTAIN.value})
 
 
-def test_small_coherent_offset_is_diagnosed_without_changing_production(
+@pytest.mark.parametrize(
+    ("offset_x", "offset_y", "expected_matches"),
+    (
+        (3, 0, 2),
+        (-3, 0, 2),
+        (0, 3, 4),
+        (0, -3, 4),
+        (4, 0, 1),
+        (-4, 0, 1),
+        (0, 4, 4),
+        (0, -4, 2),
+    ),
+)
+def test_cardinal_three_and_four_pixel_offsets_remain_fail_closed_in_production(
     reviewed_frame: Frame,
+    offset_x: int,
+    offset_y: int,
+    expected_matches: int,
 ) -> None:
-    shifted = _translate(reviewed_frame, 3, 0)
+    shifted = _translate(reviewed_frame, offset_x, offset_y)
     analysis = _analyze(shifted)
     conclusion = classify_reacquisition(analysis)
 
     assert not analysis.frozen.verdict.validated
+    assert analysis.frozen.verdict.matched_count == expected_matches
     assert analysis.best_coherent.verdict.validated
-    assert (analysis.best_coherent.offset_x, analysis.best_coherent.offset_y) == (3, 0)
+    assert (analysis.best_coherent.offset_x, analysis.best_coherent.offset_y) == (
+        offset_x,
+        offset_y,
+    )
     assert conclusion.diagnosis is ReacquisitionDiagnosis.FROZEN_LANDMARKS_TOO_BRITTLE
-    assert _states(shifted) == {ResourceVisualState.UNCERTAIN.value}
+    observations = build_varrock_east_iron_detector().detect(shifted)
+    expected_states = {
+        candidate.resource_id: ResourceVisualState.UNCERTAIN.value
+        for candidate in load_varrock_east_iron_profile().candidates
+    }
+    assert {
+        str(observation.evidence["resource_id"]): str(observation.evidence["state"])
+        for observation in observations
+    } == expected_states
+    assert all(
+        resource_state_from_observation(observation).interaction_region is None
+        for observation in observations
+    )
 
 
 def test_conflicting_coherent_and_known_drift_evidence_is_inconclusive(
@@ -496,10 +536,15 @@ def test_combined_cli_passes_realistic_drift_and_restored_case(
 
     assert exit_code == 0
     output = capsys.readouterr().out
+    assert "DETECTOR: profiled-resource:varrock-east-iron-v1@2.1.0" in output
     assert "DRIFT-SET RESULT: PASS" in output
     assert "RESTORED-FRAME RESULT: PASS" in output
     assert "distance  threshold  status" in output
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["report_schema_version"] == 2
+    assert report["profile"]["detector_version"] == "2.1.0"
+    assert report["profile"]["production_coordinate_mode"] == "frozen"
+    assert set(report["profile"]["landmark_maximum_distances"].values()) == {0.12}
     assert report["drift_set"]["false_definitive_targets"] == 0
     assert report["restored_frame"]["passed"] is True
     assert report["overall_passed"] is True
@@ -644,6 +689,8 @@ def test_legacy_report_preserves_original_fields(
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert {
         "profile_id",
+        "detector_id",
+        "detector_version",
         "schema_version",
         "expectation",
         "frames_total",
@@ -651,6 +698,8 @@ def test_legacy_report_preserves_original_fields(
         "false_definitive_targets",
         "results",
     } <= set(report)
+    assert report["detector_id"] == "profiled-resource:varrock-east-iron-v1"
+    assert report["detector_version"] == "2.1.0"
     assert {
         "frame",
         "ok",

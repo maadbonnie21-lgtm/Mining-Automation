@@ -121,7 +121,7 @@ def _analysis_dict(analysis: WideSceneRegistrationAnalysis) -> dict[str, Any]:
             "valid_landmark_count": shared.valid_landmark_count,
             "normalized_distance_sum": shared.normalized_distance_sum,
         },
-        "production_decision_unchanged": True,
+        "diagnostic_search_does_not_override_production": True,
     }
 
 

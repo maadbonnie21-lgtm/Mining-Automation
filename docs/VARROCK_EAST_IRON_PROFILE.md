@@ -49,8 +49,9 @@ strictly tied to:
 - pixel format `BGRA8888`
 - the reviewed fixed camera/zoom
 - the four frame-local 20x20 rock-surface patches
-- the four reviewed scene anchors
-- detector version `1.0.0`
+- the six reviewed world-only structural landmarks (the four legacy anchors
+  remain diagnostic evidence only)
+- detector version `2.1.0`
 
 Geometry, scene, obstruction, or colour mismatch returns `resource.uncertain`.
 Only `resource.available` is adapted into a clickable `ResourceState` region.
@@ -199,15 +200,25 @@ available and every one of them carries a spare.
 **Threshold derivation.** Set by measured separation, not tuned:
 
 - worst positive across all five reviewed rock-state frames: `0.00008`
-- closest negative at 4px camera translation: `0.143`
-- closest negative at 8px: `0.279`
+- smallest above-threshold distance in the synthetic `(+4,+2)` negative
+  scene: `0.143` (the scene matches only 1-of-6 landmarks)
+- smallest distance in the synthetic `(+8,+4)` negative scene: `0.292`
+  (the scene matches 0-of-6)
 
-`0.12` sits more than 1500x above the worst positive and below the closest negative,
-with no overlap between the distributions.
+`0.12` sits more than 1500x above the worst positive and below every
+above-threshold distance in those negatives. The quorum still rejects the
+`(+4,+2)` scene despite its one locally matching landmark.
 
-The reviewed replacement also makes a synthetic 2px horizontal translation
-land at exactly 5-of-6 landmarks across all three zones. That bounded jitter is
-intentionally tolerated; a 3px translation still fails closed at 2-of-6.
+The numeric policy parameters remain unchanged at distance `0.12`, 5-of-6
+landmarks, and three zones. Replacing the contaminated landmark nevertheless
+changes the empirical accepted image envelope. Synthetic cardinal 2px
+translations are now intentionally tolerated at frozen production coordinates:
+both horizontal directions match 5-of-6 landmarks across all three zones, and
+both vertical directions match 6-of-6 across all three zones. The production
+detector preserves the exact expected state for every resource ID across all
+five reviewed available/depleted/respawn/mixed fixtures in each direction. On
+the reviewed available baseline, all tested cardinal 3px and 4px
+translations remain fail-closed at between 1-of-6 and 4-of-6 landmarks.
 
 **Calibration guards.** `MINIMUM_STRUCTURAL_VARIANCE` (8.0) rejects a
 featureless region at construction time, so "no generic grass/dirt patches" is
@@ -250,10 +261,14 @@ north-west camera view; frozen landmark brittleness is not the cause of this
 real failure. The world-only evidence strengthens that diagnosis: the one
 previous frozen-coordinate match came from the minimap, not the world.
 
-No production threshold, quorum, zone rule, descriptor algorithm, or profile
-schema changed. The detector version is `2.1.0` because the frozen evidence
-region changed. Bounded coherent registration remains diagnostic-only because
-the existing safety contract deliberately rejects translated frames.
+The policy parameters are unchanged: no production threshold, quorum, zone
+rule, descriptor algorithm, or profile schema changed. The empirical accepted
+image envelope did change when the contaminated frozen evidence region was
+replaced, so the detector version is `2.1.0`. Bounded coherent registration
+remains diagnostic-only because the production safety contract still uses
+frozen coordinates. It rejects all tested cardinal 3px/4px translations and
+all 36 real drift frames; no broader claim is made about every possible
+translation outside the reviewed 2px envelope.
 Independent local minima are never combined into a scene verdict. Diagnostic
 search envelopes must remain outside candidates and reviewed fixed UI,
 preserving resource-state and world-scene independence.

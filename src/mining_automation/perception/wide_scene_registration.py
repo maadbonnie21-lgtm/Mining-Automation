@@ -440,7 +440,8 @@ def analyze_wide_scene_registration(
             "Wide search recovers one shared displacement "
             f"({best_shared.offset_x:+d},{best_shared.offset_y:+d}) that preserves the "
             f"existing {required_quorum}-of-{len(landmarks)} landmark quorum across "
-            f"{len(best_shared.matched_zones)} zones; production remains unchanged."
+            f"{len(best_shared.matched_zones)} zones; this diagnostic does not override "
+            "frozen-coordinate production evaluation."
         )
     elif (
         len(matched_searches) >= min(_DEFAULT_TRANSFORM_EVIDENCE_LANDMARKS, len(landmarks))
