@@ -18,6 +18,11 @@ EXPECTED_CLIENT_WIDTH = 1005
 EXPECTED_CLIENT_HEIGHT = 1078
 REVIEWED_COMPASS_POINT = (608, 49)
 REVIEWED_CAMERA_WHEEL_POINT = (400, 50)
+REVIEWED_CAMERA_DRAG_POINT = (200, 600)
+# Logical-client bounds reviewed as unobstructed world viewport for the drag
+# primitive: left/top inclusive, right/bottom exclusive.  This is an input
+# safety boundary, not a camera-normalization strategy parameter.
+REVIEWED_CAMERA_DRAG_OPEN_VIEWPORT = (0, 34, 520, 850)
 
 MAX_CAMERA_ACTIONS = 16
 # RuneLite's reviewed -400..1400 zoom range spans 72 default 25-unit
@@ -25,6 +30,9 @@ MAX_CAMERA_ACTIONS = 16
 # the total permits one saturation action plus one bounded offset action.
 MAX_CAMERA_WHEEL_DETENTS = 96
 MAX_TOTAL_CAMERA_WHEEL_DETENTS = 192
+MAX_CAMERA_DRAG_PIXELS = 256
+MAX_CAMERA_DRAG_STEP_PIXELS = 4
+MAX_TOTAL_CAMERA_DRAG_PIXELS = 512
 MAX_KEY_HOLD_SECONDS = 5.0
 MAX_TOTAL_KEY_HOLD_SECONDS = 15.0
 MAX_CAMERA_PAUSE_SECONDS = 2.0
@@ -54,6 +62,13 @@ class CameraHoldKey(StrEnum):
     RIGHT = "right"
 
 
+class CameraDragAxis(StrEnum):
+    """The only axes along which a validation camera drag may move."""
+
+    HORIZONTAL = "horizontal"
+    VERTICAL = "vertical"
+
+
 class CameraInputOperation(StrEnum):
     """Narrow logical operations acknowledged by a platform adapter."""
 
@@ -61,6 +76,9 @@ class CameraInputOperation(StrEnum):
     KEY_DOWN = "key_down"
     KEY_UP = "key_up"
     CAMERA_WHEEL = "camera_wheel"
+    MIDDLE_DOWN = "middle_down"
+    CAMERA_DRAG_MOVE = "camera_drag_move"
+    MIDDLE_UP = "middle_up"
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +207,102 @@ class CameraPause:
 
 
 @dataclass(frozen=True, slots=True)
+class CameraMiddleDrag:
+    """One bounded, axis-aligned middle-button camera drag.
+
+    The exact reviewed open-viewport start and generated logical path keep
+    this a validation-only camera primitive rather than a generic pointer API.
+    """
+
+    axis: CameraDragAxis
+    pixels: int
+    start_x: int = REVIEWED_CAMERA_DRAG_POINT[0]
+    start_y: int = REVIEWED_CAMERA_DRAG_POINT[1]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.axis, CameraDragAxis):
+            raise ValueError("camera drag axis must be a CameraDragAxis")
+        if (
+            isinstance(self.start_x, bool)
+            or not isinstance(self.start_x, int)
+            or isinstance(self.start_y, bool)
+            or not isinstance(self.start_y, int)
+        ):
+            raise ValueError("camera drag start coordinates must be integers")
+        if (self.start_x, self.start_y) != REVIEWED_CAMERA_DRAG_POINT:
+            raise ValueError(
+                "camera drag must use the exact reviewed open-viewport client "
+                f"point {REVIEWED_CAMERA_DRAG_POINT}"
+            )
+        if (
+            isinstance(self.pixels, bool)
+            or not isinstance(self.pixels, int)
+            or self.pixels == 0
+            or abs(self.pixels) > MAX_CAMERA_DRAG_PIXELS
+        ):
+            raise ValueError(
+                "camera drag pixels must be a nonzero integer with absolute value "
+                f"at most {MAX_CAMERA_DRAG_PIXELS}"
+            )
+        end_x = self.start_x + self.delta_x
+        end_y = self.start_y + self.delta_y
+        viewport_left, viewport_top, viewport_right, viewport_bottom = (
+            REVIEWED_CAMERA_DRAG_OPEN_VIEWPORT
+        )
+        if not (
+            viewport_left <= end_x < viewport_right
+            and viewport_top <= end_y < viewport_bottom
+        ):
+            raise ValueError(
+                "camera drag endpoint must remain inside the reviewed open viewport"
+            )
+
+    @property
+    def delta_x(self) -> int:
+        """Signed horizontal logical-client delta."""
+
+        return self.pixels if self.axis is CameraDragAxis.HORIZONTAL else 0
+
+    @property
+    def delta_y(self) -> int:
+        """Signed vertical logical-client delta."""
+
+        return self.pixels if self.axis is CameraDragAxis.VERTICAL else 0
+
+    @property
+    def step_count(self) -> int:
+        """Number of deterministic logical move points after the start."""
+
+        return (abs(self.pixels) + MAX_CAMERA_DRAG_STEP_PIXELS - 1) // (
+            MAX_CAMERA_DRAG_STEP_PIXELS
+        )
+
+
+def camera_drag_path(action: CameraMiddleDrag) -> tuple[tuple[int, int], ...]:
+    """Return logical move points after the start, including the endpoint."""
+
+    direction = 1 if action.pixels > 0 else -1
+    distance = abs(action.pixels)
+    return tuple(
+        (
+            action.start_x
+            + (
+                direction * min(step * MAX_CAMERA_DRAG_STEP_PIXELS, distance)
+                if action.axis is CameraDragAxis.HORIZONTAL
+                else 0
+            ),
+            action.start_y
+            + (
+                direction * min(step * MAX_CAMERA_DRAG_STEP_PIXELS, distance)
+                if action.axis is CameraDragAxis.VERTICAL
+                else 0
+            ),
+        )
+        for step in range(1, action.step_count + 1)
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class ResetZoomKey:
     """One configured RuneLite reset-zoom key press with release dwell."""
 
@@ -250,7 +364,12 @@ class CameraWheel:
 
 
 type CameraAction = (
-    CompassClick | CameraKeyHold | CameraPause | ResetZoomKey | CameraWheel
+    CompassClick
+    | CameraKeyHold
+    | CameraMiddleDrag
+    | CameraPause
+    | ResetZoomKey
+    | CameraWheel
 )
 
 
@@ -274,8 +393,10 @@ class CameraPlan:
         total_hold_s = 0.0
         total_pause_s = 0.0
         total_wheel_detents = 0
+        total_drag_pixels = 0
         compass_clicks = 0
         reset_zoom_keys = 0
+        drag_axes: set[CameraDragAxis] = set()
         for action in self.actions:
             if isinstance(action, CompassClick):
                 compass_clicks += 1
@@ -283,6 +404,11 @@ class CameraPlan:
                 total_hold_s += action.duration_s
             elif isinstance(action, CameraPause):
                 total_pause_s += action.duration_s
+            elif isinstance(action, CameraMiddleDrag):
+                if action.axis in drag_axes:
+                    raise ValueError("camera plan may contain at most one drag per axis")
+                drag_axes.add(action.axis)
+                total_drag_pixels += abs(action.pixels)
             elif isinstance(action, ResetZoomKey):
                 reset_zoom_keys += 1
                 total_hold_s += action.dwell_s
@@ -310,6 +436,11 @@ class CameraPlan:
                 "camera plan total wheel movement cannot exceed "
                 f"{MAX_TOTAL_CAMERA_WHEEL_DETENTS} detents"
             )
+        if total_drag_pixels > MAX_TOTAL_CAMERA_DRAG_PIXELS:
+            raise ValueError(
+                "camera plan total drag movement cannot exceed "
+                f"{MAX_TOTAL_CAMERA_DRAG_PIXELS} logical pixels"
+            )
 
 
 def _expected_operations(action: CameraAction) -> tuple[CameraInputOperation, ...]:
@@ -319,6 +450,12 @@ def _expected_operations(action: CameraAction) -> tuple[CameraInputOperation, ..
         return (CameraInputOperation.COMPASS_CLICK,)
     if isinstance(action, CameraKeyHold):
         return (CameraInputOperation.KEY_DOWN, CameraInputOperation.KEY_UP)
+    if isinstance(action, CameraMiddleDrag):
+        return (
+            CameraInputOperation.MIDDLE_DOWN,
+            CameraInputOperation.CAMERA_DRAG_MOVE,
+            CameraInputOperation.MIDDLE_UP,
+        )
     if isinstance(action, ResetZoomKey):
         return (CameraInputOperation.KEY_DOWN, CameraInputOperation.KEY_UP)
     return (CameraInputOperation.CAMERA_WHEEL,)
@@ -352,6 +489,12 @@ class CameraActionReceipt:
                 raise ValueError("action receipt contains an unexpected input operation")
             if not receipt.complete:
                 raise ValueError("action receipt contains a partial or short acknowledgement")
+        if isinstance(self.action, CameraMiddleDrag):
+            expected_event_counts = (1, self.action.step_count, 1)
+            if tuple(
+                receipt.requested_events for receipt in self.input_receipts
+            ) != expected_event_counts:
+                raise ValueError("camera drag receipt contains an unexpected event count")
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,6 +542,15 @@ class CameraControl(Protocol):
 
     def scroll_camera(self, x: int, y: int, detents: int) -> CameraInputReceipt:
         """Scroll bounded detents at a reviewed client-local coordinate."""
+
+    def drag_camera(
+        self,
+        x: int,
+        y: int,
+        delta_x: int,
+        delta_y: int,
+    ) -> tuple[CameraInputReceipt, CameraInputReceipt, CameraInputReceipt]:
+        """Execute one reviewed, bounded middle-button drag atomically."""
 
 
 class Sleeper(Protocol):
@@ -475,6 +627,28 @@ class CameraPlanRunner:
                 CameraInputOperation.CAMERA_WHEEL,
             )
             return CameraActionReceipt(index, action, (wheel_receipt,))
+
+        if isinstance(action, CameraMiddleDrag):
+            drag_receipts = self._control.drag_camera(
+                action.start_x,
+                action.start_y,
+                action.delta_x,
+                action.delta_y,
+            )
+            expected_operations = (
+                CameraInputOperation.MIDDLE_DOWN,
+                CameraInputOperation.CAMERA_DRAG_MOVE,
+                CameraInputOperation.MIDDLE_UP,
+            )
+            complete_receipts = tuple(
+                _require_complete_receipt(receipt, expected)
+                for receipt, expected in zip(
+                    drag_receipts,
+                    expected_operations,
+                    strict=True,
+                )
+            )
+            return CameraActionReceipt(index, action, complete_receipts)
 
         if isinstance(action, ResetZoomKey):
             return self._run_key_action(index, action, action.key, action.dwell_s)

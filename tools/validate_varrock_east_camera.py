@@ -36,14 +36,20 @@ from mining_automation.validation.camera_input_lease import (  # noqa: E402
     WindowsCameraInputLease,
 )
 from mining_automation.validation.camera_plan import (  # noqa: E402
+    MAX_CAMERA_DRAG_PIXELS,
+    MAX_CAMERA_DRAG_STEP_PIXELS,
     MAX_CAMERA_WHEEL_DETENTS,
     MAX_KEY_HOLD_SECONDS,
+    REVIEWED_CAMERA_DRAG_OPEN_VIEWPORT,
+    REVIEWED_CAMERA_DRAG_POINT,
     REVIEWED_CAMERA_WHEEL_POINT,
     REVIEWED_COMPASS_POINT,
     CameraAction,
+    CameraDragAxis,
     CameraHoldKey,
     CameraInputReceipt,
     CameraKeyHold,
+    CameraMiddleDrag,
     CameraPause,
     CameraPlan,
     CameraPlanError,
@@ -51,6 +57,7 @@ from mining_automation.validation.camera_plan import (  # noqa: E402
     CameraWheel,
     CompassClick,
     ResetZoomKey,
+    camera_drag_path,
 )
 from mining_automation.validation.camera_report import (  # noqa: E402
     CameraReportProvenance,
@@ -64,6 +71,7 @@ from mining_automation.validation.camera_session import (  # noqa: E402
     run_camera_validation_session,
 )
 from mining_automation.validation.windows_camera import (  # noqa: E402
+    CAMERA_DRAG_STEP_INTERVAL_SECONDS,
     CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
     COMPASS_CLICK_DWELL_SECONDS,
     WindowsCameraControl,
@@ -73,6 +81,16 @@ from mining_automation.validation.windows_camera import (  # noqa: E402
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _COMPASS_POINT = REVIEWED_COMPASS_POINT
 _CAMERA_WHEEL_POINT = REVIEWED_CAMERA_WHEEL_POINT
+
+
+def _drag_open_viewport_dict() -> dict[str, int]:
+    left, top, right, bottom = REVIEWED_CAMERA_DRAG_OPEN_VIEWPORT
+    return {
+        "left": left,
+        "top": top,
+        "right_exclusive": right,
+        "bottom_exclusive": bottom,
+    }
 
 
 @dataclass(slots=True)
@@ -205,6 +223,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="bounded yaw hold in seconds; requires --yaw-offset-direction",
     )
     parser.add_argument(
+        "--yaw-drag-pixels",
+        type=int,
+        default=0,
+        help="optional signed horizontal logical-client camera refinement",
+    )
+    parser.add_argument(
+        "--pitch-drag-pixels",
+        type=int,
+        default=0,
+        help="optional signed vertical logical-client camera refinement",
+    )
+    parser.add_argument(
         "--post-compass-settle",
         type=float,
         default=_DEFAULT_POST_COMPASS_SETTLE_S,
@@ -231,7 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="signed detents back from the saturated zoom endpoint",
     )
     parser.add_argument("--plan-id", default="varrock-east-camera-endpoint")
-    parser.add_argument("--plan-version", default="0.2.0")
+    parser.add_argument("--plan-version", default="0.3.0")
     parser.add_argument("--settle", type=float, default=1.0)
     parser.add_argument("--confirmations", type=int, default=2)
     parser.add_argument(
@@ -331,6 +361,10 @@ def _build_normalization_plan(args: argparse.Namespace) -> CameraPlan:
         actions.append(
             CameraKeyHold(CameraHoldKey(yaw_direction), float(yaw_hold))
         )
+    if args.yaw_drag_pixels:
+        actions.append(
+            CameraMiddleDrag(CameraDragAxis.HORIZONTAL, args.yaw_drag_pixels)
+        )
     actions.append(
         CameraKeyHold(pitch, _DEFAULT_PITCH_HOLD_S),
     )
@@ -351,6 +385,10 @@ def _build_normalization_plan(args: argparse.Namespace) -> CameraPlan:
             else CameraHoldKey.UP
         )
         actions.append(CameraKeyHold(opposite, float(pitch_offset)))
+    if args.pitch_drag_pixels:
+        actions.append(
+            CameraMiddleDrag(CameraDragAxis.VERTICAL, args.pitch_drag_pixels)
+        )
     if args.reset_zoom:
         if args.zoom_offset_detents != 0:
             raise ValueError("--zoom-offset-detents cannot be used with --reset-zoom")
@@ -411,6 +449,8 @@ def _require_no_single_plan_overrides(args: argparse.Namespace) -> None:
         or args.pitch_offset_hold != 0.0
         or args.yaw_offset_direction is not None
         or args.yaw_offset_hold != 0.0
+        or args.yaw_drag_pixels != 0
+        or args.pitch_drag_pixels != 0
         or args.post_compass_settle != _DEFAULT_POST_COMPASS_SETTLE_S
         or args.reset_zoom
         or args.zoom_saturate_detents is not None
@@ -420,7 +460,7 @@ def _require_no_single_plan_overrides(args: argparse.Namespace) -> None:
         raise ValueError(
             f"--normalization-strategy {_PRODUCTION_GATED_STRATEGY_ID} uses a "
             "frozen candidate ladder and cannot be combined with single-plan "
-            "pitch, yaw, settle, or zoom options"
+            "pitch, yaw, drag, settle, or zoom options"
         )
 
 
@@ -671,6 +711,22 @@ def _action_dict(action: CameraAction) -> dict[str, Any]:
         return {"kind": "key_hold", "key": action.key.value, "duration_s": action.duration_s}
     if isinstance(action, CameraPause):
         return {"kind": "pause", "duration_s": action.duration_s}
+    if isinstance(action, CameraMiddleDrag):
+        path = camera_drag_path(action)
+        return {
+            "kind": "camera_middle_drag",
+            "axis": action.axis.value,
+            "pixels": action.pixels,
+            "coordinate_space": "runelite_target_logical_client",
+            "start": [action.start_x, action.start_y],
+            "reviewed_open_viewport": _drag_open_viewport_dict(),
+            "path": [[x, y] for x, y in path],
+            "step_count": action.step_count,
+            "max_step_pixels": MAX_CAMERA_DRAG_STEP_PIXELS,
+            "arming_settle_s": CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+            "post_move_settle_s": CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+            "final_move_settle_included": True,
+        }
     if isinstance(action, ResetZoomKey):
         return {"kind": "reset_zoom_key", "key": action.key, "dwell_s": action.dwell_s}
     return {
@@ -690,6 +746,8 @@ def _plan_input_event_count(plan: CameraPlan) -> int:
     for action in plan.actions:
         if isinstance(action, CompassClick | CameraKeyHold | ResetZoomKey):
             total += 2
+        elif isinstance(action, CameraMiddleDrag):
+            total += 2 + action.step_count
         elif isinstance(action, CameraWheel):
             total += abs(action.detents)
     return total
@@ -820,6 +878,7 @@ def _session_dict(
     return {
         "camera_assumptions": {
             "compass_point": list(_COMPASS_POINT),
+            "drag_point": list(REVIEWED_CAMERA_DRAG_POINT),
             "wheel_point": list(_CAMERA_WHEEL_POINT),
             "pointer_coordinate_space": "runelite_target_logical_client",
             "compass_click_dwell_s": COMPASS_CLICK_DWELL_SECONDS,
@@ -838,6 +897,22 @@ def _session_dict(
                 if production_gated_search
                 else args.yaw_offset_hold
             ),
+            "yaw_drag_pixels": 0 if production_gated_search else args.yaw_drag_pixels,
+            "pitch_drag_pixels": (
+                0 if production_gated_search else args.pitch_drag_pixels
+            ),
+            "drag_delivery": (
+                "preflight_complete_logical_corridor_then_middle_down_arming_"
+                "and_post_move_settle_including_final"
+            ),
+            "drag_coordinate_space": "runelite_target_logical_client",
+            "drag_open_viewport": _drag_open_viewport_dict(),
+            "drag_max_pixels": MAX_CAMERA_DRAG_PIXELS,
+            "drag_max_step_pixels": MAX_CAMERA_DRAG_STEP_PIXELS,
+            "drag_path_excludes_start": True,
+            "drag_arming_settle_s": CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+            "drag_post_move_settle_s": CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+            "drag_final_move_settle_included": True,
             "post_compass_settle_s": (
                 _DEFAULT_POST_COMPASS_SETTLE_S
                 if production_gated_search

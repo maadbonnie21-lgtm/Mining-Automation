@@ -8,6 +8,8 @@ from mining_automation.validation import (
     EXPECTED_CLIENT_HEIGHT,
     EXPECTED_CLIENT_WIDTH,
     MAX_CAMERA_ACTIONS,
+    MAX_CAMERA_DRAG_PIXELS,
+    MAX_CAMERA_DRAG_STEP_PIXELS,
     MAX_CAMERA_PAUSE_SECONDS,
     MAX_CAMERA_WHEEL_DETENTS,
     MAX_KEY_HOLD_SECONDS,
@@ -15,11 +17,14 @@ from mining_automation.validation import (
     MAX_TOTAL_CAMERA_PAUSE_SECONDS,
     MAX_TOTAL_CAMERA_WHEEL_DETENTS,
     MAX_TOTAL_KEY_HOLD_SECONDS,
+    REVIEWED_CAMERA_DRAG_OPEN_VIEWPORT,
     CameraActionReceipt,
+    CameraDragAxis,
     CameraHoldKey,
     CameraInputOperation,
     CameraInputReceipt,
     CameraKeyHold,
+    CameraMiddleDrag,
     CameraPause,
     CameraPlan,
     CameraPlanReceipt,
@@ -30,6 +35,7 @@ from mining_automation.validation import (
     CameraWheel,
     CompassClick,
     ResetZoomKey,
+    camera_drag_path,
 )
 
 
@@ -52,8 +58,12 @@ class RecordingControl:
         self.overrides = overrides or {}
         self.calls: list[object] = []
 
-    def _result(self, operation: CameraInputOperation) -> CameraInputReceipt:
-        result = self.overrides.get(operation, _complete(operation))
+    def _result(
+        self,
+        operation: CameraInputOperation,
+        count: int = 1,
+    ) -> CameraInputReceipt:
+        result = self.overrides.get(operation, _complete(operation, count))
         if isinstance(result, BaseException):
             raise result
         return result
@@ -77,6 +87,23 @@ class RecordingControl:
     def scroll_camera(self, x: int, y: int, detents: int) -> CameraInputReceipt:
         self.calls.append(("wheel", x, y, detents))
         return self._result(CameraInputOperation.CAMERA_WHEEL)
+
+    def drag_camera(
+        self,
+        x: int,
+        y: int,
+        delta_x: int,
+        delta_y: int,
+    ) -> tuple[CameraInputReceipt, CameraInputReceipt, CameraInputReceipt]:
+        self.calls.append(("drag", x, y, delta_x, delta_y))
+        move_count = (
+            abs(delta_x or delta_y) + MAX_CAMERA_DRAG_STEP_PIXELS - 1
+        ) // MAX_CAMERA_DRAG_STEP_PIXELS
+        return (
+            self._result(CameraInputOperation.MIDDLE_DOWN),
+            self._result(CameraInputOperation.CAMERA_DRAG_MOVE, move_count),
+            self._result(CameraInputOperation.MIDDLE_UP),
+        )
 
 
 def test_plan_executes_actions_in_declared_order_and_returns_immutable_receipts() -> None:
@@ -349,6 +376,195 @@ def test_camera_wheel_is_strictly_bounded(detents: int) -> None:
 def test_camera_wheel_is_restricted_to_exact_reviewed_point(x: int, y: int) -> None:
     with pytest.raises(ValueError, match="exact reviewed client point"):
         CameraWheel(x, y, 1)
+
+
+def test_camera_drag_axis_values_are_stable_for_reports() -> None:
+    assert CameraDragAxis.HORIZONTAL.value == "horizontal"
+    assert CameraDragAxis.VERTICAL.value == "vertical"
+
+
+@pytest.mark.parametrize(
+    ("axis", "pixels", "expected"),
+    [
+        (CameraDragAxis.HORIZONTAL, 9, ((204, 600), (208, 600), (209, 600))),
+        (CameraDragAxis.HORIZONTAL, -5, ((196, 600), (195, 600))),
+        (CameraDragAxis.VERTICAL, 9, ((200, 604), (200, 608), (200, 609))),
+        (CameraDragAxis.VERTICAL, -5, ((200, 596), (200, 595))),
+    ],
+)
+def test_camera_drag_path_excludes_start_and_includes_exact_endpoint(
+    axis: CameraDragAxis,
+    pixels: int,
+    expected: tuple[tuple[int, int], ...],
+) -> None:
+    action = CameraMiddleDrag(axis, pixels)
+
+    assert camera_drag_path(action) == expected
+    assert action.step_count == len(expected)
+
+
+@pytest.mark.parametrize(
+    ("axis", "pixels"),
+    [
+        (CameraDragAxis.HORIZONTAL, MAX_CAMERA_DRAG_PIXELS),
+        (CameraDragAxis.HORIZONTAL, -200),
+        (CameraDragAxis.VERTICAL, 249),
+        (CameraDragAxis.VERTICAL, -MAX_CAMERA_DRAG_PIXELS),
+    ],
+)
+def test_camera_drag_path_is_monotonic_axis_aligned_and_step_bounded(
+    axis: CameraDragAxis,
+    pixels: int,
+) -> None:
+    action = CameraMiddleDrag(axis, pixels)
+    points = ((action.start_x, action.start_y), *camera_drag_path(action))
+
+    assert len(points) == action.step_count + 1
+    for before, after in zip(points, points[1:], strict=False):
+        delta_x = after[0] - before[0]
+        delta_y = after[1] - before[1]
+        assert (delta_x == 0) != (delta_y == 0)
+        assert max(abs(delta_x), abs(delta_y)) <= MAX_CAMERA_DRAG_STEP_PIXELS
+    assert points[-1] == (
+        action.start_x + action.delta_x,
+        action.start_y + action.delta_y,
+    )
+
+
+@pytest.mark.parametrize(
+    "pixels",
+    [0, True, 1.0, MAX_CAMERA_DRAG_PIXELS + 1, -MAX_CAMERA_DRAG_PIXELS - 1],
+)
+def test_camera_drag_pixels_are_strictly_bounded(pixels: object) -> None:
+    with pytest.raises(ValueError, match="camera drag pixels"):
+        CameraMiddleDrag(CameraDragAxis.VERTICAL, pixels)  # type: ignore[arg-type]
+
+
+def test_camera_drag_requires_enum_axis() -> None:
+    with pytest.raises(ValueError, match="CameraDragAxis"):
+        CameraMiddleDrag("horizontal", 4)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("start_x", "start_y"),
+    [(199, 600), (200, 599), (True, 600), (200, 600.0)],
+)
+def test_camera_drag_requires_exact_reviewed_open_viewport_start(
+    start_x: object,
+    start_y: object,
+) -> None:
+    with pytest.raises(ValueError, match="start coordinates|open-viewport"):
+        CameraMiddleDrag(  # type: ignore[arg-type]
+            CameraDragAxis.HORIZONTAL,
+            4,
+            start_x=start_x,
+            start_y=start_y,
+        )
+
+
+def test_camera_drag_rejects_endpoint_outside_reviewed_open_viewport() -> None:
+    with pytest.raises(ValueError, match="reviewed open viewport"):
+        CameraMiddleDrag(CameraDragAxis.HORIZONTAL, -MAX_CAMERA_DRAG_PIXELS)
+
+
+def test_camera_drag_rejects_bottom_fixed_ui_boundary() -> None:
+    safe = CameraMiddleDrag(CameraDragAxis.VERTICAL, 249)
+    left, top, right, bottom = REVIEWED_CAMERA_DRAG_OPEN_VIEWPORT
+
+    assert camera_drag_path(safe)[-1] == (200, bottom - 1)
+    assert all(
+        left <= x < right and top <= y < bottom
+        for x, y in ((safe.start_x, safe.start_y), *camera_drag_path(safe))
+    )
+    with pytest.raises(ValueError, match="reviewed open viewport"):
+        CameraMiddleDrag(CameraDragAxis.VERTICAL, 250)
+
+
+def test_camera_plan_allows_at_most_one_drag_per_axis() -> None:
+    with pytest.raises(ValueError, match="at most one drag per axis"):
+        CameraPlan(
+            "duplicate-horizontal",
+            (
+                CameraMiddleDrag(CameraDragAxis.HORIZONTAL, 4),
+                CameraMiddleDrag(CameraDragAxis.HORIZONTAL, -4),
+            ),
+        )
+
+    CameraPlan(
+        "one-per-axis",
+        (
+            CameraMiddleDrag(CameraDragAxis.HORIZONTAL, 4),
+            CameraMiddleDrag(CameraDragAxis.VERTICAL, -4),
+        ),
+    )
+
+
+def test_camera_drag_runner_calls_atomic_control_and_records_exact_receipts() -> None:
+    action = CameraMiddleDrag(CameraDragAxis.HORIZONTAL, 9)
+    control = RecordingControl()
+
+    receipt = CameraPlanRunner(control, lambda _seconds: None).run(
+        CameraPlan("drag", (action,))
+    )
+
+    assert control.calls == ["preflight", ("drag", 200, 600, 9, 0)]
+    assert tuple(
+        item.operation for item in receipt.action_receipts[0].input_receipts
+    ) == (
+        CameraInputOperation.MIDDLE_DOWN,
+        CameraInputOperation.CAMERA_DRAG_MOVE,
+        CameraInputOperation.MIDDLE_UP,
+    )
+    assert tuple(
+        item.requested_events for item in receipt.action_receipts[0].input_receipts
+    ) == (1, 3, 1)
+
+
+@pytest.mark.parametrize(
+    ("operation", "receipt"),
+    [
+        (
+            CameraInputOperation.MIDDLE_DOWN,
+            CameraInputReceipt(CameraInputOperation.MIDDLE_DOWN, 1, 0),
+        ),
+        (
+            CameraInputOperation.CAMERA_DRAG_MOVE,
+            CameraInputReceipt(CameraInputOperation.CAMERA_DRAG_MOVE, 2, 1),
+        ),
+        (
+            CameraInputOperation.MIDDLE_UP,
+            CameraInputReceipt(CameraInputOperation.MIDDLE_UP, 1, 0),
+        ),
+    ],
+)
+def test_camera_drag_runner_rejects_any_short_atomic_receipt(
+    operation: CameraInputOperation,
+    receipt: CameraInputReceipt,
+) -> None:
+    control = RecordingControl(overrides={operation: receipt})
+
+    with pytest.raises(CameraReceiptError, match="partial or short"):
+        CameraPlanRunner(control, lambda _seconds: None).run(
+            CameraPlan(
+                "short-drag",
+                (CameraMiddleDrag(CameraDragAxis.VERTICAL, 8),),
+            )
+        )
+
+
+def test_camera_drag_action_receipt_rejects_wrong_move_count() -> None:
+    action = CameraMiddleDrag(CameraDragAxis.VERTICAL, 8)
+
+    with pytest.raises(ValueError, match="unexpected event count"):
+        CameraActionReceipt(
+            0,
+            action,
+            (
+                _complete(CameraInputOperation.MIDDLE_DOWN),
+                _complete(CameraInputOperation.CAMERA_DRAG_MOVE),
+                _complete(CameraInputOperation.MIDDLE_UP),
+            ),
+        )
 
 
 def test_reset_zoom_key_is_released_when_sleep_raises() -> None:

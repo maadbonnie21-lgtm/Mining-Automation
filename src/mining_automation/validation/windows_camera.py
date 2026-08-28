@@ -19,14 +19,18 @@ from .camera_plan import (
     EXPECTED_CLIENT_WIDTH,
     REVIEWED_CAMERA_WHEEL_POINT,
     REVIEWED_COMPASS_POINT,
+    CameraDragAxis,
     CameraInputOperation,
     CameraInputReceipt,
+    CameraMiddleDrag,
     CameraPreflightReceipt,
     Sleeper,
+    camera_drag_path,
 )
 
 __all__ = [
     "RealWindowsCameraApi",
+    "CAMERA_DRAG_STEP_INTERVAL_SECONDS",
     "CAMERA_WHEEL_EVENT_INTERVAL_SECONDS",
     "COMPASS_CLICK_DWELL_SECONDS",
     "WindowsCameraTargetIdentity",
@@ -36,6 +40,7 @@ __all__ = [
 ]
 
 CAMERA_WHEEL_EVENT_INTERVAL_SECONDS = 0.025
+CAMERA_DRAG_STEP_INTERVAL_SECONDS = 0.050
 COMPASS_CLICK_DWELL_SECONDS = 0.100
 
 _ARROW_KEYS: dict[str, int] = {
@@ -133,6 +138,12 @@ class WindowsCameraApi(Protocol):
 
     def left_button_is_down(self) -> bool:
         """Return whether the global left button is already held."""
+
+    def send_middle_button(self, *, button_up: bool) -> int:
+        """Send one middle-button phase, returning its accepted event count."""
+
+    def middle_button_is_down(self) -> bool:
+        """Return whether the global middle button is already held."""
 
     def send_key(self, virtual_key: int, *, key_up: bool, extended: bool) -> int:
         """Send one keyboard event, returning the accepted event count."""
@@ -268,6 +279,14 @@ class RealWindowsCameraApi:
         result: bool = self._calls.left_button_is_down()
         return result
 
+    def send_middle_button(self, *, button_up: bool) -> int:
+        result: int = self._calls.send_middle_button(button_up=button_up)
+        return result
+
+    def middle_button_is_down(self) -> bool:
+        result: bool = self._calls.middle_button_is_down()
+        return result
+
     def send_key(self, virtual_key: int, *, key_up: bool, extended: bool) -> int:
         result: int = self._calls.send_key(
             virtual_key,
@@ -297,6 +316,7 @@ class WindowsCameraControl:
         expected_title: str | None = None,
         wheel_sleeper: Sleeper = time.sleep,
         click_sleeper: Sleeper = time.sleep,
+        drag_sleeper: Sleeper = time.sleep,
     ) -> None:
         if isinstance(hwnd, bool) or not isinstance(hwnd, int) or hwnd <= 0:
             raise ValueError("hwnd must be a positive integer")
@@ -304,8 +324,10 @@ class WindowsCameraControl:
         self._api = api if api is not None else RealWindowsCameraApi()
         self._wheel_sleeper = wheel_sleeper
         self._click_sleeper = click_sleeper
+        self._drag_sleeper = drag_sleeper
         self._held_keys: dict[int, bool] = {}
         self._left_button_owned = False
+        self._middle_button_owned = False
         self._api.declare_dpi_awareness()
         try:
             self._target_identity = self._api.window_identity(self._hwnd)
@@ -465,12 +487,78 @@ class WindowsCameraControl:
             completed_events=completed_events,
         )
 
+    def drag_camera(
+        self,
+        x: int,
+        y: int,
+        delta_x: int,
+        delta_y: int,
+    ) -> tuple[CameraInputReceipt, CameraInputReceipt, CameraInputReceipt]:
+        """Execute one bounded, axis-aligned validation-only middle drag."""
+
+        action = _camera_drag_action(x, y, delta_x, delta_y)
+        path = camera_drag_path(action)
+        self._require_ready()
+        self._require_pointer_buttons_released("camera drag")
+        self._preflight_drag_path(((x, y), *path))
+        self._move_to_verified_drag_point(x, y, middle_must_be_down=False)
+        # Recheck immediately before provisional ownership. A user-held button
+        # discovered here must never be compensated by this adapter.
+        self._require_pointer_buttons_released("camera drag")
+        self._require_drag_start_still_safe(x, y)
+
+        completed_down = 0
+        completed_moves = 0
+        self._middle_button_owned = True
+        try:
+            completed_down = self._api.send_middle_button(button_up=False)
+            if completed_down not in (0, 1):
+                raise WindowsCameraError(
+                    "Windows returned an invalid middle-button-down event count"
+                )
+            if completed_down == 1:
+                # RuneLite needs one semantic arming interval after the
+                # acknowledged down before it samples camera motion.
+                self._drag_sleeper(CAMERA_DRAG_STEP_INTERVAL_SECONDS)
+                self._require_drag_point_still_safe(x, y)
+                for point_x, point_y in path:
+                    self._move_to_verified_drag_point(
+                        point_x,
+                        point_y,
+                        middle_must_be_down=True,
+                    )
+                    completed_moves += 1
+                    # Settle after every move, including the final endpoint,
+                    # and revalidate before any later move or release.
+                    self._drag_sleeper(CAMERA_DRAG_STEP_INTERVAL_SECONDS)
+                    self._require_drag_point_still_safe(point_x, point_y)
+        finally:
+            completed_up = self._release_middle_button()
+
+        return (
+            CameraInputReceipt(
+                CameraInputOperation.MIDDLE_DOWN,
+                requested_events=1,
+                completed_events=completed_down,
+            ),
+            CameraInputReceipt(
+                CameraInputOperation.CAMERA_DRAG_MOVE,
+                requested_events=len(path),
+                completed_events=completed_moves,
+            ),
+            CameraInputReceipt(
+                CameraInputOperation.MIDDLE_UP,
+                requested_events=1,
+                completed_events=completed_up,
+            ),
+        )
+
     def release_all_held_keys(self) -> tuple[CameraInputReceipt, ...]:
         """Best-effort lifecycle cleanup for every input owned by this adapter.
 
         The historical method name is retained for the tool API, but cleanup
-        includes a provisionally or definitively owned left mouse button as
-        well as every key. Every input is attempted even if another release
+        includes provisionally or definitively owned middle and left mouse
+        buttons as well as every key. Every input is attempted even if another release
         fails. Remaining owned inputs cause a fail-closed error so a CLI cannot
         report successful cleanup while Windows may still consider an injected
         input held. Returned receipts describe key releases; mouse-up is a
@@ -479,6 +567,14 @@ class WindowsCameraControl:
 
         receipts: list[CameraInputReceipt] = []
         failures: list[str] = []
+        if self._middle_button_owned:
+            try:
+                completed_middle_up = self._release_middle_button()
+            except BaseException as exc:
+                failures.append(f"middle mouse button: {exc}")
+            else:
+                if completed_middle_up != 1:
+                    failures.append("middle mouse button: short button-up receipt")
         if self._left_button_owned:
             try:
                 completed_mouse_up = self._release_mouse_button()
@@ -547,6 +643,10 @@ class WindowsCameraControl:
             raise WindowsCameraError(
                 "refusing camera preflight because the global left button is held"
             )
+        if self._api.middle_button_is_down():
+            raise WindowsCameraError(
+                "refusing camera preflight because the global middle button is held"
+            )
         held_keys = [
             virtual_key
             for virtual_key in _CONTROLLED_VIRTUAL_KEYS
@@ -561,6 +661,13 @@ class WindowsCameraControl:
 
     def _move_to_client_point(self, x: int, y: int) -> tuple[int, int]:
         screen_x, screen_y = self._api.client_to_screen(self._hwnd, x, y)
+        return self._move_to_physical_screen_point(screen_x, screen_y)
+
+    def _move_to_physical_screen_point(
+        self,
+        screen_x: int,
+        screen_y: int,
+    ) -> tuple[int, int]:
         if not self._api.move_cursor(screen_x, screen_y):
             raise WindowsCameraError("Windows refused to move the cursor to the target")
         expected = screen_x, screen_y
@@ -586,6 +693,101 @@ class WindowsCameraControl:
             )
         self._require_target_at_screen_point("compass click", actual_point)
 
+    def _move_to_verified_drag_point(
+        self,
+        x: int,
+        y: int,
+        *,
+        middle_must_be_down: bool,
+    ) -> tuple[int, int]:
+        """Map, move, and prove ownership of one logical drag path point."""
+
+        self._require_ready()
+        self._require_left_button_released("camera drag")
+        if middle_must_be_down:
+            self._require_owned_middle_button_down()
+        elif self._api.middle_button_is_down():
+            raise WindowsCameraError(
+                "refusing camera drag because the middle button is already held"
+            )
+        self._require_ready()
+        screen_point = self._api.client_to_screen(self._hwnd, x, y)
+        self._require_target_root_at_screen_point("camera drag", screen_point)
+        self._require_ready()
+        self._require_left_button_released("camera drag")
+        if middle_must_be_down:
+            self._require_owned_middle_button_down()
+        elif self._api.middle_button_is_down():
+            raise WindowsCameraError(
+                "refusing camera drag because the middle button became held"
+            )
+        self._require_ready()
+        self._require_target_root_at_screen_point("camera drag", screen_point)
+        screen_point = self._move_to_physical_screen_point(*screen_point)
+        self._require_ready()
+        self._require_left_button_released("camera drag")
+        if middle_must_be_down:
+            self._require_owned_middle_button_down()
+        elif self._api.middle_button_is_down():
+            raise WindowsCameraError(
+                "refusing camera drag because the middle button became held"
+            )
+        self._require_ready()
+        self._require_target_at_screen_point("camera drag", screen_point)
+        return screen_point
+
+    def _preflight_drag_path(
+        self,
+        logical_points: tuple[tuple[int, int], ...],
+    ) -> None:
+        """Prove the complete logical corridor is target-owned before down."""
+
+        for point_x, point_y in logical_points:
+            self._require_ready()
+            self._require_pointer_buttons_released("camera drag")
+            self._require_ready()
+            screen_point = self._api.client_to_screen(
+                self._hwnd,
+                point_x,
+                point_y,
+            )
+            self._require_target_root_at_screen_point("camera drag", screen_point)
+            self._require_ready()
+            self._require_pointer_buttons_released("camera drag")
+            self._require_ready()
+            self._require_target_root_at_screen_point("camera drag", screen_point)
+
+    def _require_drag_point_still_safe(self, x: int, y: int) -> None:
+        """Revalidate an unchanged logical path point while middle-down is owned."""
+
+        self._require_ready()
+        self._require_left_button_released("camera drag")
+        self._require_owned_middle_button_down()
+        self._require_ready()
+        expected_point = self._api.client_to_screen(self._hwnd, x, y)
+        actual_point = self._api.cursor_position()
+        if actual_point != expected_point:
+            raise WindowsCameraError(
+                "camera-drag cursor moved during its bounded settle: "
+                f"expected {expected_point}, got {actual_point}"
+            )
+        self._require_target_at_screen_point("camera drag", actual_point)
+
+    def _require_drag_start_still_safe(self, x: int, y: int) -> None:
+        """Final start-point and button gate immediately before middle-down."""
+
+        self._require_ready()
+        self._require_pointer_buttons_released("camera drag")
+        self._require_ready()
+        expected_point = self._api.client_to_screen(self._hwnd, x, y)
+        actual_point = self._api.cursor_position()
+        if actual_point != expected_point:
+            raise WindowsCameraError(
+                "camera-drag cursor moved before middle-button-down: "
+                f"expected {expected_point}, got {actual_point}"
+            )
+        self._require_target_at_screen_point("camera drag", actual_point)
+
     def _release_mouse_button(self) -> int:
         last_error: BaseException | None = None
         for _attempt in range(_MOUSE_RELEASE_ATTEMPTS):
@@ -607,16 +809,50 @@ class WindowsCameraControl:
             ) from last_error
         return 0
 
+    def _release_middle_button(self) -> int:
+        last_error: BaseException | None = None
+        for _attempt in range(_MOUSE_RELEASE_ATTEMPTS):
+            try:
+                completed = self._api.send_middle_button(button_up=True)
+            except BaseException as exc:
+                last_error = exc
+                continue
+            if completed == 1:
+                self._middle_button_owned = False
+                return 1
+            if completed != 0:
+                last_error = WindowsCameraError(
+                    "Windows returned an invalid middle-button-up event count"
+                )
+        if last_error is not None:
+            raise WindowsCameraError(
+                f"middle-button release failed after {_MOUSE_RELEASE_ATTEMPTS} attempts"
+            ) from last_error
+        return 0
+
     def _require_left_button_released(self, operation: str) -> None:
         if self._api.left_button_is_down():
             raise WindowsCameraError(
                 f"refusing {operation} because the left button is already held"
             )
 
+    def _require_pointer_buttons_released(self, operation: str) -> None:
+        self._require_left_button_released(operation)
+        if self._api.middle_button_is_down():
+            raise WindowsCameraError(
+                f"refusing {operation} because the middle button is already held"
+            )
+
     def _require_owned_left_button_down(self) -> None:
         if not self._left_button_owned or not self._api.left_button_is_down():
             raise WindowsCameraError(
                 "compass click lost its owned left-button hold before completion"
+            )
+
+    def _require_owned_middle_button_down(self) -> None:
+        if not self._middle_button_owned or not self._api.middle_button_is_down():
+            raise WindowsCameraError(
+                "camera drag lost its owned middle-button hold before completion"
             )
 
     def _require_target_at_screen_point(
@@ -630,7 +866,16 @@ class WindowsCameraControl:
                 f"{operation} cursor moved before final pointer ownership check: "
                 f"expected {screen_point}, got {actual_point}"
             )
-        root_window = self._api.root_window_at_point(*actual_point)
+        self._require_target_root_at_screen_point(operation, actual_point)
+
+    def _require_target_root_at_screen_point(
+        self,
+        operation: str,
+        screen_point: tuple[int, int],
+    ) -> None:
+        """Require the target root at one already-mapped physical point."""
+
+        root_window = self._api.root_window_at_point(*screen_point)
         if root_window != self._hwnd:
             raise WindowsCameraError(
                 f"refusing {operation} because the reviewed point is covered "
@@ -702,3 +947,32 @@ def _key_code(key: str) -> tuple[int, bool]:
     raise WindowsCameraError(
         "camera validation permits only arrow keys and the Control reset-zoom key"
     )
+
+
+def _camera_drag_action(
+    x: int,
+    y: int,
+    delta_x: int,
+    delta_y: int,
+) -> CameraMiddleDrag:
+    """Validate the platform call through the shared logical drag contract."""
+
+    if any(
+        isinstance(value, bool) or not isinstance(value, int)
+        for value in (x, y, delta_x, delta_y)
+    ):
+        raise WindowsCameraError("camera drag coordinates and deltas must be integers")
+    if (delta_x == 0) == (delta_y == 0):
+        raise WindowsCameraError(
+            "camera drag requires exactly one nonzero logical axis delta"
+        )
+    axis = (
+        CameraDragAxis.HORIZONTAL
+        if delta_x != 0
+        else CameraDragAxis.VERTICAL
+    )
+    pixels = delta_x if delta_x != 0 else delta_y
+    try:
+        return CameraMiddleDrag(axis, pixels, start_x=x, start_y=y)
+    except ValueError as exc:
+        raise WindowsCameraError(str(exc)) from exc

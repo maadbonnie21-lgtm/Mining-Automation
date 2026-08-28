@@ -14,6 +14,7 @@ from mining_automation.validation import (
     ResetZoomKey,
 )
 from mining_automation.validation.windows_camera import (
+    CAMERA_DRAG_STEP_INTERVAL_SECONDS,
     CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
     COMPASS_CLICK_DWELL_SECONDS,
     RealWindowsCameraApi,
@@ -47,6 +48,8 @@ class FakeWindowsCameraApi:
         self.cursor_after_move: tuple[int, int] | None = None
         self.cursor_position_results: list[tuple[int, int]] = []
         self.root_at_point: int | None = 123
+        self.foreign_root_points: set[tuple[int, int]] = set()
+        self.mapping_fail_points: set[tuple[int, int]] = set()
         self.foreground_after_cursor: int | None = None
         self.size_after_cursor: tuple[int, int] | None = None
         self.mouse_after_cursor: bool | None = None
@@ -54,11 +57,14 @@ class FakeWindowsCameraApi:
         self.size_after_key_state: tuple[int, int] | None = None
         self.mouse_down_results: list[int | BaseException] = []
         self.mouse_up_results: list[int | BaseException] = []
+        self.middle_down_results: list[int | BaseException] = []
+        self.middle_up_results: list[int | BaseException] = []
         self.key_down_results: list[int | BaseException] = []
         self.key_up_results: list[int | BaseException] = []
         self.wheel_results: list[int | BaseException] = []
         self.down_keys: set[int] = set()
         self.mouse_is_down = False
+        self.middle_mouse_is_down = False
         self.calls: list[object] = []
 
     def declare_dpi_awareness(self) -> None:
@@ -92,6 +98,8 @@ class FakeWindowsCameraApi:
 
     def client_to_screen(self, hwnd: int, x: int, y: int) -> tuple[int, int]:
         self.calls.append(("to-screen", hwnd, x, y))
+        if (x, y) in self.mapping_fail_points:
+            raise OSError("DPI round trip failed")
         return x + self.screen_offset[0], y + self.screen_offset[1]
 
     def move_cursor(self, x: int, y: int) -> bool:
@@ -122,7 +130,7 @@ class FakeWindowsCameraApi:
         self.calls.append(("root-at-point", x, y))
         if self.identity_after_root is not None:
             self.identity = self.identity_after_root
-        return self.root_at_point
+        return 999 if (x, y) in self.foreign_root_points else self.root_at_point
 
     def send_mouse_button(self, *, button_up: bool) -> int:
         self.calls.append(("mouse", button_up))
@@ -137,6 +145,20 @@ class FakeWindowsCameraApi:
     def left_button_is_down(self) -> bool:
         self.calls.append("left-button-is-down")
         return self.mouse_is_down
+
+    def send_middle_button(self, *, button_up: bool) -> int:
+        self.calls.append(("middle", button_up))
+        results = self.middle_up_results if button_up else self.middle_down_results
+        result = results.pop(0) if results else 1
+        if isinstance(result, BaseException):
+            raise result
+        if result == 1:
+            self.middle_mouse_is_down = not button_up
+        return result
+
+    def middle_button_is_down(self) -> bool:
+        self.calls.append("middle-button-is-down")
+        return self.middle_mouse_is_down
 
     def send_key(self, virtual_key: int, *, key_up: bool, extended: bool) -> int:
         self.calls.append(("key", virtual_key, key_up, extended))
@@ -192,6 +214,7 @@ def test_preflight_focuses_exact_window_and_reports_fresh_geometry() -> None:
         ("exists", 123),
         ("identity", 123),
         "left-button-is-down",
+        "middle-button-is-down",
         ("is-down", 0x11),
         ("is-down", 0x25),
         ("is-down", 0x26),
@@ -204,6 +227,7 @@ def test_preflight_focuses_exact_window_and_reports_fresh_geometry() -> None:
         ("size", 123),
         ("identity", 123),
         "left-button-is-down",
+        "middle-button-is-down",
         ("is-down", 0x11),
         ("is-down", 0x25),
         ("is-down", 0x26),
@@ -736,6 +760,293 @@ def test_wheel_recomputes_screen_point_after_each_pacing_interval() -> None:
     assert receipt.complete
     assert ("cursor", 420, 80) in api.calls
     assert ("cursor", 520, 280) in api.calls
+
+
+def test_middle_drag_preflights_and_executes_exact_logical_path() -> None:
+    api = FakeWindowsCameraApi()
+    sleeps: list[float] = []
+    control = WindowsCameraControl(123, api, drag_sleeper=sleeps.append)
+
+    receipts = control.drag_camera(200, 600, 9, 0)
+
+    assert tuple(receipt.operation for receipt in receipts) == (
+        CameraInputOperation.MIDDLE_DOWN,
+        CameraInputOperation.CAMERA_DRAG_MOVE,
+        CameraInputOperation.MIDDLE_UP,
+    )
+    assert tuple(receipt.requested_events for receipt in receipts) == (1, 3, 1)
+    assert all(receipt.complete for receipt in receipts)
+    assert [
+        call for call in api.calls if isinstance(call, tuple) and call[0] == "cursor"
+    ] == [
+        ("cursor", 220, 630),
+        ("cursor", 224, 630),
+        ("cursor", 228, 630),
+        ("cursor", 229, 630),
+    ]
+    root_points = {
+        (call[1], call[2])
+        for call in api.calls
+        if isinstance(call, tuple) and call[0] == "root-at-point"
+    }
+    assert {(220, 630), (224, 630), (228, 630), (229, 630)} <= root_points
+    assert [call for call in api.calls if isinstance(call, tuple) and call[0] == "middle"] == [
+        ("middle", False),
+        ("middle", True),
+    ]
+    assert sleeps == [CAMERA_DRAG_STEP_INTERVAL_SECONDS] * 4
+    assert not api.middle_mouse_is_down
+
+
+def test_middle_drag_preflights_every_path_mapping_before_button_down() -> None:
+    api = FakeWindowsCameraApi()
+    api.mapping_fail_points.add((208, 600))
+    control = WindowsCameraControl(123, api, drag_sleeper=lambda _duration: None)
+
+    with pytest.raises(OSError, match="DPI round trip failed"):
+        control.drag_camera(200, 600, 9, 0)
+
+    assert not any(
+        isinstance(call, tuple) and call[0] in {"cursor", "middle"}
+        for call in api.calls
+    )
+
+
+@pytest.mark.parametrize("blocked_logical_point", [(200, 600), (204, 600), (209, 600)])
+def test_middle_drag_preflights_start_path_and_endpoint_root_ownership(
+    blocked_logical_point: tuple[int, int],
+) -> None:
+    api = FakeWindowsCameraApi()
+    api.foreign_root_points.add(
+        (
+            blocked_logical_point[0] + api.screen_offset[0],
+            blocked_logical_point[1] + api.screen_offset[1],
+        )
+    )
+    control = WindowsCameraControl(123, api, drag_sleeper=lambda _duration: None)
+
+    with pytest.raises(WindowsCameraError, match="covered by another top-level window"):
+        control.drag_camera(200, 600, 9, 0)
+
+    assert not any(
+        isinstance(call, tuple) and call[0] in {"cursor", "middle"}
+        for call in api.calls
+    )
+
+
+def test_middle_drag_rechecks_destination_root_before_held_cursor_move() -> None:
+    api = FakeWindowsCameraApi()
+    sleep_count = 0
+
+    def cover_first_path_point(_duration: float) -> None:
+        nonlocal sleep_count
+        sleep_count += 1
+        if sleep_count == 1:
+            api.foreign_root_points.add((224, 630))
+
+    control = WindowsCameraControl(123, api, drag_sleeper=cover_first_path_point)
+
+    with pytest.raises(WindowsCameraError, match="covered by another top-level window"):
+        control.drag_camera(200, 600, 8, 0)
+
+    assert [
+        call for call in api.calls if isinstance(call, tuple) and call[0] == "cursor"
+    ] == [("cursor", 220, 630)]
+    assert ("middle", False) in api.calls
+    assert api.calls[-1] == ("middle", True)
+    assert not api.middle_mouse_is_down
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("focus", "lost foreground focus"),
+        ("geometry", "geometry changed"),
+        ("identity", "window identity changed"),
+        ("middle", "lost its owned middle-button hold"),
+        ("left", "left button is already held"),
+    ],
+)
+def test_middle_drag_revalidates_safety_after_arming_settle(
+    mutation: str,
+    message: str,
+) -> None:
+    api = FakeWindowsCameraApi()
+
+    def mutate(_duration: float) -> None:
+        if mutation == "focus":
+            api.foreground = 999
+        elif mutation == "geometry":
+            api.size = (EXPECTED_CLIENT_WIDTH - 1, EXPECTED_CLIENT_HEIGHT)
+        elif mutation == "identity":
+            api.identity = _replacement_identity()
+        elif mutation == "middle":
+            api.middle_mouse_is_down = False
+        else:
+            api.mouse_is_down = True
+
+    control = WindowsCameraControl(123, api, drag_sleeper=mutate)
+
+    with pytest.raises(WindowsCameraError, match=message):
+        control.drag_camera(200, 600, 8, 0)
+
+    assert ("middle", False) in api.calls
+    assert api.calls[-1] == ("middle", True)
+    assert not api.middle_mouse_is_down
+
+
+@pytest.mark.parametrize("held_button", ["left", "middle"])
+def test_middle_drag_never_releases_a_preexisting_user_button(
+    held_button: str,
+) -> None:
+    api = FakeWindowsCameraApi()
+    if held_button == "left":
+        api.mouse_is_down = True
+    else:
+        api.middle_mouse_is_down = True
+    control = WindowsCameraControl(123, api)
+
+    with pytest.raises(WindowsCameraError, match=f"{held_button} button is already held"):
+        control.drag_camera(200, 600, 8, 0)
+
+    assert api.mouse_is_down is (held_button == "left")
+    assert api.middle_mouse_is_down is (held_button == "middle")
+    assert not any(
+        isinstance(call, tuple) and call[0] == "middle" for call in api.calls
+    )
+
+
+def test_preflight_rejects_preheld_middle_without_releasing_it() -> None:
+    api = FakeWindowsCameraApi()
+    api.middle_mouse_is_down = True
+    control = WindowsCameraControl(123, api)
+
+    with pytest.raises(WindowsCameraError, match="global middle button is held"):
+        control.preflight()
+
+    assert api.middle_mouse_is_down
+    assert not any(
+        isinstance(call, tuple) and call[0] == "middle" for call in api.calls
+    )
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "delta_x", "delta_y"),
+    [
+        (199, 600, 8, 0),
+        (200, 600, 0, 0),
+        (200, 600, 8, 8),
+        (200, 600, True, 0),
+        (200, 600, 257, 0),
+        (200, 600, 0, 250),
+    ],
+)
+def test_middle_drag_rejects_unreviewed_or_unbounded_calls_before_input(
+    x: int,
+    y: int,
+    delta_x: int,
+    delta_y: int,
+) -> None:
+    api = FakeWindowsCameraApi()
+    control = WindowsCameraControl(123, api)
+
+    with pytest.raises(WindowsCameraError):
+        control.drag_camera(x, y, delta_x, delta_y)
+
+    assert not any(
+        isinstance(call, tuple) and call[0] in {"cursor", "middle"}
+        for call in api.calls
+    )
+
+
+def test_middle_drag_start_cursor_readback_failure_aborts_before_down() -> None:
+    api = FakeWindowsCameraApi()
+    api.cursor_after_move = (0, 0)
+    control = WindowsCameraControl(123, api)
+
+    with pytest.raises(WindowsCameraError, match="did not reach"):
+        control.drag_camera(200, 600, 8, 0)
+
+    assert not any(
+        isinstance(call, tuple) and call[0] == "middle" for call in api.calls
+    )
+
+
+def test_middle_drag_path_cursor_readback_failure_releases_middle() -> None:
+    api = FakeWindowsCameraApi()
+    sleep_count = 0
+
+    def make_next_move_misland(_duration: float) -> None:
+        nonlocal sleep_count
+        sleep_count += 1
+        if sleep_count == 1:
+            api.cursor_after_move = (0, 0)
+
+    control = WindowsCameraControl(123, api, drag_sleeper=make_next_move_misland)
+
+    with pytest.raises(WindowsCameraError, match="did not reach"):
+        control.drag_camera(200, 600, 8, 0)
+
+    assert ("middle", False) in api.calls
+    assert api.calls[-1] == ("middle", True)
+    assert not api.middle_mouse_is_down
+
+
+def test_middle_drag_short_down_skips_motion_and_returns_fail_closed_receipt() -> None:
+    api = FakeWindowsCameraApi()
+    api.middle_down_results = [0]
+    sleeps: list[float] = []
+    control = WindowsCameraControl(123, api, drag_sleeper=sleeps.append)
+
+    receipts = control.drag_camera(200, 600, 8, 0)
+
+    assert tuple(receipt.completed_events for receipt in receipts) == (0, 0, 1)
+    assert sleeps == []
+    assert [
+        call for call in api.calls if isinstance(call, tuple) and call[0] == "cursor"
+    ] == [("cursor", 220, 630)]
+    assert not api.middle_mouse_is_down
+
+
+def test_middle_drag_down_exception_still_attempts_compensating_up() -> None:
+    api = FakeWindowsCameraApi()
+    api.middle_down_results = [OSError("middle down failed")]
+    control = WindowsCameraControl(123, api)
+
+    with pytest.raises(OSError, match="middle down failed"):
+        control.drag_camera(200, 600, 8, 0)
+
+    assert api.calls[-2:] == [("middle", False), ("middle", True)]
+    assert not api.middle_mouse_is_down
+
+
+def test_middle_drag_sleeper_failure_still_releases_middle() -> None:
+    api = FakeWindowsCameraApi()
+
+    def fail_sleep(_duration: float) -> None:
+        raise OSError("drag sleep failed")
+
+    control = WindowsCameraControl(123, api, drag_sleeper=fail_sleep)
+
+    with pytest.raises(OSError, match="drag sleep failed"):
+        control.drag_camera(200, 600, 8, 0)
+
+    assert api.calls[-1] == ("middle", True)
+    assert not api.middle_mouse_is_down
+
+
+def test_middle_drag_short_up_remains_owned_for_lifecycle_cleanup() -> None:
+    api = FakeWindowsCameraApi()
+    api.middle_up_results = [0, 0, 0]
+    control = WindowsCameraControl(123, api, drag_sleeper=lambda _duration: None)
+
+    receipts = control.drag_camera(200, 600, 4, 0)
+
+    assert not receipts[-1].complete
+    assert api.middle_mouse_is_down
+    api.middle_up_results = [1]
+    assert control.release_all_held_keys() == ()
+    assert not api.middle_mouse_is_down
 
 
 def test_partial_mouse_click_retries_button_up_until_released() -> None:

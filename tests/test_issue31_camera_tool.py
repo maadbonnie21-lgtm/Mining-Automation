@@ -19,15 +19,22 @@ from mining_automation.perception import (
     load_varrock_east_iron_profile,
 )
 from mining_automation.validation.camera_plan import (
+    MAX_CAMERA_DRAG_PIXELS,
+    MAX_CAMERA_DRAG_STEP_PIXELS,
+    REVIEWED_CAMERA_DRAG_OPEN_VIEWPORT,
+    REVIEWED_CAMERA_DRAG_POINT,
+    CameraDragAxis,
     CameraHoldKey,
     CameraInputOperation,
     CameraInputReceipt,
     CameraKeyHold,
+    CameraMiddleDrag,
     CameraPause,
     CameraPreflightReceipt,
     CameraWheel,
     CompassClick,
     ResetZoomKey,
+    camera_drag_path,
 )
 
 FIXTURE_ROOT = (
@@ -105,6 +112,10 @@ def test_yaw_and_pitch_offsets_follow_settle_and_precede_zoom(
         "right",
         "--yaw-offset-hold",
         "0.05",
+        "--yaw-drag-pixels",
+        "8",
+        "--pitch-drag-pixels",
+        "-5",
         "--post-compass-settle",
         "0.75",
         "--zoom-saturate-detents",
@@ -119,11 +130,34 @@ def test_yaw_and_pitch_offsets_follow_settle_and_precede_zoom(
         CompassClick(608, 49),
         CameraPause(0.75),
         CameraKeyHold(CameraHoldKey.RIGHT, 0.05),
+        CameraMiddleDrag(CameraDragAxis.HORIZONTAL, 8),
         CameraKeyHold(CameraHoldKey.UP, 3.0),
         CameraKeyHold(CameraHoldKey.DOWN, 0.55),
+        CameraMiddleDrag(CameraDragAxis.VERTICAL, -5),
         CameraWheel(400, 50, 96),
         CameraWheel(400, 50, -14),
     )
+
+    assert tool._action_dict(plan.actions[3]) == {
+        "kind": "camera_middle_drag",
+        "axis": "horizontal",
+        "pixels": 8,
+        "coordinate_space": "runelite_target_logical_client",
+        "start": [200, 600],
+        "reviewed_open_viewport": {
+            "left": 0,
+            "top": 34,
+            "right_exclusive": 520,
+            "bottom_exclusive": 850,
+        },
+        "path": [[204, 600], [208, 600]],
+        "step_count": 2,
+        "max_step_pixels": 4,
+        "arming_settle_s": 0.05,
+        "post_move_settle_s": 0.05,
+        "final_move_settle_included": True,
+    }
+    assert tool._plan_input_event_count(plan) == 126
 
 
 @pytest.mark.parametrize(
@@ -168,6 +202,11 @@ def test_unsafe_or_nonendpoint_zoom_recipe_is_rejected(
         ("--yaw-offset-hold", "5.001"),
         ("--yaw-offset-hold", "0.05"),
         ("--yaw-offset-direction", "right"),
+        ("--yaw-drag-pixels", "257"),
+        ("--yaw-drag-pixels", "-257"),
+        ("--pitch-drag-pixels", "257"),
+        ("--pitch-drag-pixels", "-257"),
+        ("--pitch-drag-pixels", "250"),
         ("--post-compass-settle", "0"),
         ("--post-compass-settle", "-0.01"),
         ("--post-compass-settle", "nan"),
@@ -189,6 +228,12 @@ def test_invalid_or_nonfinite_camera_offsets_and_settle_are_rejected(
 
     with pytest.raises(ValueError):
         tool._build_normalization_plan(args)
+
+
+def test_default_single_plan_version_records_drag_capability(tool: ModuleType) -> None:
+    args = _args(tool, "--pitch-endpoint", "up", "--reset-zoom")
+
+    assert args.plan_version == "0.3.0"
 
 
 def test_three_perturbations_are_distinct_and_camera_only(tool: ModuleType) -> None:
@@ -233,6 +278,39 @@ def test_wheel_point_is_outside_fixed_ui_candidates_and_landmarks(tool: ModuleTy
     assert not any(_contains(region, point) for region in VARROCK_EAST_IRON_FIXED_UI_REGIONS)
     assert not any(_contains(candidate.region, point) for candidate in profile.candidates)
     assert not any(_contains(landmark.region, point) for landmark in profile.scene_landmarks)
+
+
+def test_drag_start_is_reviewed_open_viewport_not_ui_candidate_or_landmark() -> None:
+    point = REVIEWED_CAMERA_DRAG_POINT
+    profile = load_varrock_east_iron_profile()
+
+    assert not any(_contains(region, point) for region in VARROCK_EAST_IRON_FIXED_UI_REGIONS)
+    assert not any(_contains(candidate.region, point) for candidate in profile.candidates)
+    assert not any(_contains(landmark.region, point) for landmark in profile.scene_landmarks)
+
+
+def test_every_accepted_drag_corridor_avoids_all_reviewed_fixed_ui() -> None:
+    accepted = 0
+    for axis in CameraDragAxis:
+        for pixels in range(-MAX_CAMERA_DRAG_PIXELS, MAX_CAMERA_DRAG_PIXELS + 1):
+            try:
+                action = CameraMiddleDrag(axis, pixels)
+            except ValueError:
+                continue
+            accepted += 1
+            corridor = (
+                (action.start_x, action.start_y),
+                *camera_drag_path(action),
+            )
+            assert all(
+                not any(
+                    _contains(fixed_ui_region, point)
+                    for fixed_ui_region in VARROCK_EAST_IRON_FIXED_UI_REGIONS
+                )
+                for point in corridor
+            )
+
+    assert accepted == 961
 
 
 def test_dry_run_prints_exact_plans_without_capture(
@@ -326,6 +404,21 @@ def test_production_gated_strategy_rejects_single_plan_overrides(
         "--pitch-endpoint",
         "up",
         "--reset-zoom",
+    )
+
+    with pytest.raises(ValueError, match="frozen candidate ladder"):
+        tool._build_normalization_candidates(args)
+
+
+def test_production_gated_strategy_rejects_unreviewed_drag_overrides(
+    tool: ModuleType,
+) -> None:
+    args = _args(
+        tool,
+        "--normalization-strategy",
+        "varrock-east-production-gated-search-v1",
+        "--yaw-drag-pixels",
+        "4",
     )
 
     with pytest.raises(ValueError, match="frozen candidate ladder"):
@@ -478,6 +571,28 @@ class _FakeControl:
             abs(detents),
         )
 
+    def drag_camera(
+        self,
+        x: int,
+        y: int,
+        delta_x: int,
+        delta_y: int,
+    ) -> tuple[CameraInputReceipt, CameraInputReceipt, CameraInputReceipt]:
+        assert (x, y) == REVIEWED_CAMERA_DRAG_POINT
+        assert (delta_x == 0) != (delta_y == 0)
+        step_count = (
+            abs(delta_x or delta_y) + MAX_CAMERA_DRAG_STEP_PIXELS - 1
+        ) // MAX_CAMERA_DRAG_STEP_PIXELS
+        return (
+            CameraInputReceipt(CameraInputOperation.MIDDLE_DOWN, 1, 1),
+            CameraInputReceipt(
+                CameraInputOperation.CAMERA_DRAG_MOVE,
+                step_count,
+                step_count,
+            ),
+            CameraInputReceipt(CameraInputOperation.MIDDLE_UP, 1, 1),
+        )
+
     def release_all_held_keys(self) -> None:
         self.released = True
         error = type(self).cleanup_error
@@ -526,6 +641,10 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
         "integration",
         "--pitch-endpoint",
         "down",
+        "--yaw-drag-pixels",
+        "8",
+        "--pitch-drag-pixels",
+        "-5",
         "--reset-zoom",
         "--settle",
         "0.001",
@@ -541,6 +660,7 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
     payload = json.loads(report_bytes)
     assert payload["schema_version"] == 2
     assert payload["provenance"]["git_head_sha"] == "a" * 40
+    assert payload["provenance"]["plan_version"] == "0.3.0"
     assert payload["provenance"]["command_argv"] == [
         str(Path(sys.executable).resolve()),
         str(Path(tool.__file__).resolve()),
@@ -579,6 +699,7 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
     assert evidence["pre_perturbation_failure"] is None
     assert evidence["camera_assumptions"] == {
         "compass_point": [608, 49],
+        "drag_point": [200, 600],
         "wheel_point": [400, 50],
         "pointer_coordinate_space": "runelite_target_logical_client",
         "compass_click_dwell_s": 0.1,
@@ -587,6 +708,25 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
         "pitch_offset_hold_s": 0.0,
         "yaw_offset_direction": None,
         "yaw_offset_hold_s": 0.0,
+        "yaw_drag_pixels": 8,
+        "pitch_drag_pixels": -5,
+        "drag_delivery": (
+            "preflight_complete_logical_corridor_then_middle_down_arming_"
+            "and_post_move_settle_including_final"
+        ),
+        "drag_coordinate_space": "runelite_target_logical_client",
+        "drag_open_viewport": {
+            "left": REVIEWED_CAMERA_DRAG_OPEN_VIEWPORT[0],
+            "top": REVIEWED_CAMERA_DRAG_OPEN_VIEWPORT[1],
+            "right_exclusive": REVIEWED_CAMERA_DRAG_OPEN_VIEWPORT[2],
+            "bottom_exclusive": REVIEWED_CAMERA_DRAG_OPEN_VIEWPORT[3],
+        },
+        "drag_max_pixels": MAX_CAMERA_DRAG_PIXELS,
+        "drag_max_step_pixels": 4,
+        "drag_path_excludes_start": True,
+        "drag_arming_settle_s": 0.05,
+        "drag_post_move_settle_s": 0.05,
+        "drag_final_move_settle_included": True,
         "post_compass_settle_s": 0.5,
         "zoom_mode": "reset_key",
         "zoom_saturate_detents": None,
@@ -599,6 +739,48 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
         "action_index": 1,
         "action": {"kind": "pause", "duration_s": 0.5},
         "input_receipts": [],
+    }
+    assert initial["attempts"][0]["receipt"]["actions"][2] == {
+        "action_index": 2,
+        "action": {
+            "arming_settle_s": 0.05,
+            "axis": "horizontal",
+            "coordinate_space": "runelite_target_logical_client",
+            "final_move_settle_included": True,
+            "kind": "camera_middle_drag",
+            "max_step_pixels": 4,
+            "path": [[204, 600], [208, 600]],
+            "pixels": 8,
+            "post_move_settle_s": 0.05,
+            "reviewed_open_viewport": {
+                "left": 0,
+                "top": 34,
+                "right_exclusive": 520,
+                "bottom_exclusive": 850,
+            },
+            "start": [200, 600],
+            "step_count": 2,
+        },
+        "input_receipts": [
+            {
+                "complete": True,
+                "completed_events": 1,
+                "operation": "middle_down",
+                "requested_events": 1,
+            },
+            {
+                "complete": True,
+                "completed_events": 2,
+                "operation": "camera_drag_move",
+                "requested_events": 2,
+            },
+            {
+                "complete": True,
+                "completed_events": 1,
+                "operation": "middle_up",
+                "requested_events": 1,
+            },
+        ],
     }
     assert len(evidence["trials"]) == 3
     assert all(

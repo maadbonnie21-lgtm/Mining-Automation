@@ -28,9 +28,10 @@ The validator is deliberately narrow:
 - The selected capture client must be exactly `1005 x 1078` pixels in the
   packaged pixel format.
 - Camera input is limited to the reviewed compass point, the four OSRS camera
-  keys, bounded and individually paced wheel motion at a reviewed viewport
-  point, explicit bounded no-input settles, and an optional reviewed RuneLite
-  reset-zoom key.
+  keys, bounded validation-only middle-button camera drags from one reviewed
+  open-viewport point, bounded and individually paced wheel motion at another
+  reviewed viewport point, explicit bounded no-input settles, and an optional
+  reviewed RuneLite reset-zoom key.
 - No world tile, rock candidate, inventory slot, player, or navigation target
   is clicked.
 - The run is development validation only. It does not make the location or
@@ -57,12 +58,12 @@ retry from discovering stale evidence only after moving the camera.
 An abandoned mutex is not recovered as a clean handoff: the predecessor may
 have died after a key/button down, so that invocation releases the transferred
 mutex ownership and fails closed without capture, focus, or input. Every later
-plan preflight proves the left button plus Control and all four arrow keys are
-globally up before focus or input, so an abandoned held input cannot leak into
-a subsequent run. Failed or cross-thread mutex release keeps the local process
-poisoned against another validator. Report targets are rechecked inside the
-lease; if lease release fails after publication, only artifacts proven to have
-been created by that invocation are retracted.
+plan preflight proves the left and middle buttons plus Control and all four
+arrow keys are globally up before focus or input, so an abandoned held input
+cannot leak into a subsequent run. Failed or cross-thread mutex release keeps
+the local process poisoned against another validator. Report targets are
+rechecked inside the lease; if lease release fails after publication, only
+artifacts proven to have been created by that invocation are retracted.
 
 The camera-plan pointer coordinates are in the DPI-unaware target RuneLite
 window's **logical client** space. The captured perception frame is also
@@ -92,8 +93,61 @@ Focus, exact geometry, button state, and top-level-window ownership are then
 rechecked at the proven physical screen point before input. After every
 `SetCursorPos`, the adapter reads the actual cursor position twice: once to
 prove Windows did not clamp or misland it and again immediately before the
-final root-window ownership check. A mismatch fails before mouse or wheel
-input.
+final root-window ownership check. A mismatch fails before the next pointer
+phase or wheel event.
+
+## Validation-only middle-drag primitive
+
+The optional single-plan refinements `--yaw-drag-pixels` and
+`--pitch-drag-pixels` use one narrow middle-button primitive. They are signed
+logical-client displacements on the horizontal and vertical axes. Zero omits
+the corresponding drag. These values are experiment inputs, not frozen
+strategy constants; the canonical production-gated candidate strategy does
+not accept them.
+
+Every drag starts at reviewed open-viewport logical point `(200, 600)`. That
+point is outside the fixed UI, frozen rock candidates, and frozen scene
+landmarks. The contract permits exactly one nonzero axis per action, bounds its
+absolute displacement to 256 logical pixels, and divides it into deterministic
+moves of at most four logical pixels. The start, complete path, and endpoint
+must remain in the explicit reviewed open-viewport rectangle `0 <= x < 520` and
+`34 <= y < 850`; the exclusive right and bottom edges prevent a drag from
+entering the frozen right or bottom UI. The generated path excludes the start
+and includes the exact endpoint. The report serializes these exact bounds, so a
+review never has to infer which parts of the `1005 x 1078` client were allowed.
+
+Before middle-down, the adapter exact-round-trip maps and root-window checks
+the start, every intermediate path point, and the endpoint while both left and
+middle buttons are proven released. Immediately before every held move it
+freshly maps and root-checks that destination again; after `SetCursorPos` it
+requires exact cursor readback, focus, the bound HWND identity, exact geometry,
+owned-middle state, released-left state, and target-root ownership. The same
+checks repeat after each pacing settle. An overlay appearing after the initial
+corridor scan therefore stops the drag before the cursor enters that point.
+
+After an acknowledged middle-down, RuneLite receives one 50-millisecond
+arming settle. Each path move is followed by another 50-millisecond settle,
+including the final endpoint before middle-up. The adapter marks provisional
+middle-button ownership before `SendInput`, attempts bounded middle-up cleanup
+in `finally` after every short count or exception, and retains unresolved
+ownership for the outer lifecycle cleanup. It never releases a left or middle
+button that preflight found already held by the user. Any short down, move, or
+up receipt fails the camera plan closed.
+
+The report serializes the exact reviewed start, coordinate space, signed axis
+delta, complete logical path, step count, step bound, arming settle, per-move
+settle, final-settle inclusion, and the separate `1 / step_count / 1`
+middle-down/move/middle-up receipts. These receipts prove attempted delivery;
+only the unchanged production camera evaluation can prove reacquisition.
+
+An illustrative no-input single plan can be inspected with:
+
+```powershell
+python tools/validate_varrock_east_camera.py --pitch-endpoint up --yaw-drag-pixels 8 --pitch-drag-pixels -5 --zoom-saturate-detents 96 --zoom-offset-detents -16 --dry-run
+```
+
+The numbers above are deliberately illustrative and do not establish a
+reviewed recipe.
 
 Before live pointer trials, run the native no-input mapping audit:
 
@@ -229,8 +283,9 @@ none of these artifacts should be added to Git.
 The report records frame SHA-256 values, production observations, each trial's
 ordered expected resource-state vector, per-confirmation exact-state equality,
 landmark distances and thresholds, input receipts, every candidate attempt,
-selection identity, and trial verdicts. Candidate frames are explicitly marked
-as non-confirmations. It does not embed raw pixel payloads. Its version-2 JSON
+selection identity, any exact logical drag path and pacing configuration, and
+trial verdicts. Candidate frames are explicitly marked as non-confirmations.
+It does not embed raw pixel payloads. Its version-2 JSON
 is serialized deterministically with sorted keys, indentation, and one trailing newline. The
 sidecar contains the SHA-256 of those exact report bytes; the digest is
 intentionally not stored inside the report it hashes.

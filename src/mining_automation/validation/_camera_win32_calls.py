@@ -39,11 +39,14 @@ _INPUT_MOUSE: Final[int] = 0
 _INPUT_KEYBOARD: Final[int] = 1
 _MOUSEEVENTF_LEFTDOWN: Final[int] = 0x0002
 _MOUSEEVENTF_LEFTUP: Final[int] = 0x0004
+_MOUSEEVENTF_MIDDLEDOWN: Final[int] = 0x0020
+_MOUSEEVENTF_MIDDLEUP: Final[int] = 0x0040
 _MOUSEEVENTF_WHEEL: Final[int] = 0x0800
 _KEYEVENTF_EXTENDEDKEY: Final[int] = 0x0001
 _KEYEVENTF_KEYUP: Final[int] = 0x0002
 _WHEEL_DELTA: Final[int] = 120
 _VK_LBUTTON: Final[int] = 0x01
+_VK_MBUTTON: Final[int] = 0x04
 _DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2: Final[int] = -4
 _DPI_AWARENESS_PER_MONITOR_AWARE: Final[int] = 2
 _STANDARD_DPI: Final[int] = 96
@@ -726,6 +729,21 @@ def left_button_is_down() -> bool:
     """Return whether the global left button was already held by the user."""
 
     return bool(_user32.GetAsyncKeyState(_VK_LBUTTON) & 0x8000)
+
+
+def send_middle_button(*, button_up: bool) -> int:
+    """Send exactly one middle-button phase and return its accepted count."""
+
+    event = _mouse_input(
+        _MOUSEEVENTF_MIDDLEUP if button_up else _MOUSEEVENTF_MIDDLEDOWN
+    )
+    return int(_user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(_INPUT)))
+
+
+def middle_button_is_down() -> bool:
+    """Return whether the global middle button is currently held."""
+
+    return bool(_user32.GetAsyncKeyState(_VK_MBUTTON) & 0x8000)
 
 
 def send_key(virtual_key: int, *, key_up: bool, extended: bool) -> int:
