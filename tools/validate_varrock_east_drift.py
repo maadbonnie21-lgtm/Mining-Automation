@@ -42,6 +42,7 @@ from mining_automation.perception import (  # noqa: E402
     classify_reacquisition,
     compare_scene_frames,
     load_varrock_east_iron_profile,
+    varrock_east_iron_scene_excluded_regions,
 )
 
 _REPORT_SCHEMA_VERSION = 1
@@ -203,7 +204,7 @@ def _check_frame(
         frame_width=profile.frame_width,
         frame_height=profile.frame_height,
         search_radius=DEFAULT_DIAGNOSTIC_SEARCH_RADIUS,
-        excluded_regions=tuple(candidate.region for candidate in profile.candidates),
+        excluded_regions=varrock_east_iron_scene_excluded_regions(profile),
     )
     expected_ids = tuple(candidate.resource_id for candidate in profile.candidates)
     observations = detector.detect(frame)

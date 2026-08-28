@@ -7,5 +7,5 @@ from mining_automation.perception.production_profiles import (
 
 
 def test_scene_decision_boundary_bumps_detector_version() -> None:
-    assert VARROCK_EAST_IRON_DETECTOR_VERSION == "2.0.0"
-    assert build_varrock_east_iron_detector().metadata.version == "2.0.0"
+    assert VARROCK_EAST_IRON_DETECTOR_VERSION == "2.1.0"
+    assert build_varrock_east_iron_detector().metadata.version == "2.1.0"

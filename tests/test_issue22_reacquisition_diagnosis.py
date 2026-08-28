@@ -22,6 +22,7 @@ from mining_automation.perception import (
     load_replay_dataset,
     load_varrock_east_iron_profile,
     materialize_gzip_replay_dataset,
+    varrock_east_iron_scene_excluded_regions,
 )
 from mining_automation.perception.scene_landmarks import (
     LandmarkMatch,
@@ -92,7 +93,7 @@ def _analyze(frame: Frame, *, radius: int = 4):  # type: ignore[no-untyped-def]
         frame_width=profile.frame_width,
         frame_height=profile.frame_height,
         search_radius=radius,
-        excluded_regions=tuple(candidate.region for candidate in profile.candidates),
+        excluded_regions=varrock_east_iron_scene_excluded_regions(profile),
     )
 
 
@@ -191,16 +192,28 @@ def test_supported_view_validates_at_frozen_coordinates(reviewed_frame: Frame) -
     assert conclusion.diagnosis is ReacquisitionDiagnosis.SUPPORTED_VIEW
 
 
-def test_small_coherent_offset_is_diagnosed_without_changing_production(
+def test_reviewed_two_pixel_horizontal_jitter_remains_bounded(
     reviewed_frame: Frame,
 ) -> None:
     shifted = _translate(reviewed_frame, 2, 0)
+    analysis = _analyze(shifted)
+
+    assert analysis.frozen.verdict.validated
+    assert analysis.frozen.verdict.matched_count == 5
+    assert len(analysis.frozen.verdict.matched_zones) == 3
+    assert _states(shifted).isdisjoint({ResourceVisualState.UNCERTAIN.value})
+
+
+def test_small_coherent_offset_is_diagnosed_without_changing_production(
+    reviewed_frame: Frame,
+) -> None:
+    shifted = _translate(reviewed_frame, 3, 0)
     analysis = _analyze(shifted)
     conclusion = classify_reacquisition(analysis)
 
     assert not analysis.frozen.verdict.validated
     assert analysis.best_coherent.verdict.validated
-    assert (analysis.best_coherent.offset_x, analysis.best_coherent.offset_y) == (2, 0)
+    assert (analysis.best_coherent.offset_x, analysis.best_coherent.offset_y) == (3, 0)
     assert conclusion.diagnosis is ReacquisitionDiagnosis.FROZEN_LANDMARKS_TOO_BRITTLE
     assert _states(shifted) == {ResourceVisualState.UNCERTAIN.value}
 
@@ -208,7 +221,7 @@ def test_small_coherent_offset_is_diagnosed_without_changing_production(
 def test_conflicting_coherent_and_known_drift_evidence_is_inconclusive(
     reviewed_frame: Frame,
 ) -> None:
-    shifted = _translate(reviewed_frame, 2, 0)
+    shifted = _translate(reviewed_frame, 3, 0)
     profile = load_varrock_east_iron_profile()
     comparison = compare_scene_frames(
         shifted,
@@ -233,7 +246,7 @@ def test_conflicting_coherent_and_known_drift_evidence_is_inconclusive(
 def test_coherent_offset_is_not_called_brittle_when_it_would_accept_drift(
     reviewed_frame: Frame,
 ) -> None:
-    shifted = _translate(reviewed_frame, 2, 0)
+    shifted = _translate(reviewed_frame, 3, 0)
 
     conclusion = classify_reacquisition(
         _analyze(shifted),
@@ -247,7 +260,7 @@ def test_coherent_offset_is_not_called_brittle_when_it_would_accept_drift(
 def test_coherent_offset_is_inconclusive_with_an_incomplete_drift_set(
     reviewed_frame: Frame,
 ) -> None:
-    shifted = _translate(reviewed_frame, 2, 0)
+    shifted = _translate(reviewed_frame, 3, 0)
 
     conclusion = classify_reacquisition(
         _analyze(shifted),

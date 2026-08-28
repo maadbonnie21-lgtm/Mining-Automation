@@ -19,6 +19,7 @@ import pytest
 
 from mining_automation.capture import Frame, PixelFormat, RawFrame
 from mining_automation.perception import (
+    VARROCK_EAST_IRON_FIXED_UI_REGIONS,
     ResourceVisualState,
     build_varrock_east_iron_detector,
     load_replay_dataset,
@@ -54,14 +55,6 @@ SOUTHWEST = "varrock-east-iron-southwest"
 CENTER = "varrock-east-iron-center"
 NORTHEAST = "varrock-east-iron-northeast"
 ALL_RESOURCES = (NORTHWEST, SOUTHWEST, CENTER, NORTHEAST)
-
-# The reviewed fixtures are privacy-sanitized: title bar, chat/status area and
-# the lower-right inventory panel are masked to solid black. Landmarks must
-# never be calibrated inside these, because those coordinates hold live UI on a
-# real machine -- a landmark there would pass every test here and fail live.
-MASKED_ROWS_TOP = (0, 33)
-MASKED_ROWS_BOTTOM = (850, 1077)
-
 
 def _dataset(tmp_path: Path):
     return load_replay_dataset(materialize_gzip_replay_dataset(MANIFEST, tmp_path))
@@ -157,6 +150,10 @@ def test_schema_v3_profile_is_loaded_with_six_landmarks() -> None:
     for landmark in profile.scene_landmarks:
         assert landmark.grid == 4
         assert landmark.maximum_distance == pytest.approx(0.12)
+    north_east_wall = next(
+        item for item in profile.scene_landmarks if item.landmark_id == "north-east-wall"
+    )
+    assert north_east_wall.region == (689, 299, 48, 48)
 
 
 # ---------------------------------------------------------------------------
@@ -728,18 +725,25 @@ def test_legacy_terrain_anchors_would_fail_the_structural_floor(tmp_path: Path) 
         assert variance < MINIMUM_STRUCTURAL_VARIANCE
 
 
-def test_no_landmark_sits_inside_a_sanitized_mask_region() -> None:
-    """Guards against calibrating on privacy-mask edges.
+def test_no_landmark_overlaps_reviewed_fixed_ui() -> None:
+    """Guards against calibrating on privacy masks or stable client UI.
 
     Mask edges are perfectly stable and extremely high-contrast, so a naive
-    "most structural region" search ranks them first. They hold live UI on a
-    real machine, so a landmark there would pass every test in this file and
-    fail on the first live frame.
+    "most structural region" search ranks them first. The minimap is also
+    structurally rich and stable enough to look like scene evidence, but it is
+    client UI rather than the supported world view.
     """
     profile = load_varrock_east_iron_profile()
     for landmark in profile.scene_landmarks:
-        _, y, _, height = landmark.region
-        assert y > MASKED_ROWS_TOP[1], f"{landmark.landmark_id} is in the title-bar mask"
-        assert y + height < MASKED_ROWS_BOTTOM[0], (
-            f"{landmark.landmark_id} is in the chat/status mask"
-        )
+        x, y, width, height = landmark.region
+        for ui_x, ui_y, ui_width, ui_height in VARROCK_EAST_IRON_FIXED_UI_REGIONS:
+            overlap = (
+                x < ui_x + ui_width
+                and ui_x < x + width
+                and y < ui_y + ui_height
+                and ui_y < y + height
+            )
+            assert not overlap, (
+                f"{landmark.landmark_id} overlaps fixed UI region "
+                f"{(ui_x, ui_y, ui_width, ui_height)}"
+            )

@@ -34,8 +34,15 @@ Rules:
   and compares the restored candidate with known drift frames using the same
   `0.12`, 5-of-6, three-zone structural rule. A shared +/-4px search and
   independent local minima are clearly marked diagnostic-only and never turn
-  UNCERTAIN into a target. `--report <path>` additionally writes the same
-  evidence as versioned JSON; reading JSON is not required. Exit `0` means both
-  drift safety and restored-view production detection pass, `1` means an
-  analyzed gate failed, and `2` means the inputs or invocation are invalid.
-  The historical `--frames <dir> [--expect ...]` spelling remains available.
+  UNCERTAIN into a target. Candidate pixels and the reviewed fixed RuneLite UI
+  rectangles are excluded from every diagnostic search. `--report <path>`
+  additionally writes the same evidence as versioned JSON; reading JSON is not
+  required. Exit `0` means both drift safety and restored-view production
+  detection pass, `1` means an analyzed gate failed, and `2` means the inputs
+  or invocation are invalid. The historical
+  `--frames <dir> [--expect ...]` spelling remains available.
+
+- `diagnose_varrock_east_wide.py` — search for larger diagnostic-only shared
+  scene translations without changing the production detector. It uses the
+  same centralized candidate and fixed-UI exclusions as the drift validator;
+  a frozen landmark inside UI is rejected as unsafe rather than searched.

@@ -289,6 +289,13 @@ def analyze_wide_scene_registration(
             frame_width=frame_width,
             frame_height=frame_height,
         )
+    for landmark in landmarks:
+        for excluded in excluded_regions:
+            if _regions_overlap(landmark.region, excluded):
+                raise ValueError(
+                    f"landmark {landmark.landmark_id!r} frozen region overlaps "
+                    f"excluded region {excluded}"
+                )
 
     distance_cache: dict[tuple[int, int, int], float | None] = {}
 

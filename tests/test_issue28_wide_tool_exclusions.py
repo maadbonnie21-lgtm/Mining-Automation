@@ -7,7 +7,10 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-from mining_automation.perception import load_varrock_east_iron_profile
+from mining_automation.perception import (
+    VARROCK_EAST_IRON_FIXED_UI_REGIONS,
+    load_varrock_east_iron_profile,
+)
 
 
 def _load_tool_module() -> ModuleType:
@@ -23,7 +26,7 @@ def _load_tool_module() -> ModuleType:
     return module
 
 
-def test_wide_tool_excludes_candidates_and_reviewed_sanitized_ui_bands() -> None:
+def test_wide_tool_excludes_candidates_and_all_reviewed_fixed_ui() -> None:
     tool = _load_tool_module()
     profile = load_varrock_east_iron_profile()
 
@@ -32,7 +35,6 @@ def test_wide_tool_excludes_candidates_and_reviewed_sanitized_ui_bands() -> None
     assert exclusions[: len(profile.candidates)] == tuple(
         candidate.region for candidate in profile.candidates
     )
-    assert exclusions[-2:] == (
-        (0, 0, profile.frame_width, 34),
-        (0, 850, profile.frame_width, profile.frame_height - 850),
-    )
+    assert exclusions[len(profile.candidates) :] == VARROCK_EAST_IRON_FIXED_UI_REGIONS
+    assert (545, 34, 222, 220) in exclusions
+    assert (520, 500, 485, 350) in exclusions
