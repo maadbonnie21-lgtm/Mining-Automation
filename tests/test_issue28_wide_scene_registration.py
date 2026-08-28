@@ -261,25 +261,22 @@ def test_too_few_recoverable_landmarks_stays_insufficient() -> None:
     assert analysis.diagnosis is WideRegistrationDiagnosis.INSUFFICIENT_REGISTRATION_EVIDENCE
 
 
-def test_fully_excluded_search_fails_closed() -> None:
+def test_excluded_region_overlapping_frozen_landmark_fails_closed() -> None:
     reference, landmarks = _synthetic_landmarks()
     landmark = landmarks[0]
-    observed = _observed_with_offsets(reference, (landmark,), ((12, 0),))
-    x, y, width, height = landmark.region
-    forbidden = (x + 12, y, width, height)
 
-    with pytest.raises(ValueError, match="no valid wide-search positions"):
+    with pytest.raises(ValueError, match="frozen region overlaps excluded region"):
         analyze_wide_scene_registration(
-            observed,
+            reference,
             (landmark,),
             required_quorum=1,
             required_zones=1,
-            frame_width=observed.width,
-            frame_height=observed.height,
+            frame_width=reference.width,
+            frame_height=reference.height,
             search_radius=16,
             coarse_step=4,
             refinement_radius=3,
-            excluded_regions=(forbidden,),
+            excluded_regions=(landmark.region,),
         )
 
 
@@ -400,4 +397,4 @@ def test_one_command_tool_writes_deterministic_report(
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["diagnosis"]["code"] == "larger_coherent_translation"
     assert payload["best_shared_offset"]["validated"] is True
-    assert payload["production_decision_unchanged"] is True
+    assert payload["diagnostic_search_does_not_override_production"] is True

@@ -25,9 +25,11 @@ from .evaluation import (
 from .fixture_materialization import materialize_gzip_replay_dataset
 from .production_profiles import (
     VARROCK_EAST_IRON_DETECTOR_VERSION,
+    VARROCK_EAST_IRON_FIXED_UI_REGIONS,
     VARROCK_EAST_IRON_PROFILE_ID,
     build_varrock_east_iron_detector,
     load_varrock_east_iron_profile,
+    varrock_east_iron_scene_excluded_regions,
 )
 from .replay import (
     MANIFEST_SCHEMA_VERSION,
@@ -108,6 +110,7 @@ __all__ = [
     "RESOURCE_OBSERVATION_PREFIX",
     "RESOURCE_PROFILE_SCHEMA_VERSION",
     "VARROCK_EAST_IRON_DETECTOR_VERSION",
+    "VARROCK_EAST_IRON_FIXED_UI_REGIONS",
     "VARROCK_EAST_IRON_PROFILE_ID",
     "CaseEvaluation",
     "ColorSignature",
@@ -174,5 +177,6 @@ __all__ = [
     "save_resource_detector_profile",
     "save_resource_fixture_draft",
     "validate_detector",
+    "varrock_east_iron_scene_excluded_regions",
     "write_resource_fixture_draft",
 ]

@@ -12,9 +12,11 @@ import pytest
 
 from mining_automation.capture import Frame, PixelFormat, RawFrame
 from mining_automation.perception import (
+    VARROCK_EAST_IRON_FIXED_UI_REGIONS,
     load_replay_dataset,
     load_varrock_east_iron_profile,
     materialize_gzip_replay_dataset,
+    varrock_east_iron_scene_excluded_regions,
 )
 from mining_automation.perception.resource import (
     ProfiledResourceDetector,
@@ -36,12 +38,6 @@ FIXTURE_ROOT = (
 )
 MANIFEST = FIXTURE_ROOT / "manifest.json"
 HISTORICAL_V2_PROFILE = FIXTURE_ROOT / "profile-schema-v2.json"
-
-TITLE_MASK = (0, 0, 1005, 34)
-BOTTOM_MASK = (0, 850, 1005, 228)
-INVENTORY_MASK = (520, 500, 485, 350)
-SANITIZED_REGIONS = (TITLE_MASK, BOTTOM_MASK, INVENTORY_MASK)
-
 
 def _real_frame(tmp_path: Path, case_id: str = "available-01") -> Frame:
     dataset = load_replay_dataset(materialize_gzip_replay_dataset(MANIFEST, tmp_path))
@@ -254,14 +250,32 @@ def test_calibration_actively_rejects_lower_right_privacy_mask_edge(
             region=(500, 520, 48, 48),
             macro_zone=MacroZone.SOUTH_EAST,
             maximum_distance=0.12,
-            excluded_regions=SANITIZED_REGIONS,
+            excluded_regions=VARROCK_EAST_IRON_FIXED_UI_REGIONS,
         )
 
 
-def test_calibration_helper_reproduces_reviewed_landmark(tmp_path: Path) -> None:
+def test_calibration_actively_rejects_minimap_ui(tmp_path: Path) -> None:
+    frame = _real_frame(tmp_path)
+    with pytest.raises(ValueError, match="excluded/sanitized"):
+        calibrate_scene_landmark(
+            frame,
+            landmark_id="minimap-ui",
+            region=(702, 88, 48, 48),
+            macro_zone=MacroZone.NORTH_EAST,
+            maximum_distance=0.12,
+            excluded_regions=VARROCK_EAST_IRON_FIXED_UI_REGIONS,
+        )
+
+
+@pytest.mark.parametrize("landmark_id", ["west-ridge", "north-east-wall"])
+def test_calibration_helper_reproduces_reviewed_landmark(
+    tmp_path: Path, landmark_id: str
+) -> None:
     frame = _real_frame(tmp_path)
     profile = load_varrock_east_iron_profile()
-    reviewed = next(item for item in profile.scene_landmarks if item.landmark_id == "west-ridge")
+    reviewed = next(
+        item for item in profile.scene_landmarks if item.landmark_id == landmark_id
+    )
     calibrated = calibrate_scene_landmark(
         frame,
         landmark_id=reviewed.landmark_id,
@@ -269,7 +283,7 @@ def test_calibration_helper_reproduces_reviewed_landmark(tmp_path: Path) -> None
         macro_zone=reviewed.macro_zone,
         maximum_distance=reviewed.maximum_distance,
         grid=reviewed.grid,
-        excluded_regions=SANITIZED_REGIONS,
+        excluded_regions=VARROCK_EAST_IRON_FIXED_UI_REGIONS,
         candidate_regions=tuple(item.region for item in profile.candidates),
         candidate_margin=8,
     )
@@ -278,6 +292,23 @@ def test_calibration_helper_reproduces_reviewed_landmark(tmp_path: Path) -> None
     assert descriptor_distance(
         calibrated.reference_descriptor, reviewed.reference_descriptor
     ) < 1e-6
+
+
+def test_packaged_profile_rejects_a_landmark_inside_fixed_ui() -> None:
+    profile = load_varrock_east_iron_profile()
+    landmark = next(
+        item for item in profile.scene_landmarks if item.macro_zone is MacroZone.NORTH_EAST
+    )
+    unsafe = replace(landmark, region=(702, 88, 48, 48))
+    unsafe_profile = replace(
+        profile,
+        scene_landmarks=tuple(
+            unsafe if item is landmark else item for item in profile.scene_landmarks
+        ),
+    )
+
+    with pytest.raises(ValueError, match="overlaps fixed UI exclusion"):
+        varrock_east_iron_scene_excluded_regions(unsafe_profile)
 
 
 def test_packaged_landmarks_are_balanced_two_per_usable_zone() -> None:

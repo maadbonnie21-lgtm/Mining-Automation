@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from mining_automation.capture import Frame, PixelFormat, RawFrame
 from mining_automation.contracts import Observation
 from mining_automation.perception import (
@@ -111,6 +113,33 @@ def _replace_rgb_region(
     )
 
 
+def _translate(frame: Frame, offset_x: int, offset_y: int) -> Frame:
+    """Translate a reviewed frame for deterministic camera-jitter regression."""
+
+    stride = frame.width * frame.pixel_format.bytes_per_pixel
+    source = frame.payload
+    translated = bytearray(len(source))
+    for y in range(frame.height):
+        source_y = (y - offset_y) % frame.height
+        for x in range(frame.width):
+            source_x = (x - offset_x) % frame.width
+            destination_offset = y * stride + x * 4
+            source_offset = source_y * stride + source_x * 4
+            translated[destination_offset : destination_offset + 4] = source[
+                source_offset : source_offset + 4
+            ]
+    return Frame.from_raw(
+        RawFrame(
+            payload=bytes(translated),
+            width=frame.width,
+            height=frame.height,
+            pixel_format=frame.pixel_format,
+        ),
+        frame_id=frame.frame_id + 1,
+        captured_monotonic_s=frame.captured_monotonic_s + 1.0,
+    )
+
+
 def test_packaged_profile_and_real_replay_pass_objective_evaluation(
     tmp_path: Path,
 ) -> None:
@@ -148,6 +177,44 @@ def test_real_available_depleted_and_respawn_sequence_matches_review(
             for resource_id, state in EXPECTED_STATES[sample.case.case_id].items()
         }
         assert actual == expected
+
+        shared_states = resource_states_from_observations(list(observations))
+        for resource_id, expected_state in EXPECTED_STATES[sample.case.case_id].items():
+            state = shared_states[resource_id]
+            if expected_state is ResourceVisualState.AVAILABLE:
+                assert state.available is True
+                assert state.interaction_region is not None
+            elif expected_state is ResourceVisualState.DEPLETED:
+                assert state.available is False
+                assert state.interaction_region is None
+            else:
+                raise AssertionError(expected_state)
+
+
+@pytest.mark.parametrize(
+    ("offset_x", "offset_y"),
+    ((2, 0), (-2, 0), (0, 2), (0, -2)),
+)
+def test_two_pixel_cardinal_jitter_preserves_every_reviewed_resource_state(
+    tmp_path: Path,
+    offset_x: int,
+    offset_y: int,
+) -> None:
+    """The accepted jitter envelope preserves exact production classifications."""
+
+    dataset = _load_real_dataset(tmp_path)
+    detector = build_varrock_east_iron_detector()
+
+    for sample in dataset.samples:
+        observations = run_detector(
+            detector,
+            _translate(sample.frame, offset_x, offset_y),
+        )
+        expected = {
+            resource_id: state.value
+            for resource_id, state in EXPECTED_STATES[sample.case.case_id].items()
+        }
+        assert _states_by_resource(observations) == expected
 
         shared_states = resource_states_from_observations(list(observations))
         for resource_id, expected_state in EXPECTED_STATES[sample.case.case_id].items():
