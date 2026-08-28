@@ -72,6 +72,8 @@ from mining_automation.validation.camera_session import (  # noqa: E402
 )
 from mining_automation.validation.windows_camera import (  # noqa: E402
     CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+    CAMERA_KEY_RELEASE_SETTLE_SECONDS,
+    CAMERA_MIDDLE_ARMING_SETTLE_SECONDS,
     CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS,
     CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
     COMPASS_CLICK_DWELL_SECONDS,
@@ -709,7 +711,16 @@ def _action_dict(action: CameraAction) -> dict[str, Any]:
     if isinstance(action, CompassClick):
         return {"kind": "compass_click", "x": action.x, "y": action.y}
     if isinstance(action, CameraKeyHold):
-        return {"kind": "key_hold", "key": action.key.value, "duration_s": action.duration_s}
+        return {
+            "kind": "key_hold",
+            "key": action.key.value,
+            "duration_s": action.duration_s,
+            "post_release_settle_s": CAMERA_KEY_RELEASE_SETTLE_SECONDS,
+            "post_release_verification": (
+                "semantic_client_consumption_wait_then_observable_key_up_and_"
+                "target_focus_identity_geometry"
+            ),
+        }
     if isinstance(action, CameraPause):
         return {"kind": "pause", "duration_s": action.duration_s}
     if isinstance(action, CameraMiddleDrag):
@@ -724,7 +735,7 @@ def _action_dict(action: CameraAction) -> dict[str, Any]:
             "path": [[x, y] for x, y in path],
             "step_count": action.step_count,
             "max_step_pixels": MAX_CAMERA_DRAG_STEP_PIXELS,
-            "arming_settle_s": CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+            "arming_settle_s": CAMERA_MIDDLE_ARMING_SETTLE_SECONDS,
             "post_move_settle_s": CAMERA_DRAG_STEP_INTERVAL_SECONDS,
             "final_move_settle_included": True,
             "post_release_settle_s": CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS,
@@ -733,7 +744,16 @@ def _action_dict(action: CameraAction) -> dict[str, Any]:
             ),
         }
     if isinstance(action, ResetZoomKey):
-        return {"kind": "reset_zoom_key", "key": action.key, "dwell_s": action.dwell_s}
+        return {
+            "kind": "reset_zoom_key",
+            "key": action.key,
+            "dwell_s": action.dwell_s,
+            "post_release_settle_s": CAMERA_KEY_RELEASE_SETTLE_SECONDS,
+            "post_release_verification": (
+                "semantic_client_consumption_wait_then_observable_key_up_and_"
+                "target_focus_identity_geometry"
+            ),
+        }
     return {
         "kind": "camera_wheel",
         "x": action.x,
@@ -887,6 +907,11 @@ def _session_dict(
             "wheel_point": list(_CAMERA_WHEEL_POINT),
             "pointer_coordinate_space": "runelite_target_logical_client",
             "compass_click_dwell_s": COMPASS_CLICK_DWELL_SECONDS,
+            "key_release_settle_s": CAMERA_KEY_RELEASE_SETTLE_SECONDS,
+            "key_release_verification": (
+                "semantic_client_consumption_wait_then_observable_key_up_and_"
+                "target_focus_identity_geometry"
+            ),
             "pitch_endpoint": "up" if production_gated_search else args.pitch_endpoint,
             "pitch_hold_s": _DEFAULT_PITCH_HOLD_S,
             "pitch_offset_hold_s": (
@@ -915,7 +940,7 @@ def _session_dict(
             "drag_max_pixels": MAX_CAMERA_DRAG_PIXELS,
             "drag_max_step_pixels": MAX_CAMERA_DRAG_STEP_PIXELS,
             "drag_path_excludes_start": True,
-            "drag_arming_settle_s": CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+            "drag_arming_settle_s": CAMERA_MIDDLE_ARMING_SETTLE_SECONDS,
             "drag_post_move_settle_s": CAMERA_DRAG_STEP_INTERVAL_SECONDS,
             "drag_final_move_settle_included": True,
             "drag_post_release_settle_s": CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS,

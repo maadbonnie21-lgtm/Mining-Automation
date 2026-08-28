@@ -96,6 +96,27 @@ prove Windows did not clamp or misland it and again immediately before the
 final root-window ownership check. A mismatch fails before the next pointer
 phase or wheel event.
 
+## Semantic key-release boundary
+
+Every accepted arrow-key or reset-zoom key-up receives a fixed one-second
+semantic client-consumption settle before the camera plan may start its next
+action. `SendInput` acknowledges insertion into the Windows input stream, and
+`GetAsyncKeyState` can prove the global key state is observably up after that
+wait; neither fact alone proves that RuneLite's event thread consumed the
+release before a following drag. The adapter therefore retains key ownership
+through the full wait, then requires the key observably up and revalidates the
+bound HWND identity, foreground focus, and exact `1005 x 1078` geometry. A
+delayed or unobservable release, or any target change during the boundary,
+fails closed before later input.
+
+Lifecycle cleanup still attempts every adapter-owned key-up even after target
+focus or geometry is lost. It applies the same fixed wait and observable global
+up check, but deliberately does not require target readiness; cleanup must not
+strand an injected key merely because RuneLite stopped being safe to operate.
+The pre-key-down gate ensures the adapter never acquires or releases a key that
+was already held by the user. Reports serialize this semantic wait and its
+post-wait safety checks separately from each key's requested hold duration.
+
 ## Validation-only middle-drag primitive
 
 The optional single-plan refinements `--yaw-drag-pixels` and
@@ -125,18 +146,20 @@ owned-middle state, released-left state, and target-root ownership. The same
 checks repeat after each pacing settle. An overlay appearing after the initial
 corridor scan therefore stops the drag before the cursor enters that point.
 
-After an acknowledged middle-down, RuneLite receives one 50-millisecond
-arming settle. Each path move is followed by another 50-millisecond settle,
-including the final endpoint before middle-up. An acknowledged middle-up then
-receives a fixed 250-millisecond post-release settle because `SendInput` proves
-insertion into the Windows input stream, not that RuneLite's event thread has
-consumed the release. Live back-to-back drag calibration demonstrated that a
-50-millisecond release interval could still let RuneLite consume the next
-cursor relocation as prior-drag motion, so this larger interval is a reviewed
-semantic boundary rather than a throughput optimization. The adapter retains
+After an acknowledged middle-down, RuneLite receives one fixed one-second
+arming settle before the first path move. Each path move is followed by a
+separate 50-millisecond settle, including the final endpoint before middle-up.
+An acknowledged middle-up then receives a fixed one-second post-release settle
+because `SendInput` proves insertion into the Windows input stream, not that
+RuneLite's event thread has consumed the button transition. Live calibration
+demonstrated both timing boundaries: a shorter arming interval could drop the
+first drag motion, while a shorter release interval could let RuneLite consume
+the next cursor relocation as prior-drag motion. The one-second arming and
+release boundaries are reviewed semantic gates rather than throughput
+optimizations; they do not change a camera recipe. The adapter retains
 ownership until the global middle state is observably up and focus, exact
-geometry, cursor position, and target-
-root ownership are all reverified at the unchanged final endpoint. A later
+geometry, cursor position, and target-root ownership are all reverified at the
+unchanged final endpoint. A later
 wheel action proves both left and middle buttons released before and after its
 cursor relocation. This prevents that relocation from becoming unintended
 camera motion while RuneLite still considers the drag active.

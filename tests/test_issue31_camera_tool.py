@@ -153,10 +153,10 @@ def test_yaw_and_pitch_offsets_follow_settle_and_precede_zoom(
         "path": [[204, 600], [208, 600]],
         "step_count": 2,
         "max_step_pixels": 4,
-        "arming_settle_s": 0.05,
+        "arming_settle_s": 1.0,
         "post_move_settle_s": 0.05,
         "final_move_settle_included": True,
-        "post_release_settle_s": 0.25,
+        "post_release_settle_s": 1.0,
         "post_release_verification": (
             "middle_up_focus_geometry_cursor_and_target_root"
         ),
@@ -332,8 +332,26 @@ def test_dry_run_prints_exact_plans_without_capture(
     }
     assert payload["normalization"]["actions"][1:] == [
         {"duration_s": 0.5, "kind": "pause"},
-        {"duration_s": 3.0, "key": "down", "kind": "key_hold"},
-        {"dwell_s": 0.1, "key": "control", "kind": "reset_zoom_key"},
+        {
+            "duration_s": 3.0,
+            "key": "down",
+            "kind": "key_hold",
+            "post_release_settle_s": 1.0,
+            "post_release_verification": (
+                "semantic_client_consumption_wait_then_observable_key_up_and_"
+                "target_focus_identity_geometry"
+            ),
+        },
+        {
+            "dwell_s": 0.1,
+            "key": "control",
+            "kind": "reset_zoom_key",
+            "post_release_settle_s": 1.0,
+            "post_release_verification": (
+                "semantic_client_consumption_wait_then_observable_key_up_and_"
+                "target_focus_identity_geometry"
+            ),
+        },
     ]
     assert len(payload["perturbations"]) == 3
 
@@ -707,6 +725,11 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
         "wheel_point": [400, 50],
         "pointer_coordinate_space": "runelite_target_logical_client",
         "compass_click_dwell_s": 0.1,
+        "key_release_settle_s": 1.0,
+        "key_release_verification": (
+            "semantic_client_consumption_wait_then_observable_key_up_and_"
+            "target_focus_identity_geometry"
+        ),
         "pitch_endpoint": "down",
         "pitch_hold_s": 3.0,
         "pitch_offset_hold_s": 0.0,
@@ -728,10 +751,10 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
         "drag_max_pixels": MAX_CAMERA_DRAG_PIXELS,
         "drag_max_step_pixels": 4,
         "drag_path_excludes_start": True,
-        "drag_arming_settle_s": 0.05,
+        "drag_arming_settle_s": 1.0,
         "drag_post_move_settle_s": 0.05,
         "drag_final_move_settle_included": True,
-        "drag_post_release_settle_s": 0.25,
+        "drag_post_release_settle_s": 1.0,
         "drag_post_release_verification": (
             "middle_up_focus_geometry_cursor_and_target_root"
         ),
@@ -754,7 +777,7 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
     assert initial["attempts"][0]["receipt"]["actions"][2] == {
         "action_index": 2,
         "action": {
-            "arming_settle_s": 0.05,
+            "arming_settle_s": 1.0,
             "axis": "horizontal",
             "coordinate_space": "runelite_target_logical_client",
             "final_move_settle_included": True,
@@ -763,7 +786,7 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
             "path": [[204, 600], [208, 600]],
             "pixels": 8,
             "post_move_settle_s": 0.05,
-            "post_release_settle_s": 0.25,
+            "post_release_settle_s": 1.0,
             "post_release_verification": (
                 "middle_up_focus_geometry_cursor_and_target_root"
             ),

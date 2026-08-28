@@ -8,13 +8,18 @@ import pytest
 from mining_automation.validation import (
     EXPECTED_CLIENT_HEIGHT,
     EXPECTED_CLIENT_WIDTH,
+    CameraHoldKey,
     CameraInputOperation,
+    CameraKeyHold,
     CameraPlan,
     CameraPlanRunner,
+    CameraWheel,
     ResetZoomKey,
 )
 from mining_automation.validation.windows_camera import (
     CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+    CAMERA_KEY_RELEASE_SETTLE_SECONDS,
+    CAMERA_MIDDLE_ARMING_SETTLE_SECONDS,
     CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS,
     CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
     COMPASS_CLICK_DWELL_SECONDS,
@@ -65,6 +70,7 @@ class FakeWindowsCameraApi:
         self.key_up_results: list[int | BaseException] = []
         self.wheel_results: list[int | BaseException] = []
         self.down_keys: set[int] = set()
+        self.defer_key_up_observation = False
         self.mouse_is_down = False
         self.middle_mouse_is_down = False
         self.defer_middle_up_observation = False
@@ -173,7 +179,7 @@ class FakeWindowsCameraApi:
         result = results.pop(0) if results else 1
         if isinstance(result, BaseException):
             raise result
-        if result == 1:
+        if result == 1 and not (key_up and self.defer_key_up_observation):
             if key_up:
                 self.down_keys.discard(virtual_key)
             else:
@@ -532,7 +538,8 @@ def test_compass_click_never_releases_a_preexisting_user_held_left_button() -> N
 
 def test_arrow_keys_are_extended_and_control_is_not() -> None:
     api = FakeWindowsCameraApi()
-    control = WindowsCameraControl(123, api)
+    sleeps: list[float] = []
+    control = WindowsCameraControl(123, api, key_release_sleeper=sleeps.append)
 
     control.key_down("up")
     control.key_up("up")
@@ -546,6 +553,7 @@ def test_arrow_keys_are_extended_and_control_is_not() -> None:
         ("key", 0x11, False, False),
         ("key", 0x11, True, False),
     ]
+    assert sleeps == [CAMERA_KEY_RELEASE_SETTLE_SECONDS] * 2
 
 
 def test_key_down_rejects_preexisting_key_state_without_sending_input() -> None:
@@ -576,22 +584,36 @@ def test_plan_runner_never_releases_preexisting_control_key() -> None:
     )
 
 
-def test_key_up_is_still_sent_after_target_loses_focus() -> None:
+def test_key_up_is_sent_but_fails_closed_after_target_loses_focus() -> None:
     api = FakeWindowsCameraApi()
-    control = WindowsCameraControl(123, api)
+    control = WindowsCameraControl(
+        123,
+        api,
+        key_release_sleeper=lambda _duration: None,
+    )
     control.key_down("left")
     api.foreground = 999
 
-    receipt = control.key_up("left")
+    with pytest.raises(WindowsCameraError, match="lost foreground focus"):
+        control.key_up("left")
 
-    assert receipt.complete
-    assert api.calls[-1] == ("key", 0x25, True, True)
+    assert ("key", 0x25, True, True) in api.calls
+    assert 0x25 not in api.down_keys
+    # Lifecycle cleanup must remain release-capable without restoring focus.
+    cleanup = control.release_all_held_keys()
+    assert len(cleanup) == 1 and cleanup[0].complete
+    assert [
+        call
+        for call in api.calls
+        if isinstance(call, tuple) and call[:3] == ("key", 0x25, True)
+    ] == [("key", 0x25, True, True)] * 2
 
 
 def test_key_up_retries_a_short_release_before_reporting_complete() -> None:
     api = FakeWindowsCameraApi()
     api.key_up_results = [0, 1]
-    control = WindowsCameraControl(123, api)
+    sleeps: list[float] = []
+    control = WindowsCameraControl(123, api, key_release_sleeper=sleeps.append)
     control.key_down("up")
 
     receipt = control.key_up("up")
@@ -605,13 +627,18 @@ def test_key_up_retries_a_short_release_before_reporting_complete() -> None:
         ("key", 0x26, True, True),
         ("key", 0x26, True, True),
     ]
+    assert sleeps == [CAMERA_KEY_RELEASE_SETTLE_SECONDS]
     assert control.release_all_held_keys() == ()
 
 
 def test_lifecycle_cleanup_retries_a_key_left_owned_after_short_release() -> None:
     api = FakeWindowsCameraApi()
     api.key_up_results = [0, 0, 0]
-    control = WindowsCameraControl(123, api)
+    control = WindowsCameraControl(
+        123,
+        api,
+        key_release_sleeper=lambda _duration: None,
+    )
     control.key_down("down")
 
     receipt = control.key_up("down")
@@ -666,13 +693,159 @@ def test_unowned_key_up_is_refused_without_releasing_external_state() -> None:
 def test_key_down_exception_attempts_owned_cleanup_and_preserves_primary_error() -> None:
     api = FakeWindowsCameraApi()
     api.key_down_results = [OSError("down failed")]
-    control = WindowsCameraControl(123, api)
+    control = WindowsCameraControl(
+        123,
+        api,
+        key_release_sleeper=lambda _duration: None,
+    )
 
     with pytest.raises(OSError, match="down failed"):
         control.key_down("left")
 
     assert ("key", 0x25, True, True) in api.calls
     assert control.release_all_held_keys() == ()
+
+
+def test_camera_plan_starts_no_later_action_before_key_release_settle() -> None:
+    api = FakeWindowsCameraApi()
+    release_sleeps: list[float] = []
+
+    def inspect_release_boundary(duration_s: float) -> None:
+        release_sleeps.append(duration_s)
+        assert duration_s == CAMERA_KEY_RELEASE_SETTLE_SECONDS
+        assert ("key", 0x26, True, True) in api.calls
+        assert not any(
+            isinstance(call, tuple) and call[0] in {"cursor", "wheel"}
+            for call in api.calls
+        )
+
+    control = WindowsCameraControl(
+        123,
+        api,
+        key_release_sleeper=inspect_release_boundary,
+        wheel_sleeper=lambda _duration: None,
+    )
+    plan = CameraPlan(
+        "key-release-before-wheel",
+        (
+            CameraKeyHold(CameraHoldKey.UP, 0.1),
+            CameraWheel(400, 50, 1),
+        ),
+    )
+
+    receipt = CameraPlanRunner(control, lambda _duration: None).run(plan)
+
+    assert len(receipt.action_receipts) == 2
+    assert release_sleeps == [CAMERA_KEY_RELEASE_SETTLE_SECONDS]
+    assert ("wheel", 1) in api.calls
+
+
+def test_key_release_accepts_delayed_observable_up_after_semantic_settle() -> None:
+    api = FakeWindowsCameraApi()
+    api.defer_key_up_observation = True
+    sleeps: list[float] = []
+
+    def observe_release(duration_s: float) -> None:
+        sleeps.append(duration_s)
+        api.down_keys.discard(0x26)
+
+    control = WindowsCameraControl(
+        123,
+        api,
+        key_release_sleeper=observe_release,
+    )
+    control.key_down("up")
+
+    receipt = control.key_up("up")
+
+    assert receipt.complete
+    assert sleeps == [CAMERA_KEY_RELEASE_SETTLE_SECONDS]
+    assert control.release_all_held_keys() == ()
+    assert [
+        call
+        for call in api.calls
+        if isinstance(call, tuple) and call[:3] == ("key", 0x26, True)
+    ] == [("key", 0x26, True, True)]
+
+
+def test_unobservable_key_release_fails_closed_and_retains_ownership() -> None:
+    api = FakeWindowsCameraApi()
+    api.defer_key_up_observation = True
+    control = WindowsCameraControl(
+        123,
+        api,
+        key_release_sleeper=lambda _duration: None,
+    )
+    control.key_down("down")
+
+    with pytest.raises(WindowsCameraError, match="release was not observable"):
+        control.key_up("down")
+
+    assert 0x28 in api.down_keys
+    api.defer_key_up_observation = False
+    cleanup = control.release_all_held_keys()
+    assert len(cleanup) == 1 and cleanup[0].complete
+    assert 0x28 not in api.down_keys
+    assert [
+        call
+        for call in api.calls
+        if isinstance(call, tuple) and call[:3] == ("key", 0x28, True)
+    ] == [("key", 0x28, True, True)] * 2
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("focus", "lost foreground focus"),
+        ("geometry", "geometry changed"),
+        ("identity", "window identity changed"),
+    ],
+)
+def test_key_release_revalidates_target_after_semantic_settle(
+    mutation: str,
+    message: str,
+) -> None:
+    api = FakeWindowsCameraApi()
+    mutated = False
+
+    def mutate_target(_duration_s: float) -> None:
+        nonlocal mutated
+        if mutated:
+            return
+        mutated = True
+        if mutation == "focus":
+            api.foreground = 999
+        elif mutation == "geometry":
+            api.size = (EXPECTED_CLIENT_WIDTH - 1, EXPECTED_CLIENT_HEIGHT)
+        else:
+            api.identity = _replacement_identity()
+
+    control = WindowsCameraControl(
+        123,
+        api,
+        key_release_sleeper=mutate_target,
+    )
+    control.key_down("right")
+
+    with pytest.raises(WindowsCameraError, match=message):
+        control.key_up("right")
+
+    assert 0x27 not in api.down_keys
+    api.foreground = 123
+    api.size = (EXPECTED_CLIENT_WIDTH, EXPECTED_CLIENT_HEIGHT)
+    api.identity = WindowsCameraTargetIdentity(
+        process_id=456,
+        thread_id=789,
+        class_name="SunAwtFrame",
+        title="RuneLite - Chief Luma",
+    )
+    cleanup = control.release_all_held_keys()
+    assert len(cleanup) == 1 and cleanup[0].complete
+    assert [
+        call
+        for call in api.calls
+        if isinstance(call, tuple) and call[:3] == ("key", 0x27, True)
+    ] == [("key", 0x27, True, True)] * 2
 
 
 def test_wheel_moves_to_reviewed_client_point_and_preserves_direction() -> None:
@@ -831,7 +1004,7 @@ def test_middle_drag_preflights_and_executes_exact_logical_path() -> None:
         ("middle", True),
     ]
     assert sleeps == [
-        CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+        CAMERA_MIDDLE_ARMING_SETTLE_SECONDS,
         CAMERA_DRAG_STEP_INTERVAL_SECONDS,
         CAMERA_DRAG_STEP_INTERVAL_SECONDS,
         CAMERA_DRAG_STEP_INTERVAL_SECONDS,
@@ -852,6 +1025,35 @@ def test_middle_drag_preflights_every_path_mapping_before_button_down() -> None:
         isinstance(call, tuple) and call[0] in {"cursor", "middle"}
         for call in api.calls
     )
+
+
+def test_middle_drag_sends_no_move_before_full_arming_settle() -> None:
+    api = FakeWindowsCameraApi()
+    sleep_calls = 0
+
+    def inspect_before_arming_returns(duration_s: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls != 1:
+            return
+        assert duration_s == CAMERA_MIDDLE_ARMING_SETTLE_SECONDS
+        assert [
+            call
+            for call in api.calls
+            if isinstance(call, tuple) and call[0] == "cursor"
+        ] == [("cursor", 220, 630)]
+        assert api.calls[-1] == ("middle", False)
+
+    control = WindowsCameraControl(
+        123,
+        api,
+        drag_sleeper=inspect_before_arming_returns,
+    )
+
+    receipts = control.drag_camera(200, 600, 4, 0)
+
+    assert all(receipt.complete for receipt in receipts)
+    assert sleep_calls == 3
 
 
 @pytest.mark.parametrize("blocked_logical_point", [(200, 600), (204, 600), (209, 600)])
@@ -911,6 +1113,8 @@ def test_middle_drag_rechecks_destination_root_before_held_cursor_move() -> None
         ("identity", "window identity changed"),
         ("middle", "lost its owned middle-button hold"),
         ("left", "left button is already held"),
+        ("cursor", "cursor moved during its bounded settle"),
+        ("overlay", "covered by another top-level window"),
     ],
 )
 def test_middle_drag_revalidates_safety_after_arming_settle(
@@ -928,8 +1132,12 @@ def test_middle_drag_revalidates_safety_after_arming_settle(
             api.identity = _replacement_identity()
         elif mutation == "middle":
             api.middle_mouse_is_down = False
-        else:
+        elif mutation == "left":
             api.mouse_is_down = True
+        elif mutation == "cursor":
+            api.cursor = (221, 630)
+        else:
+            api.foreign_root_points.add((220, 630))
 
     control = WindowsCameraControl(123, api, drag_sleeper=mutate)
 

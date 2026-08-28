@@ -31,6 +31,8 @@ from .camera_plan import (
 __all__ = [
     "RealWindowsCameraApi",
     "CAMERA_DRAG_STEP_INTERVAL_SECONDS",
+    "CAMERA_KEY_RELEASE_SETTLE_SECONDS",
+    "CAMERA_MIDDLE_ARMING_SETTLE_SECONDS",
     "CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS",
     "CAMERA_WHEEL_EVENT_INTERVAL_SECONDS",
     "COMPASS_CLICK_DWELL_SECONDS",
@@ -42,7 +44,9 @@ __all__ = [
 
 CAMERA_WHEEL_EVENT_INTERVAL_SECONDS = 0.025
 CAMERA_DRAG_STEP_INTERVAL_SECONDS = 0.050
-CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS = 0.250
+CAMERA_KEY_RELEASE_SETTLE_SECONDS = 1.000
+CAMERA_MIDDLE_ARMING_SETTLE_SECONDS = 1.000
+CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS = 1.000
 COMPASS_CLICK_DWELL_SECONDS = 0.100
 
 _ARROW_KEYS: dict[str, int] = {
@@ -319,6 +323,7 @@ class WindowsCameraControl:
         wheel_sleeper: Sleeper = time.sleep,
         click_sleeper: Sleeper = time.sleep,
         drag_sleeper: Sleeper = time.sleep,
+        key_release_sleeper: Sleeper = time.sleep,
     ) -> None:
         if isinstance(hwnd, bool) or not isinstance(hwnd, int) or hwnd <= 0:
             raise ValueError("hwnd must be a positive integer")
@@ -327,6 +332,7 @@ class WindowsCameraControl:
         self._wheel_sleeper = wheel_sleeper
         self._click_sleeper = click_sleeper
         self._drag_sleeper = drag_sleeper
+        self._key_release_sleeper = key_release_sleeper
         self._held_keys: dict[int, bool] = {}
         self._left_button_owned = False
         self._middle_button_owned = False
@@ -446,7 +452,11 @@ class WindowsCameraControl:
             raise WindowsCameraError(
                 f"refusing key-up because this control does not own {key!r}"
             )
-        completed = self._release_owned_key(virtual_key, extended=extended)
+        completed = self._release_owned_key(
+            virtual_key,
+            extended=extended,
+            verify_target=True,
+        )
         if completed == 1:
             self._held_keys.pop(virtual_key, None)
         return CameraInputReceipt(
@@ -521,7 +531,7 @@ class WindowsCameraControl:
             if completed_down == 1:
                 # RuneLite needs one semantic arming interval after the
                 # acknowledged down before it samples camera motion.
-                self._drag_sleeper(CAMERA_DRAG_STEP_INTERVAL_SECONDS)
+                self._drag_sleeper(CAMERA_MIDDLE_ARMING_SETTLE_SECONDS)
                 self._require_drag_point_still_safe(x, y)
                 for point_x, point_y in path:
                     self._move_to_verified_drag_point(
@@ -596,6 +606,7 @@ class WindowsCameraControl:
                 completed = self._release_owned_key(
                     virtual_key,
                     extended=extended,
+                    verify_target=False,
                 )
             except BaseException as exc:
                 failures.append(f"0x{virtual_key:02x}: {exc}")
@@ -938,7 +949,13 @@ class WindowsCameraControl:
         # handle can still own the reviewed point and retain the same geometry.
         self._require_target_identity()
 
-    def _release_owned_key(self, virtual_key: int, *, extended: bool) -> int:
+    def _release_owned_key(
+        self,
+        virtual_key: int,
+        *,
+        extended: bool,
+        verify_target: bool,
+    ) -> int:
         last_error: BaseException | None = None
         for _attempt in range(_KEY_RELEASE_ATTEMPTS):
             try:
@@ -951,6 +968,21 @@ class WindowsCameraControl:
                 last_error = exc
                 continue
             if completed == 1:
+                # SendInput proves insertion, not consumption by RuneLite's
+                # AWT event thread. Retain ownership across one fixed semantic
+                # boundary, prove the global key is observably up, and—during
+                # a normal plan action—revalidate the exact target before any
+                # later action can run. Lifecycle cleanup deliberately omits
+                # target readiness so release remains possible after focus or
+                # geometry loss.
+                self._key_release_sleeper(CAMERA_KEY_RELEASE_SETTLE_SECONDS)
+                if self._api.key_is_down(virtual_key):
+                    raise WindowsCameraError(
+                        "key release was not observable after the fixed "
+                        "semantic client-consumption settle"
+                    )
+                if verify_target:
+                    self._require_ready()
                 return 1
             if completed != 0:
                 last_error = WindowsCameraError(
@@ -969,7 +1001,11 @@ class WindowsCameraControl:
         # ownership until a compensating up is acknowledged.
         self._held_keys[virtual_key] = extended
         try:
-            completed = self._release_owned_key(virtual_key, extended=extended)
+            completed = self._release_owned_key(
+                virtual_key,
+                extended=extended,
+                verify_target=False,
+            )
         except BaseException:
             # Preserve the primary key-down failure.  The lifecycle cleanup
             # can retry because provisional ownership remains recorded.
