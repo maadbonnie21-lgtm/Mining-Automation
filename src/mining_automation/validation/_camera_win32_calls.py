@@ -82,6 +82,11 @@ _user32.GetClientRect.restype = wintypes.BOOL
 _user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
 _user32.ClientToScreen.restype = wintypes.BOOL
 _user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+_user32.LogicalToPhysicalPointForPerMonitorDPI.restype = wintypes.BOOL
+_user32.LogicalToPhysicalPointForPerMonitorDPI.argtypes = [
+    wintypes.HWND,
+    ctypes.POINTER(wintypes.POINT),
+]
 _user32.SetCursorPos.restype = wintypes.BOOL
 _user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
 _user32.WindowFromPoint.restype = wintypes.HWND
@@ -132,7 +137,24 @@ def client_size(hwnd: int) -> tuple[int, int]:
 
 
 def client_to_screen(hwnd: int, x: int, y: int) -> tuple[int, int]:
+    """Map RuneLite's logical capture point to a physical screen point.
+
+    RuneLite is DPI-unaware on the reviewed client, while this input process
+    is per-monitor aware. The production capture/profile coordinates therefore
+    remain in RuneLite's logical client space even when Windows presents a
+    scaled physical window. The per-monitor conversion must happen before
+    ``ClientToScreen`` or pointer input lands left/up of the reviewed target.
+    """
+
     point = wintypes.POINT(x, y)
+    if not _user32.LogicalToPhysicalPointForPerMonitorDPI(
+        hwnd,
+        ctypes.byref(point),
+    ):
+        raise OSError(
+            "LogicalToPhysicalPointForPerMonitorDPI failed for the target "
+            "RuneLite window"
+        )
     if not _user32.ClientToScreen(hwnd, ctypes.byref(point)):
         raise OSError("ClientToScreen failed for the target RuneLite window")
     return int(point.x), int(point.y)
@@ -191,16 +213,19 @@ def send_key(virtual_key: int, *, key_up: bool, extended: bool) -> int:
 
 
 def send_wheel(detents: int) -> int:
-    direction = 1 if detents > 0 else -1
-    events = tuple(
-        _mouse_input(
-            _MOUSEEVENTF_WHEEL,
-            mouse_data=direction * _WHEEL_DELTA,
-        )
-        for _ in range(abs(detents))
+    """Send exactly one signed wheel detent.
+
+    RuneLite can coalesce a batch of acknowledged wheel events, so the
+    validation adapter owns pacing and calls this boundary once per detent.
+    """
+
+    if detents not in (-1, 1):
+        raise ValueError("send_wheel requires exactly one signed detent")
+    event = _mouse_input(
+        _MOUSEEVENTF_WHEEL,
+        mouse_data=detents * _WHEEL_DELTA,
     )
-    inputs = (_INPUT * len(events))(*events)
-    return int(_user32.SendInput(len(inputs), inputs, ctypes.sizeof(_INPUT)))
+    return int(_user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(_INPUT)))
 
 
 def key_is_down(virtual_key: int) -> bool:

@@ -13,6 +13,7 @@ from mining_automation.validation import (
     ResetZoomKey,
 )
 from mining_automation.validation.windows_camera import (
+    CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
     RealWindowsCameraApi,
     WindowsCameraControl,
     WindowsCameraError,
@@ -37,7 +38,7 @@ class FakeWindowsCameraApi:
         self.mouse_up_results: list[int | BaseException] = []
         self.key_down_results: list[int | BaseException] = []
         self.key_up_results: list[int | BaseException] = []
-        self.wheel_count: int | None = None
+        self.wheel_results: list[int | BaseException] = []
         self.down_keys: set[int] = set()
         self.mouse_is_down = False
         self.calls: list[object] = []
@@ -110,7 +111,10 @@ class FakeWindowsCameraApi:
 
     def send_wheel(self, detents: int) -> int:
         self.calls.append(("wheel", detents))
-        return abs(detents) if self.wheel_count is None else self.wheel_count
+        result = self.wheel_results.pop(0) if self.wheel_results else 1
+        if isinstance(result, BaseException):
+            raise result
+        return result
 
     def key_is_down(self, virtual_key: int) -> bool:
         self.calls.append(("is-down", virtual_key))
@@ -327,15 +331,96 @@ def test_key_down_exception_attempts_owned_cleanup_and_preserves_primary_error()
 
 def test_wheel_moves_to_reviewed_client_point_and_preserves_direction() -> None:
     api = FakeWindowsCameraApi()
-    control = WindowsCameraControl(123, api)
+    sleeps: list[float] = []
+    control = WindowsCameraControl(123, api, wheel_sleeper=sleeps.append)
 
     receipt = control.scroll_camera(400, 50, -12)
 
     assert receipt.operation is CameraInputOperation.CAMERA_WHEEL
     assert receipt.requested_events == 12
     assert receipt.completed_events == 12
+    assert api.calls.count(("to-screen", 123, 400, 50)) == 12
+    assert api.calls.count(("cursor", 420, 80)) == 12
+    assert [call for call in api.calls if call == ("wheel", -1)] == [
+        ("wheel", -1)
+    ] * 12
+    assert sleeps == [CAMERA_WHEEL_EVENT_INTERVAL_SECONDS] * 11
+
+
+def test_wheel_stops_after_short_individual_event_and_reports_aggregate() -> None:
+    api = FakeWindowsCameraApi()
+    api.wheel_results = [1, 1, 0, 1]
+    sleeps: list[float] = []
+    control = WindowsCameraControl(123, api, wheel_sleeper=sleeps.append)
+
+    receipt = control.scroll_camera(400, 50, 4)
+
+    assert receipt.requested_events == 4
+    assert receipt.completed_events == 2
+    assert [call for call in api.calls if call == ("wheel", 1)] == [
+        ("wheel", 1),
+        ("wheel", 1),
+        ("wheel", 1),
+    ]
+    assert sleeps == [CAMERA_WHEEL_EVENT_INTERVAL_SECONDS] * 2
+
+
+def test_wheel_rejects_invalid_individual_event_count() -> None:
+    api = FakeWindowsCameraApi()
+    api.wheel_results = [2]
+
+    with pytest.raises(WindowsCameraError, match="invalid camera-wheel event count"):
+        WindowsCameraControl(123, api, wheel_sleeper=lambda _duration: None).scroll_camera(
+            400, 50, 2
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("focus", "lost foreground focus"),
+        ("geometry", "geometry changed"),
+        ("button", "left button is already held"),
+        ("overlay", "covered by another top-level window"),
+    ],
+)
+def test_wheel_revalidates_safety_between_paced_detents(
+    mutation: str,
+    message: str,
+) -> None:
+    api = FakeWindowsCameraApi()
+
+    def mutate(_duration: float) -> None:
+        if mutation == "focus":
+            api.foreground = 999
+        elif mutation == "geometry":
+            api.size = (EXPECTED_CLIENT_WIDTH - 1, EXPECTED_CLIENT_HEIGHT)
+        elif mutation == "button":
+            api.mouse_is_down = True
+        else:
+            api.root_at_point = 999
+
+    control = WindowsCameraControl(123, api, wheel_sleeper=mutate)
+
+    with pytest.raises(WindowsCameraError, match=message):
+        control.scroll_camera(400, 50, 2)
+
+    assert [call for call in api.calls if call == ("wheel", 1)] == [("wheel", 1)]
+
+
+def test_wheel_recomputes_screen_point_after_each_pacing_interval() -> None:
+    api = FakeWindowsCameraApi()
+
+    def move_window(_duration: float) -> None:
+        api.screen_offset = (120, 230)
+
+    control = WindowsCameraControl(123, api, wheel_sleeper=move_window)
+
+    receipt = control.scroll_camera(400, 50, 2)
+
+    assert receipt.complete
     assert ("cursor", 420, 80) in api.calls
-    assert api.calls[-1] == ("wheel", -12)
+    assert ("cursor", 520, 280) in api.calls
 
 
 def test_partial_mouse_click_retries_button_up_until_released() -> None:

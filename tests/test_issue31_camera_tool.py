@@ -23,6 +23,7 @@ from mining_automation.validation.camera_plan import (
     CameraInputOperation,
     CameraInputReceipt,
     CameraKeyHold,
+    CameraPause,
     CameraPreflightReceipt,
     CameraWheel,
     CompassClick,
@@ -56,15 +57,18 @@ def _args(tool: ModuleType, *values: str) -> argparse.Namespace:
     return tool.build_parser().parse_args(list(values))
 
 
-def test_reset_recipe_is_north_then_pitch_endpoint_then_release_reset(tool: ModuleType) -> None:
+def test_reset_recipe_is_north_settle_pitch_endpoint_then_release_reset(
+    tool: ModuleType,
+) -> None:
     args = _args(tool, "--pitch-endpoint", "down", "--reset-zoom")
 
     plan = tool._build_normalization_plan(args)
 
     assert isinstance(plan.actions[0], CompassClick)
     assert plan.actions[0] == CompassClick(608, 49)
-    assert plan.actions[1] == CameraKeyHold(CameraHoldKey.DOWN, 3.0)
-    assert plan.actions[2] == ResetZoomKey("control", dwell_s=0.1)
+    assert plan.actions[1] == CameraPause(0.5)
+    assert plan.actions[2] == CameraKeyHold(CameraHoldKey.DOWN, 3.0)
+    assert plan.actions[3] == ResetZoomKey("control", dwell_s=0.1)
 
 
 def test_wheel_recipe_saturates_then_moves_back_from_endpoint(tool: ModuleType) -> None:
@@ -80,10 +84,45 @@ def test_wheel_recipe_saturates_then_moves_back_from_endpoint(tool: ModuleType) 
 
     plan = tool._build_normalization_plan(args)
 
-    assert plan.actions[1] == CameraKeyHold(CameraHoldKey.UP, 3.0)
-    assert plan.actions[2:] == (
+    assert plan.actions[1] == CameraPause(0.5)
+    assert plan.actions[2] == CameraKeyHold(CameraHoldKey.UP, 3.0)
+    assert plan.actions[3:] == (
         CameraWheel(400, 50, -96),
         CameraWheel(400, 50, 24),
+    )
+
+
+def test_yaw_and_pitch_offsets_follow_settle_and_precede_zoom(
+    tool: ModuleType,
+) -> None:
+    args = _args(
+        tool,
+        "--pitch-endpoint",
+        "up",
+        "--pitch-offset-hold",
+        "0.55",
+        "--yaw-offset-direction",
+        "right",
+        "--yaw-offset-hold",
+        "0.05",
+        "--post-compass-settle",
+        "0.75",
+        "--zoom-saturate-detents",
+        "96",
+        "--zoom-offset-detents",
+        "-14",
+    )
+
+    plan = tool._build_normalization_plan(args)
+
+    assert plan.actions == (
+        CompassClick(608, 49),
+        CameraPause(0.75),
+        CameraKeyHold(CameraHoldKey.RIGHT, 0.05),
+        CameraKeyHold(CameraHoldKey.UP, 3.0),
+        CameraKeyHold(CameraHoldKey.DOWN, 0.55),
+        CameraWheel(400, 50, 96),
+        CameraWheel(400, 50, -14),
     )
 
 
@@ -114,6 +153,42 @@ def test_unsafe_or_nonendpoint_zoom_recipe_is_rejected(
 ) -> None:
     with pytest.raises(ValueError):
         tool._build_normalization_plan(_args(tool, *values))
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        ("--pitch-offset-hold", "-0.01"),
+        ("--pitch-offset-hold", "nan"),
+        ("--pitch-offset-hold", "inf"),
+        ("--pitch-offset-hold", "5.001"),
+        ("--yaw-offset-hold", "-0.01"),
+        ("--yaw-offset-hold", "nan"),
+        ("--yaw-offset-hold", "inf"),
+        ("--yaw-offset-hold", "5.001"),
+        ("--yaw-offset-hold", "0.05"),
+        ("--yaw-offset-direction", "right"),
+        ("--post-compass-settle", "0"),
+        ("--post-compass-settle", "-0.01"),
+        ("--post-compass-settle", "nan"),
+        ("--post-compass-settle", "inf"),
+        ("--post-compass-settle", "2.001"),
+    ],
+)
+def test_invalid_or_nonfinite_camera_offsets_and_settle_are_rejected(
+    tool: ModuleType,
+    values: tuple[str, ...],
+) -> None:
+    args = _args(
+        tool,
+        "--pitch-endpoint",
+        "up",
+        "--reset-zoom",
+        *values,
+    )
+
+    with pytest.raises(ValueError):
+        tool._build_normalization_plan(args)
 
 
 def test_three_perturbations_are_distinct_and_camera_only(tool: ModuleType) -> None:
@@ -160,7 +235,10 @@ def test_wheel_point_is_outside_fixed_ui_candidates_and_landmarks(tool: ModuleTy
     assert not any(_contains(landmark.region, point) for landmark in profile.scene_landmarks)
 
 
-def test_dry_run_prints_exact_plans_without_capture(tool: ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
+def test_dry_run_prints_exact_plans_without_capture(
+    tool: ModuleType,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     exit_code = tool.main(["--pitch-endpoint", "down", "--reset-zoom", "--dry-run"])
 
     assert exit_code == 0
@@ -170,6 +248,11 @@ def test_dry_run_prints_exact_plans_without_capture(tool: ModuleType, capsys: py
         "x": 608,
         "y": 49,
     }
+    assert payload["normalization"]["actions"][1:] == [
+        {"duration_s": 0.5, "kind": "pause"},
+        {"duration_s": 3.0, "key": "down", "kind": "key_hold"},
+        {"dwell_s": 0.1, "key": "control", "kind": "reset_zoom_key"},
+    ]
     assert len(payload["perturbations"]) == 3
 
 
@@ -335,6 +418,27 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
     assert evidence["initial_normalization_receipt"]["plan"] == evidence[
         "normalization_plan"
     ]
+    assert evidence["camera_assumptions"] == {
+        "compass_point": [608, 49],
+        "wheel_point": [400, 50],
+        "pitch_endpoint": "down",
+        "pitch_hold_s": 3.0,
+        "pitch_offset_hold_s": 0.0,
+        "yaw_offset_direction": None,
+        "yaw_offset_hold_s": 0.0,
+        "post_compass_settle_s": 0.5,
+        "zoom_mode": "reset_key",
+        "zoom_saturate_detents": None,
+        "zoom_offset_detents": 0,
+        "wheel_delivery": "paced_individual_detents",
+        "wheel_event_interval_s": 0.025,
+        "diagnostics_can_override_production": False,
+    }
+    assert evidence["initial_normalization_receipt"]["actions"][1] == {
+        "action_index": 1,
+        "action": {"kind": "pause", "duration_s": 0.5},
+        "input_receipts": [],
+    }
     assert len(evidence["trials"]) == 3
     assert all(
         trial["expected_resource_state_vector"]

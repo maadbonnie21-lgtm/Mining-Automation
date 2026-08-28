@@ -31,12 +31,14 @@ from mining_automation.perception import write_resource_fixture_draft  # noqa: E
 from mining_automation.validation.camera_evaluation import CameraEvaluation  # noqa: E402
 from mining_automation.validation.camera_plan import (  # noqa: E402
     MAX_CAMERA_WHEEL_DETENTS,
+    MAX_KEY_HOLD_SECONDS,
     REVIEWED_CAMERA_WHEEL_POINT,
     REVIEWED_COMPASS_POINT,
     CameraAction,
     CameraHoldKey,
     CameraInputReceipt,
     CameraKeyHold,
+    CameraPause,
     CameraPlan,
     CameraPlanError,
     CameraPlanReceipt,
@@ -55,6 +57,7 @@ from mining_automation.validation.camera_session import (  # noqa: E402
     run_camera_validation_session,
 )
 from mining_automation.validation.windows_camera import (  # noqa: E402
+    CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
     WindowsCameraControl,
     WindowsCameraError,
 )
@@ -65,6 +68,7 @@ _CAMERA_WHEEL_POINT = REVIEWED_CAMERA_WHEEL_POINT
 _MINIMUM_SATURATION_DETENTS = 80
 _DEFAULT_PITCH_HOLD_S = 3.0
 _DEFAULT_PERTURB_HOLD_S = 0.75
+_DEFAULT_POST_COMPASS_SETTLE_S = 0.5
 _CASE_PREFIX_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 class _PrivateArtifactRecorder:
@@ -138,6 +142,29 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="deterministic pitch saturation endpoint",
     )
+    parser.add_argument(
+        "--pitch-offset-hold",
+        type=float,
+        default=0.0,
+        help="bounded opposite-direction hold back from the pitch endpoint",
+    )
+    parser.add_argument(
+        "--yaw-offset-direction",
+        choices=("left", "right"),
+        help="optional bounded yaw direction applied after compass north",
+    )
+    parser.add_argument(
+        "--yaw-offset-hold",
+        type=float,
+        default=0.0,
+        help="bounded yaw hold in seconds; requires --yaw-offset-direction",
+    )
+    parser.add_argument(
+        "--post-compass-settle",
+        type=float,
+        default=_DEFAULT_POST_COMPASS_SETTLE_S,
+        help="explicit no-input settle after the compass click",
+    )
     zoom = parser.add_mutually_exclusive_group(required=True)
     zoom.add_argument(
         "--reset-zoom",
@@ -159,7 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="signed detents back from the saturated zoom endpoint",
     )
     parser.add_argument("--plan-id", default="varrock-east-camera-endpoint")
-    parser.add_argument("--plan-version", default="0.1.0")
+    parser.add_argument("--plan-version", default="0.2.0")
     parser.add_argument("--settle", type=float, default=1.0)
     parser.add_argument("--confirmations", type=int, default=2)
     parser.add_argument(
@@ -215,8 +242,51 @@ def _build_normalization_plan(args: argparse.Namespace) -> CameraPlan:
     pitch = CameraHoldKey(args.pitch_endpoint)
     actions: list[CameraAction] = [
         CompassClick(*_COMPASS_POINT),
-        CameraKeyHold(pitch, _DEFAULT_PITCH_HOLD_S),
+        CameraPause(args.post_compass_settle),
     ]
+    yaw_hold = args.yaw_offset_hold
+    yaw_direction = args.yaw_offset_direction
+    if (
+        isinstance(yaw_hold, bool)
+        or not isinstance(yaw_hold, (int, float))
+        or not 0.0 <= yaw_hold <= MAX_KEY_HOLD_SECONDS
+    ):
+        raise ValueError(
+            "--yaw-offset-hold must be finite and between 0 and "
+            f"{MAX_KEY_HOLD_SECONDS} seconds"
+        )
+    if yaw_hold and yaw_direction is None:
+        raise ValueError(
+            "--yaw-offset-direction is required when --yaw-offset-hold is nonzero"
+        )
+    if not yaw_hold and yaw_direction is not None:
+        raise ValueError(
+            "--yaw-offset-hold must be nonzero when --yaw-offset-direction is set"
+        )
+    if yaw_direction is not None:
+        actions.append(
+            CameraKeyHold(CameraHoldKey(yaw_direction), float(yaw_hold))
+        )
+    actions.append(
+        CameraKeyHold(pitch, _DEFAULT_PITCH_HOLD_S),
+    )
+    pitch_offset = args.pitch_offset_hold
+    if (
+        isinstance(pitch_offset, bool)
+        or not isinstance(pitch_offset, (int, float))
+        or not 0.0 <= pitch_offset <= MAX_KEY_HOLD_SECONDS
+    ):
+        raise ValueError(
+            "--pitch-offset-hold must be finite and between 0 and "
+            f"{MAX_KEY_HOLD_SECONDS} seconds"
+        )
+    if pitch_offset:
+        opposite = (
+            CameraHoldKey.DOWN
+            if pitch is CameraHoldKey.UP
+            else CameraHoldKey.UP
+        )
+        actions.append(CameraKeyHold(opposite, float(pitch_offset)))
     if args.reset_zoom:
         if args.zoom_offset_detents != 0:
             raise ValueError("--zoom-offset-detents cannot be used with --reset-zoom")
@@ -380,6 +450,8 @@ def _action_dict(action: CameraAction) -> dict[str, Any]:
         return {"kind": "compass_click", "x": action.x, "y": action.y}
     if isinstance(action, CameraKeyHold):
         return {"kind": "key_hold", "key": action.key.value, "duration_s": action.duration_s}
+    if isinstance(action, CameraPause):
+        return {"kind": "pause", "duration_s": action.duration_s}
     if isinstance(action, ResetZoomKey):
         return {"kind": "reset_zoom_key", "key": action.key, "dwell_s": action.dwell_s}
     return {
@@ -463,9 +535,15 @@ def _session_dict(
             "wheel_point": list(_CAMERA_WHEEL_POINT),
             "pitch_endpoint": args.pitch_endpoint,
             "pitch_hold_s": _DEFAULT_PITCH_HOLD_S,
+            "pitch_offset_hold_s": args.pitch_offset_hold,
+            "yaw_offset_direction": args.yaw_offset_direction,
+            "yaw_offset_hold_s": args.yaw_offset_hold,
+            "post_compass_settle_s": args.post_compass_settle,
             "zoom_mode": "reset_key" if args.reset_zoom else "wheel_endpoint",
             "zoom_saturate_detents": args.zoom_saturate_detents,
             "zoom_offset_detents": args.zoom_offset_detents,
+            "wheel_delivery": "paced_individual_detents",
+            "wheel_event_interval_s": CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
             "diagnostics_can_override_production": False,
         },
         "normalization_plan": _plan_dict(result.normalization_plan),

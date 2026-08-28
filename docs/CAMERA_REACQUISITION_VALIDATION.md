@@ -28,8 +28,9 @@ The validator is deliberately narrow:
 - The selected capture client must be exactly `1005 x 1078` pixels in the
   packaged pixel format.
 - Camera input is limited to the reviewed compass point, the four OSRS camera
-  keys, bounded wheel motion at a reviewed viewport point, and an optional
-  reviewed RuneLite reset-zoom key.
+  keys, bounded and individually paced wheel motion at a reviewed viewport
+  point, explicit bounded no-input settles, and an optional reviewed RuneLite
+  reset-zoom key.
 - No world tile, rock candidate, inventory slot, player, or navigation target
   is clicked.
 - The run is development validation only. It does not make the location or
@@ -39,24 +40,40 @@ Every camera plan execution receives a fresh focus and client-geometry
 preflight. A short or partial input receipt fails the run; it is never treated
 as successful camera motion.
 
+The reviewed capture/profile coordinates are RuneLite logical client
+coordinates. On the reviewed Windows installation RuneLite is DPI-unaware
+while the validator is per-monitor DPI-aware. Immediately before pointer
+input, the Windows adapter maps each logical point through RuneLite's DPI
+context and then into physical screen coordinates. This prevents display
+scaling from turning a reviewed compass or wheel coordinate into a world
+click. Focus, exact geometry, left-button state, and top-level-window ownership
+are rechecked at the mapped point before input.
+
 ## Deterministic normalization plan
 
 One normalization plan is frozen for an evidence run and is replayed in this
 order:
 
 1. Click the reviewed fixed-UI compass point to face north.
-2. Hold the selected pitch direction long enough to reach its endpoint.
-3. Establish zoom by either:
+2. Wait for the bounded, recorded post-compass settle interval.
+3. Optionally apply one bounded yaw offset from compass north.
+4. Hold the selected pitch direction long enough to reach its endpoint and
+   optionally apply one bounded opposite-direction pitch offset.
+5. Establish zoom by either:
    - scrolling enough bounded detents to a zoom endpoint, then optionally
      moving a reviewed number of detents back from that endpoint; or
    - using the RuneLite reset-zoom key only when that exact client setting and
      resulting view have been reviewed.
 
-The pitch endpoint, zoom mode, signed detent counts, plan identifier, and plan
-version are recorded in the report. Endpoint saturation makes the result
-independent of the starting pitch or zoom. The reset-key alternative is not a
-portable default: its RuneLite configuration and resulting view must be
-reviewed before evidence from it can be accepted.
+The compass settle, yaw/pitch offsets, pitch endpoint, zoom mode, signed
+detent counts, wheel pacing interval, plan identifier, and plan version are
+recorded in the report. Endpoint saturation makes the result independent of
+the starting pitch or zoom. Each wheel detent crosses the Win32 boundary as a
+separate event with a fixed interval because RuneLite can coalesce a batch even
+when Windows acknowledges every event in it. The adapter recomputes the mapped
+screen point and rechecks its safety gates before every detent. The reset-key
+alternative is not a portable default: its RuneLite configuration and
+resulting view must be reviewed before evidence from it can be accepted.
 
 Use `--dry-run` to inspect the bounded plans without opening capture or sending
 input. For example, this prints an illustrative endpoint plan only; it does not

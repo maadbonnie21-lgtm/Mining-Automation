@@ -9,6 +9,7 @@ so deterministic tests run on Linux without sending input.
 from __future__ import annotations
 
 import sys
+import time
 from typing import Any, Protocol
 
 from .camera_plan import (
@@ -19,14 +20,18 @@ from .camera_plan import (
     CameraInputOperation,
     CameraInputReceipt,
     CameraPreflightReceipt,
+    Sleeper,
 )
 
 __all__ = [
     "RealWindowsCameraApi",
+    "CAMERA_WHEEL_EVENT_INTERVAL_SECONDS",
     "WindowsCameraApi",
     "WindowsCameraControl",
     "WindowsCameraError",
 ]
+
+CAMERA_WHEEL_EVENT_INTERVAL_SECONDS = 0.025
 
 _ARROW_KEYS: dict[str, int] = {
     "left": 0x25,
@@ -65,7 +70,7 @@ class WindowsCameraApi(Protocol):
         """Return current physical client width and height."""
 
     def client_to_screen(self, hwnd: int, x: int, y: int) -> tuple[int, int]:
-        """Convert a client-local point to physical screen coordinates."""
+        """Convert a logical capture/client point to physical screen coordinates."""
 
     def move_cursor(self, x: int, y: int) -> bool:
         """Move the system cursor to a physical screen point."""
@@ -83,7 +88,7 @@ class WindowsCameraApi(Protocol):
         """Send one keyboard event, returning the accepted event count."""
 
     def send_wheel(self, detents: int) -> int:
-        """Send one event per wheel detent and return the accepted count."""
+        """Send exactly one signed detent and return its accepted count."""
 
     def key_is_down(self, virtual_key: int) -> bool:
         """Return whether a key is already held before a new key-down."""
@@ -161,11 +166,18 @@ class RealWindowsCameraApi:
 class WindowsCameraControl:
     """Fail-closed camera input for one already-discovered RuneLite HWND."""
 
-    def __init__(self, hwnd: int, api: WindowsCameraApi | None = None) -> None:
+    def __init__(
+        self,
+        hwnd: int,
+        api: WindowsCameraApi | None = None,
+        *,
+        wheel_sleeper: Sleeper = time.sleep,
+    ) -> None:
         if isinstance(hwnd, bool) or not isinstance(hwnd, int) or hwnd <= 0:
             raise ValueError("hwnd must be a positive integer")
         self._hwnd = hwnd
         self._api = api if api is not None else RealWindowsCameraApi()
+        self._wheel_sleeper = wheel_sleeper
         self._held_keys: dict[int, bool] = {}
         self._left_button_owned = False
         self._api.declare_dpi_awareness()
@@ -265,16 +277,34 @@ class WindowsCameraControl:
         self._require_reviewed_point(
             "camera wheel", x, y, REVIEWED_CAMERA_WHEEL_POINT
         )
-        self._require_ready()
-        self._require_left_button_released("camera wheel")
-        screen_point = self._move_to_client_point(x, y)
-        self._require_ready()
-        self._require_left_button_released("camera wheel")
-        self._require_target_at_screen_point("camera wheel", screen_point)
+        direction = 1 if detents > 0 else -1
+        requested_events = abs(detents)
+        completed_events = 0
+        for event_index in range(requested_events):
+            if event_index:
+                self._wheel_sleeper(CAMERA_WHEEL_EVENT_INTERVAL_SECONDS)
+            # A single SendInput batch can be fully acknowledged by Windows
+            # while RuneLite semantically drops/coalesces most of the wheel
+            # messages. Deliver one detent at a time, and re-establish every
+            # pointer safety invariant after each bounded pacing interval.
+            self._require_ready()
+            self._require_left_button_released("camera wheel")
+            screen_point = self._move_to_client_point(x, y)
+            self._require_ready()
+            self._require_left_button_released("camera wheel")
+            self._require_target_at_screen_point("camera wheel", screen_point)
+            completed = self._api.send_wheel(direction)
+            if completed not in (0, 1):
+                raise WindowsCameraError(
+                    "Windows returned an invalid camera-wheel event count"
+                )
+            completed_events += completed
+            if completed == 0:
+                break
         return CameraInputReceipt(
             CameraInputOperation.CAMERA_WHEEL,
-            requested_events=abs(detents),
-            completed_events=self._api.send_wheel(detents),
+            requested_events=requested_events,
+            completed_events=completed_events,
         )
 
     def release_all_held_keys(self) -> tuple[CameraInputReceipt, ...]:

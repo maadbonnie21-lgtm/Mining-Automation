@@ -27,6 +27,8 @@ MAX_CAMERA_WHEEL_DETENTS = 96
 MAX_TOTAL_CAMERA_WHEEL_DETENTS = 192
 MAX_KEY_HOLD_SECONDS = 5.0
 MAX_TOTAL_KEY_HOLD_SECONDS = 15.0
+MAX_CAMERA_PAUSE_SECONDS = 2.0
+MAX_TOTAL_CAMERA_PAUSE_SECONDS = 4.0
 MAX_RESET_ZOOM_DWELL_SECONDS = 1.0
 MAX_RESET_ZOOM_KEY_LENGTH = 32
 
@@ -167,6 +169,26 @@ class CameraKeyHold:
 
 
 @dataclass(frozen=True, slots=True)
+class CameraPause:
+    """A bounded, explicit no-input settle inside a camera plan."""
+
+    duration_s: float
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.duration_s, bool)
+            or not isinstance(self.duration_s, (int, float))
+            or not math.isfinite(self.duration_s)
+            or self.duration_s <= 0.0
+            or self.duration_s > MAX_CAMERA_PAUSE_SECONDS
+        ):
+            raise ValueError(
+                "camera pause duration must be finite and in "
+                f"(0, {MAX_CAMERA_PAUSE_SECONDS}]"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class ResetZoomKey:
     """One configured RuneLite reset-zoom key press with release dwell."""
 
@@ -227,7 +249,9 @@ class CameraWheel:
             )
 
 
-type CameraAction = CompassClick | CameraKeyHold | ResetZoomKey | CameraWheel
+type CameraAction = (
+    CompassClick | CameraKeyHold | CameraPause | ResetZoomKey | CameraWheel
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,6 +272,7 @@ class CameraPlan:
             raise ValueError(f"camera plan cannot contain more than {MAX_CAMERA_ACTIONS} actions")
 
         total_hold_s = 0.0
+        total_pause_s = 0.0
         total_wheel_detents = 0
         compass_clicks = 0
         reset_zoom_keys = 0
@@ -256,6 +281,8 @@ class CameraPlan:
                 compass_clicks += 1
             elif isinstance(action, CameraKeyHold):
                 total_hold_s += action.duration_s
+            elif isinstance(action, CameraPause):
+                total_pause_s += action.duration_s
             elif isinstance(action, ResetZoomKey):
                 reset_zoom_keys += 1
                 total_hold_s += action.dwell_s
@@ -273,6 +300,11 @@ class CameraPlan:
                 "camera plan total key-hold duration cannot exceed "
                 f"{MAX_TOTAL_KEY_HOLD_SECONDS} seconds"
             )
+        if total_pause_s > MAX_TOTAL_CAMERA_PAUSE_SECONDS:
+            raise ValueError(
+                "camera plan total pause duration cannot exceed "
+                f"{MAX_TOTAL_CAMERA_PAUSE_SECONDS} seconds"
+            )
         if total_wheel_detents > MAX_TOTAL_CAMERA_WHEEL_DETENTS:
             raise ValueError(
                 "camera plan total wheel movement cannot exceed "
@@ -281,6 +313,8 @@ class CameraPlan:
 
 
 def _expected_operations(action: CameraAction) -> tuple[CameraInputOperation, ...]:
+    if isinstance(action, CameraPause):
+        return ()
     if isinstance(action, CompassClick):
         return (CameraInputOperation.COMPASS_CLICK,)
     if isinstance(action, CameraKeyHold):
@@ -368,7 +402,7 @@ class CameraControl(Protocol):
 
 
 class Sleeper(Protocol):
-    """Injected monotonic delay used only between key-down and key-up."""
+    """Injected monotonic delay used by bounded key holds and pauses."""
 
     def __call__(self, duration_s: float, /) -> None: ...
 
@@ -424,6 +458,10 @@ class CameraPlanRunner:
             )
 
     def _run_action(self, index: int, action: CameraAction) -> CameraActionReceipt:
+        if isinstance(action, CameraPause):
+            self._sleeper(action.duration_s)
+            return CameraActionReceipt(index, action, ())
+
         if isinstance(action, CompassClick):
             click_receipt = _require_complete_receipt(
                 self._control.click_compass(action.x, action.y),

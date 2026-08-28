@@ -8,9 +8,11 @@ from mining_automation.validation import (
     EXPECTED_CLIENT_HEIGHT,
     EXPECTED_CLIENT_WIDTH,
     MAX_CAMERA_ACTIONS,
+    MAX_CAMERA_PAUSE_SECONDS,
     MAX_CAMERA_WHEEL_DETENTS,
     MAX_KEY_HOLD_SECONDS,
     MAX_RESET_ZOOM_DWELL_SECONDS,
+    MAX_TOTAL_CAMERA_PAUSE_SECONDS,
     MAX_TOTAL_CAMERA_WHEEL_DETENTS,
     MAX_TOTAL_KEY_HOLD_SECONDS,
     CameraActionReceipt,
@@ -18,6 +20,7 @@ from mining_automation.validation import (
     CameraInputOperation,
     CameraInputReceipt,
     CameraKeyHold,
+    CameraPause,
     CameraPlan,
     CameraPlanReceipt,
     CameraPlanRunner,
@@ -81,6 +84,7 @@ def test_plan_executes_actions_in_declared_order_and_returns_immutable_receipts(
         name="north-pitch-zoom",
         actions=(
             CompassClick(608, 49),
+            CameraPause(0.15),
             CameraKeyHold(CameraHoldKey.UP, 0.25),
             CameraWheel(400, 50, -7),
             ResetZoomKey("home"),
@@ -100,10 +104,12 @@ def test_plan_executes_actions_in_declared_order_and_returns_immutable_receipts(
         ("down", "home"),
         ("up", "home"),
     ]
-    assert sleeps == [0.25, 0.1]
+    assert sleeps == [0.15, 0.25, 0.1]
     assert receipt.plan is plan
     assert receipt.preflight.supported is True
-    assert [item.action_index for item in receipt.action_receipts] == [0, 1, 2, 3]
+    assert [item.action_index for item in receipt.action_receipts] == [0, 1, 2, 3, 4]
+    assert receipt.action_receipts[1].action == CameraPause(0.15)
+    assert receipt.action_receipts[1].input_receipts == ()
     with pytest.raises(FrozenInstanceError):
         receipt.preflight.focused = False  # type: ignore[misc]
 
@@ -141,6 +147,26 @@ def test_key_is_released_when_sleep_raises() -> None:
         ("down", "down"),
         ("up", "down"),
     ]
+
+
+def test_pause_sleep_failure_stops_before_later_input() -> None:
+    control = RecordingControl()
+    plan = CameraPlan(
+        "pause-failure",
+        (
+            CompassClick(608, 49),
+            CameraPause(0.5),
+            CameraKeyHold(CameraHoldKey.DOWN, 0.25),
+        ),
+    )
+
+    def fail_sleep(_duration_s: float) -> None:
+        raise OSError("pause failed")
+
+    with pytest.raises(OSError, match="pause failed"):
+        CameraPlanRunner(control, fail_sleep).run(plan)
+
+    assert control.calls == ["preflight", ("compass", 608, 49)]
 
 
 def test_key_down_exception_does_not_release_a_key_the_runner_never_acquired() -> None:
@@ -234,6 +260,18 @@ def test_action_receipt_rejects_missing_key_release_acknowledgement() -> None:
         )
 
 
+def test_pause_receipt_requires_exactly_zero_input_acknowledgements() -> None:
+    action = CameraPause(0.5)
+
+    assert CameraActionReceipt(0, action, ()).input_receipts == ()
+    with pytest.raises(ValueError, match="missing required input acknowledgements"):
+        CameraActionReceipt(
+            0,
+            action,
+            (_complete(CameraInputOperation.KEY_DOWN),),
+        )
+
+
 def test_plan_receipt_rejects_partial_action_coverage() -> None:
     plan = CameraPlan("two-actions", (CompassClick(608, 49), ResetZoomKey("home")))
     preflight = CameraPreflightReceipt(True, EXPECTED_CLIENT_WIDTH, EXPECTED_CLIENT_HEIGHT)
@@ -270,6 +308,22 @@ def test_compass_click_is_restricted_to_exact_reviewed_point(x: int, y: int) -> 
 def test_camera_key_hold_is_strictly_bounded(duration_s: float) -> None:
     with pytest.raises(ValueError, match="camera hold duration"):
         CameraKeyHold(CameraHoldKey.UP, duration_s)
+
+
+@pytest.mark.parametrize(
+    "duration_s",
+    [
+        0.0,
+        -1.0,
+        True,
+        float("nan"),
+        float("inf"),
+        MAX_CAMERA_PAUSE_SECONDS + 0.001,
+    ],
+)
+def test_camera_pause_is_strictly_bounded(duration_s: float) -> None:
+    with pytest.raises(ValueError, match="camera pause duration"):
+        CameraPause(duration_s)
 
 
 @pytest.mark.parametrize(
@@ -344,6 +398,13 @@ def test_camera_plan_limits_action_count_and_total_hold_duration() -> None:
                 CameraWheel(400, 50, MAX_CAMERA_WHEEL_DETENTS)
                 for _ in range(wheel_count)
             ),
+        )
+
+    pause_count = int(MAX_TOTAL_CAMERA_PAUSE_SECONDS / MAX_CAMERA_PAUSE_SECONDS) + 1
+    with pytest.raises(ValueError, match="total pause duration"):
+        CameraPlan(
+            "too-much-pause",
+            tuple(CameraPause(MAX_CAMERA_PAUSE_SECONDS) for _ in range(pause_count)),
         )
 
 
