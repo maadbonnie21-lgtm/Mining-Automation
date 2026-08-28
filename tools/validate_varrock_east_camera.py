@@ -426,8 +426,12 @@ def _plan_receipt_dict(receipt: CameraPlanReceipt) -> dict[str, Any]:
     }
 
 
-def _frame_record_dict(record: CameraFrameRecord) -> dict[str, Any]:
-    return {
+def _frame_record_dict(
+    record: CameraFrameRecord,
+    *,
+    resource_states_match_expected: bool | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "artifact": {
             "label": record.artifact.label,
             "frame_id": record.artifact.frame_id,
@@ -439,6 +443,11 @@ def _frame_record_dict(record: CameraFrameRecord) -> dict[str, Any]:
         },
         "production": _evaluation_dict(record.evaluation),
     }
+    if resource_states_match_expected is not None:
+        payload["resource_states_match_expected"] = (
+            resource_states_match_expected
+        )
+    return payload
 
 
 def _session_dict(
@@ -469,6 +478,13 @@ def _session_dict(
             {
                 "trial_index": trial.trial_index,
                 "before": _frame_record_dict(trial.before),
+                "expected_resource_state_vector": [
+                    {
+                        "resource_id": resource_id,
+                        "state": state.value,
+                    }
+                    for resource_id, state in trial.expected_resource_state_vector
+                ],
                 "perturbation_plan": _plan_dict(trial.perturbation_plan),
                 "perturbation_receipt": _plan_receipt_dict(trial.perturbation_receipt),
                 "perturbed": _frame_record_dict(trial.perturbed),
@@ -477,8 +493,15 @@ def _session_dict(
                     trial.normalization_receipt
                 ),
                 "confirmations": [
-                    _frame_record_dict(confirmation)
-                    for confirmation in trial.confirmations
+                    _frame_record_dict(
+                        confirmation,
+                        resource_states_match_expected=states_match,
+                    )
+                    for confirmation, states_match in zip(
+                        trial.confirmations,
+                        trial.confirmation_state_matches,
+                        strict=True,
+                    )
                 ],
                 "passed": trial.passed,
             }

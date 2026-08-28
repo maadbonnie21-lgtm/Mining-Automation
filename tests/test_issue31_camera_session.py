@@ -34,13 +34,19 @@ FIXTURE_ROOT = (
 )
 
 
-def _reviewed_frame(*, frame_id: int) -> Frame:
-    payload = gzip.decompress((FIXTURE_ROOT / "frames" / "available-01.raw.gz").read_bytes())
+def _reviewed_case_frame(case_id: str, *, frame_id: int) -> Frame:
+    payload = gzip.decompress(
+        (FIXTURE_ROOT / "frames" / f"{case_id}.raw.gz").read_bytes()
+    )
     return Frame.from_raw(
         RawFrame(payload, 1005, 1078, PixelFormat.BGRA8888),
         frame_id=frame_id,
         captured_monotonic_s=float(frame_id),
     )
+
+
+def _reviewed_frame(*, frame_id: int) -> Frame:
+    return _reviewed_case_frame("available-01", frame_id=frame_id)
 
 
 def _unsupported_frame(*, frame_id: int) -> Frame:
@@ -233,6 +239,46 @@ def test_failed_confirmation_cannot_be_overridden_by_other_passes() -> None:
     assert not result.passed
     assert not result.trials[0].passed
     assert not result.trials[0].confirmations[1].evaluation.passed
+
+
+def test_definitive_confirmation_with_changed_state_vector_fails_session() -> None:
+    normalization, perturbations = _plans()
+    frames = _passing_sequence()
+    frames[2] = _reviewed_case_frame(
+        "lower-left-full-cycle-020",
+        frame_id=3,
+    )
+
+    result = run_camera_validation_session(
+        SequenceSource(frames),
+        CompleteControl(),
+        normalization_plan=normalization,
+        perturbation_plans=perturbations,
+        sleeper=lambda _seconds: None,
+        settle_s=0.1,
+        confirmation_frames=2,
+    )
+
+    first_trial = result.trials[0]
+    assert first_trial.before.evaluation.passed
+    assert all(
+        confirmation.evaluation.passed
+        for confirmation in first_trial.confirmations
+    )
+    assert first_trial.confirmation_state_matches == (False, True)
+    assert sum(
+        before_state != confirmation_state
+        for (_, before_state), (_, confirmation_state) in zip(
+            first_trial.expected_resource_state_vector,
+            (
+                (item.resource_id, item.state)
+                for item in first_trial.confirmations[0].evaluation.resource_states
+            ),
+            strict=True,
+        )
+    ) == 1
+    assert not first_trial.passed
+    assert not result.passed
 
 
 def test_unsupported_before_frame_cannot_be_overridden_by_reacquisition() -> None:

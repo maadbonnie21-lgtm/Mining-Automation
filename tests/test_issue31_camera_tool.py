@@ -336,6 +336,27 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
         "normalization_plan"
     ]
     assert len(evidence["trials"]) == 3
+    assert all(
+        trial["expected_resource_state_vector"]
+        == [
+            {
+                "resource_id": resource_id,
+                "state": "available",
+            }
+            for resource_id in (
+                "varrock-east-iron-northwest",
+                "varrock-east-iron-southwest",
+                "varrock-east-iron-center",
+                "varrock-east-iron-northeast",
+            )
+        ]
+        for trial in evidence["trials"]
+    )
+    assert all(
+        confirmation["resource_states_match_expected"] is True
+        for trial in evidence["trials"]
+        for confirmation in trial["confirmations"]
+    )
     records = [
         trial[key]
         for trial in evidence["trials"]
@@ -366,6 +387,52 @@ def test_one_command_wires_production_evaluation_artifacts_and_exact_report(
     )
     digest = hashlib.sha256(report_bytes).hexdigest()
     assert (Path(f"{report_path}.sha256")).read_text(encoding="ascii") == f"{digest}\n"
+
+
+def test_report_records_definitive_confirmation_state_mismatch(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    frames = _passing_frames()
+    mismatch = _reviewed_payload("lower-left-full-cycle-020")
+    frames[3] = Frame.from_raw(
+        RawFrame(mismatch, 1005, 1078, PixelFormat.BGRA8888),
+        frame_id=4,
+        captured_monotonic_s=4.0,
+    )
+    _install_main_fakes(tool, output, monkeypatch, frames)
+
+    exit_code = tool.main(
+        [
+            "--output",
+            str(output),
+            "--case-prefix",
+            "state-mismatch",
+            "--pitch-endpoint",
+            "down",
+            "--reset-zoom",
+            "--settle",
+            "0.001",
+        ]
+    )
+
+    assert exit_code == 1
+    payload = json.loads(
+        (output / "reports" / "state-mismatch.camera.json").read_text()
+    )
+    first_trial = payload["evidence"]["trials"][0]
+    mismatch_confirmation = first_trial["confirmations"][0]
+    assert mismatch_confirmation["production"]["passed"] is True
+    assert all(
+        resource["definitive"]
+        for resource in mismatch_confirmation["production"]["resources"]
+    )
+    assert mismatch_confirmation["resource_states_match_expected"] is False
+    assert first_trial["confirmations"][1]["resource_states_match_expected"] is True
+    assert first_trial["passed"] is False
+    assert payload["evidence"]["camera_protocol_passed"] is False
 
 
 def test_dirty_development_session_cannot_serialize_acceptance_pass(
@@ -598,9 +665,7 @@ def _install_main_fakes(
 
 
 def _passing_frames() -> list[Frame]:
-    reviewed = gzip.decompress(
-        (FIXTURE_ROOT / "frames" / "available-01.raw.gz").read_bytes()
-    )
+    reviewed = _reviewed_payload("available-01")
     unsupported = bytes(len(reviewed))
     # Window discovery happens before initial normalization. Make that frame
     # unsupported so the integration test proves it cannot be reused as the
@@ -624,6 +689,12 @@ def _passing_frames() -> list[Frame]:
             )
             frame_id += 1
     return frames
+
+
+def _reviewed_payload(case_id: str) -> bytes:
+    return gzip.decompress(
+        (FIXTURE_ROOT / "frames" / f"{case_id}.raw.gz").read_bytes()
+    )
 
 
 def _git(repo: Path, *args: str) -> None:

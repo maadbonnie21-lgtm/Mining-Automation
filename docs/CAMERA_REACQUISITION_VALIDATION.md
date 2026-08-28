@@ -83,8 +83,12 @@ starting camera. For each trial it:
 Every confirmation must pass the unchanged production detector. In particular,
 the scene must match at least five of the six frozen world landmarks across at
 least three explicit macro zones, and every profiled resource must have a
-definitive production state. A pass in one trial cannot compensate for a
-failure in another trial or confirmation.
+definitive production state. Every confirmation must also preserve the exact
+ordered `(resource_id, state)` vector observed in that trial's supported
+before frame. A natural resource transition during a trial therefore makes
+that trial ineligible and requires a fresh run; definitive counts or confidence
+cannot substitute for exact state equality. A pass in one trial cannot
+compensate for a failure in another trial or confirmation.
 
 The production scene identity remains world-only:
 
@@ -102,12 +106,13 @@ unreviewed raw frame, BMP preview, and JSON fixture draft beneath
 `.sha256` sidecar. The repository ignores the entire `diagnostics/` tree, so
 none of these artifacts should be added to Git.
 
-The report records frame SHA-256 values, production observations, landmark
-distances and thresholds, input receipts, the exact plan, and trial verdicts.
-It does not embed raw pixel payloads. Its JSON is serialized deterministically
-with sorted keys, indentation, and one trailing newline. The sidecar contains
-the SHA-256 of those exact report bytes; the digest is intentionally not stored
-inside the report it hashes.
+The report records frame SHA-256 values, production observations, each trial's
+ordered expected resource-state vector, per-confirmation exact-state equality,
+landmark distances and thresholds, input receipts, the exact plan, and trial
+verdicts. It does not embed raw pixel payloads. Its JSON is serialized
+deterministically with sorted keys, indentation, and one trailing newline. The
+sidecar contains the SHA-256 of those exact report bytes; the digest is
+intentionally not stored inside the report it hashes.
 
 This report can mark only the camera protocol evidence as eligible. It
 explicitly records combined Issue #31 acceptance as incomplete because it does

@@ -88,6 +88,24 @@ class CameraTrialResult:
     confirmations: tuple[CameraFrameRecord, ...]
 
     @property
+    def expected_resource_state_vector(
+        self,
+    ) -> tuple[tuple[str, ResourceVisualState], ...]:
+        """Return the ordered production states captured before perturbation."""
+
+        return _resource_state_vector(self.before.evaluation)
+
+    @property
+    def confirmation_state_matches(self) -> tuple[bool, ...]:
+        """Whether each confirmation exactly preserves the baseline states."""
+
+        expected = self.expected_resource_state_vector
+        return tuple(
+            _resource_state_vector(confirmation.evaluation) == expected
+            for confirmation in self.confirmations
+        )
+
+    @property
     def passed(self) -> bool:
         return (
             self.before.evaluation.passed
@@ -96,6 +114,7 @@ class CameraTrialResult:
                 confirmation.evaluation.passed
                 for confirmation in self.confirmations
             )
+            and all(self.confirmation_state_matches)
         )
 
 
@@ -254,6 +273,17 @@ def _is_fail_closed_perturbation(evaluation: CameraEvaluation) -> bool:
             resource.state is ResourceVisualState.UNCERTAIN
             for resource in evaluation.resource_states
         )
+    )
+
+
+def _resource_state_vector(
+    evaluation: CameraEvaluation,
+) -> tuple[tuple[str, ResourceVisualState], ...]:
+    """Project one evaluation to its exact ordered resource-state vector."""
+
+    return tuple(
+        (resource.resource_id, resource.state)
+        for resource in evaluation.resource_states
     )
 
 
