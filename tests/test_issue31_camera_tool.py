@@ -2058,7 +2058,7 @@ def test_north_bootstrap_observed_identity_mismatch_refuses_report(
         ]
     ) == 2
     assert _NorthBootstrapFakeControl.last is not None
-    assert _NorthBootstrapFakeControl.last.calls == []
+    assert _NorthBootstrapFakeControl.last.calls == ["preflight"]
     assert not (output / "reports" / "identity-drift.camera.json").exists()
 
 
@@ -2098,7 +2098,7 @@ def test_north_bootstrap_identity_drift_at_any_preinput_stage_sends_zero_input(
         ]
     ) == 2
     assert _NorthBootstrapFakeControl.last is not None
-    assert _NorthBootstrapFakeControl.last.calls == []
+    assert _NorthBootstrapFakeControl.last.calls == ["preflight"]
 
 
 def test_north_bootstrap_lease_spans_cleanup_and_publication(

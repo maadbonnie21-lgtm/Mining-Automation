@@ -81,7 +81,10 @@ signed four-pixel calibration probe, but the probe cannot authorize a
 correction or establish scene acceptance. The arm seam reruns readiness and
 unchanged production perception, compares only excluded-candidate structural
 regions, then requires a strictly newer final commit frame to retain readiness
-and the same cheap world-only guard. The accepted arm must remain less than one
+and the same cheap world-only guard. No-camera-input platform preflight runs
+before that final commit capture, so a world change during preflight is
+observed and vetoed before input. Every controlled button/key is rechecked at
+the compass adapter's final seam. The accepted arm must remain less than one
 second old at input. Any changed, ambiguous, stale, non-fresh, or invalid-clock
 case stops before input. Use
 `tools/analyze_issue31_servo_offline.py` for the required read-only proof; it

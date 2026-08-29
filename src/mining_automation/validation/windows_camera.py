@@ -380,11 +380,16 @@ class WindowsCameraControl:
     def click_compass(self, x: int, y: int) -> CameraInputReceipt:
         self._require_reviewed_point("compass click", x, y, REVIEWED_COMPASS_POINT)
         self._require_ready()
-        self._require_left_button_released("compass click")
+        self._require_all_control_inputs_released(operation="compass click")
         screen_point = self._move_to_client_point(x, y)
         self._require_ready()
-        self._require_left_button_released("compass click")
         self._require_target_at_screen_point("compass click", screen_point)
+        # The bootstrap intentionally performs its broader, potentially
+        # focusing preflight before the final world commit. Recheck every
+        # controlled global input at the last seam so a user-held middle
+        # button or key that appeared during commit evaluation cannot turn
+        # this compass request into an unintended interaction.
+        self._require_all_control_inputs_released(operation="compass click")
         completed_down = 0
         # The pre-checks proved the button was not externally held. Mark
         # provisional ownership before the OS call so an exception raised
@@ -657,12 +662,24 @@ class WindowsCameraControl:
                 "target RuneLite window identity changed while the HWND was reused"
             )
 
-    def _require_all_control_inputs_released(self) -> None:
+    def _require_all_control_inputs_released(
+        self,
+        *,
+        operation: str | None = None,
+    ) -> None:
         if self._api.left_button_is_down():
+            if operation is not None:
+                raise WindowsCameraError(
+                    f"refusing {operation} because the left button is already held"
+                )
             raise WindowsCameraError(
                 "refusing camera preflight because the global left button is held"
             )
         if self._api.middle_button_is_down():
+            if operation is not None:
+                raise WindowsCameraError(
+                    f"refusing {operation} because the middle button is already held"
+                )
             raise WindowsCameraError(
                 "refusing camera preflight because the global middle button is held"
             )
@@ -673,6 +690,11 @@ class WindowsCameraControl:
         ]
         if held_keys:
             rendered = ", ".join(f"0x{key:02x}" for key in held_keys)
+            if operation is not None:
+                raise WindowsCameraError(
+                    f"refusing {operation} because validator-controlled global "
+                    f"keys are held: {rendered}"
+                )
             raise WindowsCameraError(
                 "refusing camera preflight because validator-controlled global "
                 f"keys are held: {rendered}"

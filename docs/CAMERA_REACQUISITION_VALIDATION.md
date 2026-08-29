@@ -348,7 +348,7 @@ arm-to-input clock has its own frozen maximum of one second: an age equal to or
 greater than that maximum is expired. Invalid, non-finite, or regressing
 origin/final clock samples, capture or recording failure, a non-fresh commit
 frame, readiness loss, or a guard reject all stop before physical input. The
-read-only platform preflight is completed before the final arm-age sample. The
+no-camera-input platform preflight is completed before the final arm-age sample. The
 accepted arm and commit frame IDs, capture timestamps, payload
 hashes, age evidence, and commit result remain distinct report evidence.
 
@@ -369,8 +369,13 @@ action. Heading becomes normalized only after the session records the exact
 complete one-action compass receipt bound to the reserved decision and frame.
 The development-only north-bootstrap runner still performs a fresh arm and
 final commit observation, including unchanged production evaluation at those
-captured seams. It runs at most that one primitive, captures a fresh post-action
-frame, and treats only the unchanged production evaluator as success.
+captured seams. Its no-camera-input Windows preflight completes before that
+final commit capture. The commit's readiness and initial-to-arm-to-commit
+world-only guards therefore observe any world change during preflight; only
+the cheap platform/provenance checks, an all-controlled-input recheck, and the
+final arm-age sample remain between that commit and the input request. It runs
+at most that one primitive, captures a fresh post-action frame, and treats only
+the unchanged production evaluator as success.
 
 If a coherent world-only fit instead identifies yaw or pitch as dominant, V2
 returns `CALIBRATION_REQUIRED`. It may describe one explicit signed

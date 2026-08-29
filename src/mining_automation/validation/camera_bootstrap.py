@@ -490,6 +490,23 @@ def run_camera_north_bootstrap(
             detail="World structure changed before the final commit observation.",
         )
 
+    # Platform preflight can perform nontrivial no-camera-input work, including
+    # focusing the target. Complete it before the final world observation so no
+    # preflight latency or side effect can stale the pixels that authorize input.
+    try:
+        preflight = control.preflight()
+    except Exception as error:
+        return _result(
+            initial=initial,
+            guidance=guidance,
+            plan=plan,
+            arm=arm,
+            arm_guard=arm_guard,
+            terminal_reason=CameraNorthBootstrapTerminalReason.INPUT_EXCEPTION,
+            detail="Compass preflight failed before the final commit observation.",
+            error=error,
+        )
+
     try:
         commit_frame, commit = _capture_evidence(source, recorder, "v2-commit")
     except Exception as error:
@@ -499,6 +516,7 @@ def run_camera_north_bootstrap(
             plan=plan,
             arm=arm,
             arm_guard=arm_guard,
+            preflight=preflight,
             terminal_reason=CameraNorthBootstrapTerminalReason.OBSERVATION_EXCEPTION,
             detail="Final commit capture, recording, or evaluation failed closed.",
             error=error,
@@ -511,6 +529,7 @@ def run_camera_north_bootstrap(
             arm=arm,
             arm_guard=arm_guard,
             commit=commit,
+            preflight=preflight,
             terminal_reason=CameraNorthBootstrapTerminalReason.NON_FRESH_OBSERVATION,
             detail="The final commit frame was not strictly newer than the arm frame.",
         )
@@ -524,6 +543,7 @@ def run_camera_north_bootstrap(
             arm=arm,
             arm_guard=arm_guard,
             commit=commit,
+            preflight=preflight,
             terminal_reason=reason,
             detail=f"Final commit veto: {detail}",
         )
@@ -540,6 +560,7 @@ def run_camera_north_bootstrap(
             arm=arm,
             arm_guard=arm_guard,
             commit=commit,
+            preflight=preflight,
             terminal_reason=CameraNorthBootstrapTerminalReason.OBSERVATION_EXCEPTION,
             detail="Final world-only structural guard failed closed.",
             error=error,
@@ -559,6 +580,7 @@ def run_camera_north_bootstrap(
             commit=commit,
             commit_guard=commit_guard,
             decision_commit_guard=decision_commit_guard,
+            preflight=preflight,
             terminal_reason=CameraNorthBootstrapTerminalReason.WORLD_CHANGED,
             detail="The final commit no longer retained the prevalidated bootstrap token.",
         )
@@ -577,27 +599,12 @@ def run_camera_north_bootstrap(
             commit_guard=commit_guard,
             decision_commit_guard=decision_commit_guard,
             arm_age=_arm_age_not_reached(arm_origin_clock_s),
+            preflight=preflight,
             terminal_reason=CameraNorthBootstrapTerminalReason.OBSERVATION_EXCEPTION,
             detail="The final external pre-input guard failed closed.",
             error=error,
         )
 
-    try:
-        preflight = control.preflight()
-    except Exception as error:
-        return _result(
-            initial=initial,
-            guidance=guidance,
-            plan=plan,
-            arm=arm,
-            arm_guard=arm_guard,
-            commit=commit,
-            commit_guard=commit_guard,
-            decision_commit_guard=decision_commit_guard,
-            terminal_reason=CameraNorthBootstrapTerminalReason.INPUT_EXCEPTION,
-            detail="Compass preflight failed before the final arm-age sample.",
-            error=error,
-        )
     try:
         if final_input_guard is not None:
             final_input_guard(initial, arm, commit)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import math
 from collections.abc import Callable
 from dataclasses import replace
@@ -521,16 +522,16 @@ def test_readiness_loss_at_arm_or_commit_sends_zero_input(
 
     assert result.terminal_reason is CameraNorthBootstrapTerminalReason.READINESS_LOST
     assert not result.input_executed
-    assert control.calls == []
+    assert control.calls == (["preflight"] if stage_frame == 3 else [])
 
 
 def test_nonfresh_arm_or_commit_sends_zero_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_pipeline(monkeypatch)
-    for frames in (
-        [_frame(1), _frame(1)],
-        [_frame(1), _frame(2), _frame(2)],
+    for frames, expected_calls in (
+        ([_frame(1), _frame(1)], []),
+        ([_frame(1), _frame(2), _frame(2)], ["preflight"]),
     ):
         control = CompleteControl()
         result = _run(SequenceSource(frames), control)
@@ -539,7 +540,7 @@ def test_nonfresh_arm_or_commit_sends_zero_input(
             is CameraNorthBootstrapTerminalReason.NON_FRESH_OBSERVATION
         )
         assert not result.input_executed
-        assert control.calls == []
+        assert control.calls == expected_calls
 
 
 def test_material_world_change_at_arm_or_commit_sends_zero_input(
@@ -547,15 +548,41 @@ def test_material_world_change_at_arm_or_commit_sends_zero_input(
 ) -> None:
     _patch_pipeline(monkeypatch)
     changed = _material_payload()
-    for frames in (
-        [_frame(1), _frame(2, changed)],
-        [_frame(1), _frame(2), _frame(3, changed)],
+    for frames, expected_calls in (
+        ([_frame(1), _frame(2, changed)], []),
+        ([_frame(1), _frame(2), _frame(3, changed)], ["preflight"]),
     ):
         control = CompleteControl()
         result = _run(SequenceSource(frames), control)
         assert result.terminal_reason is CameraNorthBootstrapTerminalReason.WORLD_CHANGED
         assert not result.input_executed
-        assert control.calls == []
+        assert control.calls == expected_calls
+
+
+def test_preflight_world_mutation_is_observed_by_final_commit_and_sends_zero_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pipeline(monkeypatch)
+    changed = _material_payload()
+    source = SequenceSource([_frame(1), _frame(2), _frame(3)])
+
+    class MutatingPreflightControl(CompleteControl):
+        def preflight(self) -> CameraPreflightReceipt:
+            receipt = super().preflight()
+            source.frames[0] = _frame(3, changed)
+            return receipt
+
+    control = MutatingPreflightControl()
+    result = _run(source, control)
+
+    assert result.terminal_reason is CameraNorthBootstrapTerminalReason.WORLD_CHANGED
+    assert result.input_state is CameraNorthBootstrapInputState.NONE
+    assert result.preflight is not None and result.preflight.supported
+    assert result.commit is not None
+    assert result.commit.artifact.raw_sha256 == hashlib.sha256(changed).hexdigest()
+    assert result.commit_guard is not None
+    assert not result.commit_guard.safe_to_retain_guidance
+    assert control.calls == ["preflight"]
 
 
 @pytest.mark.parametrize("age", [1.0, 1.001])
@@ -774,7 +801,7 @@ def test_cumulative_initial_to_commit_world_change_vetoes_zero_input(
     assert result.decision_commit_guard is not None
     assert not result.decision_commit_guard.safe_to_retain_guidance
     assert result.input_state is CameraNorthBootstrapInputState.NONE
-    assert control.calls == []
+    assert control.calls == ["preflight"]
 
 
 def test_partial_real_shaped_receipt_is_not_reported_as_zero_input(
@@ -843,7 +870,7 @@ def test_complete_receipt_survives_session_bookkeeping_failure(
         ),
     ],
 )
-def test_arm_or_commit_production_vetoes_before_preflight(
+def test_arm_or_commit_production_vetoes_before_physical_input(
     monkeypatch: pytest.MonkeyPatch,
     frame_id: int,
     production: CameraEvaluation,
@@ -857,7 +884,7 @@ def test_arm_or_commit_production_vetoes_before_preflight(
 
     assert result.terminal_reason is reason
     assert result.input_state is CameraNorthBootstrapInputState.NONE
-    assert control.calls == []
+    assert control.calls == (["preflight"] if frame_id == 3 else [])
 
 
 @pytest.mark.parametrize(
@@ -875,7 +902,7 @@ def test_arm_or_commit_production_vetoes_before_preflight(
         "cumulative_guard",
     ],
 )
-def test_every_preinput_exception_stage_stops_before_preflight(
+def test_every_preinput_exception_stage_stops_before_physical_input(
     monkeypatch: pytest.MonkeyPatch,
     stage: str,
 ) -> None:
@@ -930,7 +957,9 @@ def test_every_preinput_exception_stage_stops_before_preflight(
 
     assert result.terminal_reason is CameraNorthBootstrapTerminalReason.OBSERVATION_EXCEPTION
     assert result.input_state is CameraNorthBootstrapInputState.NONE
-    assert control.calls == []
+    assert control.calls == (
+        ["preflight"] if stage.startswith("commit_") or stage == "cumulative_guard" else []
+    )
 
 
 def test_nonactionable_initial_guidance_and_origin_clock_stop_zero_input(
@@ -957,7 +986,7 @@ def test_nonactionable_initial_guidance_and_origin_clock_stop_zero_input(
     assert control.calls == []
 
 
-def test_nonnegative_final_clock_regression_stops_after_read_only_preflight(
+def test_nonnegative_final_clock_regression_stops_after_no_input_preflight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_pipeline(monkeypatch)
@@ -995,10 +1024,10 @@ def test_external_pre_input_guard_failure_sends_zero_input(
     assert result.input_state is CameraNorthBootstrapInputState.NONE
     assert result.arm_age is not None
     assert result.arm_age.status is CameraServoArmAgeStatus.NOT_REACHED
-    assert control.calls == []
+    assert control.calls == ["preflight"]
 
 
-def test_external_last_seam_guard_failure_stops_after_read_only_preflight(
+def test_external_last_seam_guard_failure_stops_after_no_input_preflight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_pipeline(monkeypatch)

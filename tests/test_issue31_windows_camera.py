@@ -536,6 +536,37 @@ def test_compass_click_never_releases_a_preexisting_user_held_left_button() -> N
     )
 
 
+@pytest.mark.parametrize(
+    ("held_input", "message"),
+    [
+        ("middle", "middle button is already held"),
+        ("right", "global keys are held: 0x27"),
+    ],
+)
+def test_compass_rechecks_all_inputs_changed_after_preflight_before_any_input(
+    held_input: str,
+    message: str,
+) -> None:
+    api = FakeWindowsCameraApi()
+    control = WindowsCameraControl(123, api)
+    assert control.preflight().supported
+    api.calls.clear()
+    if held_input == "middle":
+        api.middle_mouse_is_down = True
+    else:
+        api.down_keys.add(0x27)
+
+    with pytest.raises(WindowsCameraError, match=message):
+        control.click_compass(608, 49)
+
+    assert not any(
+        isinstance(item, tuple) and item[0] in {"cursor", "mouse"}
+        for item in api.calls
+    )
+    assert api.middle_mouse_is_down is (held_input == "middle")
+    assert (0x27 in api.down_keys) is (held_input == "right")
+
+
 def test_arrow_keys_are_extended_and_control_is_not() -> None:
     api = FakeWindowsCameraApi()
     sleeps: list[float] = []
