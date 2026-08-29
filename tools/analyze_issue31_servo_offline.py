@@ -7,7 +7,8 @@ or executing any input adapter:
 
 * fixed-client-chrome input readiness (veto only),
 * the unchanged production camera/resource decision (only acceptance authority),
-* world-only camera guidance (diagnostic direction only).
+* world-only camera guidance (diagnostic direction only), and
+* the frozen world-only pre-input arm guard policy (veto only).
 
 Raw pixels are never copied to an output directory or embedded in the report.
 Only hashes, scalar measurements, typed outcomes, and aggregate counts are
@@ -53,6 +54,18 @@ from mining_automation.perception import (  # noqa: E402
     varrock_east_iron_scene_excluded_regions,
 )
 from mining_automation.perception.replay import FixtureCase  # noqa: E402
+from mining_automation.validation.camera_arm_guard import (  # noqa: E402
+    CAMERA_ARM_GUARD_EXCLUDED_REGIONS,
+    CAMERA_ARM_GUARD_ID,
+    CAMERA_ARM_GUARD_STRUCTURAL_REGIONS,
+    CAMERA_ARM_GUARD_VERSION,
+    CAMERA_ARM_MATERIAL_CHANNEL_DELTA,
+    CAMERA_ARM_MAXIMUM_CHANGED_PIXEL_FRACTION,
+    CAMERA_ARM_MAXIMUM_MEAN_CHANNEL_DELTA,
+    CAMERA_ARM_MINIMUM_REGION_COVERAGE,
+    CAMERA_ARM_REQUIRED_STABLE_LANDMARKS,
+    CAMERA_ARM_REQUIRED_STABLE_ZONES,
+)
 from mining_automation.validation.camera_evaluation import (  # noqa: E402
     CameraEvaluation,
     evaluate_varrock_east_camera,
@@ -72,6 +85,7 @@ from mining_automation.validation.camera_guidance import (  # noqa: E402
     evaluate_varrock_east_camera_guidance,
 )
 from mining_automation.validation.camera_servo import (  # noqa: E402
+    ABSOLUTE_MAX_SERVO_ARM_ATTEMPTS,
     ABSOLUTE_MAX_SERVO_ELAPSED_SECONDS,
     ABSOLUTE_MAX_SERVO_PRIMITIVES,
     DEFAULT_MAX_SERVO_ELAPSED_SECONDS,
@@ -93,9 +107,9 @@ from mining_automation.validation.client_readiness import (  # noqa: E402
     evaluate_client_input_readiness,
 )
 
-_REPORT_SCHEMA_VERSION = 1
+_REPORT_SCHEMA_VERSION = 2
 _TOOL_ID = "issue31-servo-offline-proof"
-_TOOL_VERSION = "1.0.0"
+_TOOL_VERSION = "1.1.0"
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _RAW_SUFFIXES = (".raw", ".raw.gz")
 
@@ -1030,11 +1044,50 @@ def _policy_dict() -> dict[str, JsonValue]:
             "competing_axis_combination": "root_sum_square",
             "excluded_regions": [list(region) for region in exclusions],
         },
+        "arm_guard": {
+            "guard_id": CAMERA_ARM_GUARD_ID,
+            "guard_version": CAMERA_ARM_GUARD_VERSION,
+            "acceptance_authority": False,
+            "can_accept": False,
+            "can_validate_scene": False,
+            "can_expose_resources": False,
+            "decision_authority": "retain_or_discard_pending_guidance_only",
+            "freshness_policy": {
+                "arm_frame_id_strictly_greater": True,
+                "arm_timestamp_strictly_greater": True,
+                "dedicated_capture_after_guidance": True,
+            },
+            "material_channel_delta": CAMERA_ARM_MATERIAL_CHANNEL_DELTA,
+            "maximum_mean_channel_delta_exclusive": (
+                CAMERA_ARM_MAXIMUM_MEAN_CHANNEL_DELTA
+            ),
+            "maximum_changed_pixel_fraction_exclusive": (
+                CAMERA_ARM_MAXIMUM_CHANGED_PIXEL_FRACTION
+            ),
+            "minimum_region_coverage": CAMERA_ARM_MINIMUM_REGION_COVERAGE,
+            "required_stable_landmarks": CAMERA_ARM_REQUIRED_STABLE_LANDMARKS,
+            "required_stable_zones": CAMERA_ARM_REQUIRED_STABLE_ZONES,
+            "single_outlier_discards": True,
+            "threshold_equality_discards": True,
+            "discard_requires_new_full_cycle_and_fresh_arm": True,
+            "structural_regions": [
+                {
+                    "landmark_id": landmark_id,
+                    "zone": zone.value,
+                    "region": list(region),
+                }
+                for landmark_id, zone, region in CAMERA_ARM_GUARD_STRUCTURAL_REGIONS
+            ],
+            "excluded_regions": [
+                list(region) for region in CAMERA_ARM_GUARD_EXCLUDED_REGIONS
+            ],
+        },
         "servo": {
             "module": "mining_automation.validation.camera_servo",
             "production_acceptance_only": True,
             "default_max_primitives": DEFAULT_MAX_SERVO_PRIMITIVES,
             "absolute_max_primitives": ABSOLUTE_MAX_SERVO_PRIMITIVES,
+            "absolute_max_arm_attempts": ABSOLUTE_MAX_SERVO_ARM_ATTEMPTS,
             "default_max_elapsed_seconds": DEFAULT_MAX_SERVO_ELAPSED_SECONDS,
             "absolute_max_elapsed_seconds": ABSOLUTE_MAX_SERVO_ELAPSED_SECONDS,
             "maximum_settle_seconds": MAXIMUM_SERVO_SETTLE_SECONDS,
@@ -1049,8 +1102,34 @@ def _policy_dict() -> dict[str, JsonValue]:
     }
 
 
-def _authority_invariants_hold(frames: list[dict[str, JsonValue]]) -> bool:
+def _authority_invariants_hold(
+    frames: list[dict[str, JsonValue]], configuration: dict[str, JsonValue]
+) -> bool:
     """Reject any result shape that grants diagnostics production authority."""
+
+    arm_guard = configuration.get("arm_guard")
+    if not isinstance(arm_guard, dict):
+        return False
+    if any(
+        arm_guard.get(key) is not False
+        for key in (
+            "acceptance_authority",
+            "can_accept",
+            "can_validate_scene",
+            "can_expose_resources",
+        )
+    ):
+        return False
+    if (
+        arm_guard.get("guard_id") != CAMERA_ARM_GUARD_ID
+        or arm_guard.get("guard_version") != CAMERA_ARM_GUARD_VERSION
+        or arm_guard.get("decision_authority")
+        != "retain_or_discard_pending_guidance_only"
+        or arm_guard.get("single_outlier_discards") is not True
+        or arm_guard.get("threshold_equality_discards") is not True
+        or arm_guard.get("discard_requires_new_full_cycle_and_fresh_arm") is not True
+    ):
+        return False
 
     for frame in frames:
         readiness = frame["readiness"]
@@ -1257,7 +1336,7 @@ def analyze_inputs(
         and git_before.tracked_worktree_clean
         and git_after.tracked_worktree_clean
     )
-    authority_invariants_passed = _authority_invariants_hold(frames)
+    authority_invariants_passed = _authority_invariants_hold(frames, configuration)
     production_expectations_passed = expectations["mismatched"] == 0
     readiness_expectations_passed = readiness_expectations["mismatched"] == 0
     proof_eligible = (
@@ -1285,6 +1364,7 @@ def analyze_inputs(
             "production_acceptance_only": True,
             "readiness_can_accept": False,
             "guidance_can_accept": False,
+            "arm_guard_can_accept": False,
             "diagnostics_can_expose_resources": False,
             "invariants_passed": authority_invariants_passed,
         },
@@ -1314,6 +1394,8 @@ def analyze_inputs(
             "readiness_version": first_readiness["evaluator_version"],
             "guidance_id": first_guidance["selector_id"],
             "guidance_version": first_guidance["selector_version"],
+            "arm_guard_id": CAMERA_ARM_GUARD_ID,
+            "arm_guard_version": CAMERA_ARM_GUARD_VERSION,
         },
         "fixture_manifest": {
             "dataset_id": dataset_id,

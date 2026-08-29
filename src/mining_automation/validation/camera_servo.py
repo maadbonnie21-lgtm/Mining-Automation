@@ -22,6 +22,12 @@ from ..capture import Frame
 from ..perception.production_profiles import load_varrock_east_iron_profile
 from ..perception.resource import ResourceVisualState
 from ..perception.scene_landmarks import MacroZone, describe_region, descriptor_distance
+from .camera_arm_guard import (
+    CameraArmGuardDisposition,
+    CameraArmGuardReason,
+    CameraArmGuardResult,
+    evaluate_camera_arm_guard,
+)
 from .camera_evaluation import CameraEvaluation, evaluate_varrock_east_camera
 from .camera_guidance import (
     CameraGuidanceAxis,
@@ -48,10 +54,13 @@ from .camera_session import (
 from .client_readiness import ClientInputReadiness, evaluate_client_input_readiness
 
 __all__ = [
+    "ABSOLUTE_MAX_SERVO_ARM_ATTEMPTS",
     "ABSOLUTE_MAX_SERVO_ELAPSED_SECONDS",
     "ABSOLUTE_MAX_SERVO_PRIMITIVES",
     "DEFAULT_MAX_SERVO_PRIMITIVES",
     "CameraServoExceptionEvidence",
+    "CameraServoArmEvidence",
+    "CameraServoArmOutcome",
     "CameraServoFrameEvidence",
     "CameraServoLimits",
     "CameraServoProgress",
@@ -69,6 +78,7 @@ DEFAULT_MAX_SERVO_PRIMITIVES: Final[int] = 8
 ABSOLUTE_MAX_SERVO_PRIMITIVES: Final[int] = 8
 DEFAULT_MAX_SERVO_ELAPSED_SECONDS: Final[float] = 30.0
 ABSOLUTE_MAX_SERVO_ELAPSED_SECONDS: Final[float] = 120.0
+ABSOLUTE_MAX_SERVO_ARM_ATTEMPTS: Final[int] = 16
 MAXIMUM_SERVO_SETTLE_SECONDS: Final[float] = 10.0
 WORLD_EFFECT_DESCRIPTOR_EPSILON: Final[float] = 0.001
 WORLD_EFFECT_REQUIRED_LANDMARKS: Final[int] = 3
@@ -95,6 +105,23 @@ class CameraServoTerminalReason(StrEnum):
     PRIMITIVE_BUDGET_EXHAUSTED = "primitive_budget_exhausted"
     TIME_BUDGET_EXHAUSTED = "time_budget_exhausted"
     CLOCK_ERROR = "clock_error"
+    ARM_ATTEMPT_BUDGET_EXHAUSTED = "arm_attempt_budget_exhausted"
+
+
+class CameraServoArmOutcome(StrEnum):
+    """Recorded outcome of the dedicated, zero-authority pre-input seam."""
+
+    RETAINED = "retained"
+    STALE_DISCARDED_RESTART = "stale_discarded_restart"
+    NON_FRESH_STOP = "non_fresh_stop"
+    READINESS_LOST = "readiness_lost"
+    PRODUCTION_PASS = "production_pass"
+    PRODUCTION_REJECTION_NOT_FAIL_CLOSED = "production_rejection_not_fail_closed"
+    DEADLINE_EXHAUSTED = "deadline_exhausted"
+    CLOCK_ERROR = "clock_error"
+    EVALUATION_ERROR = "evaluation_error"
+    GUARD_ERROR = "guard_error"
+    REPEATED_STATE_STOP = "repeated_state_stop"
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,14 +212,225 @@ class CameraServoFrameEvidence:
     """Recorded frame identity followed by veto and production evidence."""
 
     artifact: CameraFrameArtifact
+    captured_monotonic_s: float
     readiness: ClientInputReadiness
     production: CameraEvaluation | None
 
     def __post_init__(self) -> None:
+        if (
+            isinstance(self.captured_monotonic_s, bool)
+            or not isinstance(self.captured_monotonic_s, (int, float))
+            or not math.isfinite(self.captured_monotonic_s)
+            or self.captured_monotonic_s < 0.0
+        ):
+            raise ValueError("captured_monotonic_s must be finite and non-negative")
         if self.readiness.safe_to_attempt_camera_input is (self.production is None):
             raise ValueError(
                 "production evidence is required exactly when readiness permits evaluation"
             )
+
+
+@dataclass(frozen=True, slots=True)
+class CameraServoArmEvidence:
+    """Immutable decision-to-arm evidence immediately preceding possible input."""
+
+    cycle_index: int
+    pending_primitive_index: int
+    decision: CameraServoFrameEvidence
+    guidance: WorldCameraGuidance
+    pending_primitive: CameraPlan
+    arm_artifact: CameraFrameArtifact
+    arm_captured_monotonic_s: float
+    readiness: ClientInputReadiness | None
+    production: CameraEvaluation | None
+    guard: CameraArmGuardResult | None
+    outcome: CameraServoArmOutcome
+    exception: CameraServoExceptionEvidence | None = None
+
+    def __post_init__(self) -> None:
+        for name, index in (
+            ("cycle_index", self.cycle_index),
+            ("pending_primitive_index", self.pending_primitive_index),
+        ):
+            if isinstance(index, bool) or not isinstance(index, int) or index <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        if len(self.pending_primitive.actions) != 1 or not isinstance(
+            self.pending_primitive.actions[0], CameraWheel
+        ):
+            raise ValueError("arm evidence must bind exactly one pending wheel primitive")
+        wheel = self.pending_primitive.actions[0]
+        if abs(wheel.detents) != 1:
+            raise ValueError("arm evidence pending wheel must contain one detent")
+        if self.guidance.direction is None:
+            raise ValueError("arm evidence requires an exact pending guidance sign")
+        expected_detents = (
+            1
+            if self.guidance.direction is CameraGuidanceDirection.POSITIVE
+            else -1
+        )
+        if wheel.detents != expected_detents:
+            raise ValueError("pending primitive must match the recorded guidance sign")
+        expected_name = (
+            f"issue31-servo-{self.pending_primitive_index:02d}-zoom-"
+            f"{self.guidance.direction.value}"
+        )
+        if self.pending_primitive.name != expected_name:
+            raise ValueError("pending primitive name must match its recorded index and sign")
+        if (
+            isinstance(self.arm_captured_monotonic_s, bool)
+            or not isinstance(self.arm_captured_monotonic_s, (int, float))
+            or not math.isfinite(self.arm_captured_monotonic_s)
+            or self.arm_captured_monotonic_s < 0.0
+        ):
+            raise ValueError("arm_captured_monotonic_s must be finite")
+        fresh = (
+            self.arm_artifact.frame_id > self.decision.artifact.frame_id
+            and self.arm_captured_monotonic_s > self.decision.captured_monotonic_s
+        )
+        recorded_nonfresh_discard = (
+            self.outcome is CameraServoArmOutcome.NON_FRESH_STOP
+            and self.guard is not None
+            and self.guard.reason is CameraArmGuardReason.NON_FRESH_ARM_FRAME
+        )
+        if not fresh and not recorded_nonfresh_discard:
+            raise ValueError(
+                "non-fresh arm capture requires the guard's non-fresh discard"
+            )
+        error_outcomes = (
+            CameraServoArmOutcome.CLOCK_ERROR,
+            CameraServoArmOutcome.EVALUATION_ERROR,
+            CameraServoArmOutcome.GUARD_ERROR,
+        )
+        if (self.outcome in error_outcomes) is (self.exception is None):
+            raise ValueError("arm exception evidence must exactly match an error outcome")
+
+        guard_outcome = self.outcome in (
+            CameraServoArmOutcome.RETAINED,
+            CameraServoArmOutcome.STALE_DISCARDED_RESTART,
+            CameraServoArmOutcome.NON_FRESH_STOP,
+            CameraServoArmOutcome.REPEATED_STATE_STOP,
+        )
+        if self.guard is None and guard_outcome:
+            raise ValueError("guard evidence is required for a post-guard outcome")
+        if self.guard is not None and self.outcome not in (
+            CameraServoArmOutcome.RETAINED,
+            CameraServoArmOutcome.STALE_DISCARDED_RESTART,
+            CameraServoArmOutcome.NON_FRESH_STOP,
+            CameraServoArmOutcome.DEADLINE_EXHAUSTED,
+            CameraServoArmOutcome.CLOCK_ERROR,
+            CameraServoArmOutcome.EVALUATION_ERROR,
+            CameraServoArmOutcome.REPEATED_STATE_STOP,
+        ):
+            raise ValueError("guard evidence is forbidden before the guard stage")
+        if self.guard is not None:
+            if (
+                self.guard.decision_frame_id != self.decision.artifact.frame_id
+                or self.guard.decision_captured_monotonic_s
+                != self.decision.captured_monotonic_s
+                or self.guard.decision_payload_sha256
+                != self.decision.artifact.raw_sha256
+                or self.guard.arm_frame_id != self.arm_artifact.frame_id
+                or self.guard.arm_captured_monotonic_s
+                != self.arm_captured_monotonic_s
+                or self.guard.arm_payload_sha256 != self.arm_artifact.raw_sha256
+            ):
+                raise ValueError("arm guard must bind the exact decision/arm frame pair")
+            expected_outcomes = (
+                (
+                    CameraServoArmOutcome.RETAINED,
+                    CameraServoArmOutcome.DEADLINE_EXHAUSTED,
+                    CameraServoArmOutcome.CLOCK_ERROR,
+                    CameraServoArmOutcome.EVALUATION_ERROR,
+                    CameraServoArmOutcome.REPEATED_STATE_STOP,
+                )
+                if self.guard.disposition is CameraArmGuardDisposition.RETAIN
+                else (
+                    CameraServoArmOutcome.STALE_DISCARDED_RESTART,
+                    CameraServoArmOutcome.NON_FRESH_STOP,
+                    CameraServoArmOutcome.DEADLINE_EXHAUSTED,
+                    CameraServoArmOutcome.CLOCK_ERROR,
+                    CameraServoArmOutcome.EVALUATION_ERROR,
+                    CameraServoArmOutcome.REPEATED_STATE_STOP,
+                )
+            )
+            if self.outcome not in expected_outcomes:
+                raise ValueError("arm outcome must match the guard disposition")
+            if self.guard.safe_to_retain_guidance is (
+                self.guard.disposition is not CameraArmGuardDisposition.RETAIN
+            ):
+                raise ValueError("arm retention must match the guard safety verdict")
+
+        if self.readiness is None:
+            allowed_without_readiness = (
+                CameraServoArmOutcome.EVALUATION_ERROR,
+                CameraServoArmOutcome.GUARD_ERROR,
+                CameraServoArmOutcome.STALE_DISCARDED_RESTART,
+                CameraServoArmOutcome.NON_FRESH_STOP,
+            )
+            if self.outcome not in allowed_without_readiness:
+                raise ValueError("missing readiness requires a pre-readiness stop outcome")
+            if self.production is not None:
+                raise ValueError("production cannot exist without readiness evidence")
+            if (
+                self.outcome is CameraServoArmOutcome.NON_FRESH_STOP
+            ) is (self.exception is not None):
+                raise ValueError("pre-readiness stale discard cannot carry an exception")
+            return
+
+        ready = self.readiness.safe_to_attempt_camera_input
+        if self.outcome is CameraServoArmOutcome.READINESS_LOST and ready:
+            raise ValueError("readiness-lost arm evidence must contain a readiness veto")
+        if not ready and self.outcome is not CameraServoArmOutcome.READINESS_LOST:
+            raise ValueError("a readiness-vetoed arm frame cannot have another outcome")
+        if ready:
+            production = self.production
+            if production is None:
+                if (
+                    self.outcome is not CameraServoArmOutcome.EVALUATION_ERROR
+                    or self.exception is None
+                ):
+                    raise ValueError("missing production requires retained error evidence")
+                return
+            if self.outcome is CameraServoArmOutcome.PRODUCTION_PASS:
+                if not production.passed:
+                    raise ValueError("production-pass arm evidence must contain a pass")
+            elif production.passed and self.outcome not in (
+                CameraServoArmOutcome.DEADLINE_EXHAUSTED,
+                CameraServoArmOutcome.CLOCK_ERROR,
+            ):
+                raise ValueError("a passing arm frame cannot retain or discard guidance")
+            if self.outcome is CameraServoArmOutcome.PRODUCTION_REJECTION_NOT_FAIL_CLOSED:
+                if _is_fail_closed_production_rejection(production):
+                    raise ValueError("unsafe production arm outcome requires unsafe evidence")
+            elif (
+                self.outcome
+                not in (
+                    CameraServoArmOutcome.PRODUCTION_PASS,
+                    CameraServoArmOutcome.GUARD_ERROR,
+                    CameraServoArmOutcome.DEADLINE_EXHAUSTED,
+                    CameraServoArmOutcome.CLOCK_ERROR,
+                )
+                and not _is_fail_closed_production_rejection(production)
+            ):
+                raise ValueError("guidance may continue only from fail-closed production")
+
+    @property
+    def decision_raw_sha256(self) -> str:
+        """Return the exact recorded decision-frame payload identity."""
+
+        return self.decision.artifact.raw_sha256
+
+    @property
+    def decision_captured_monotonic_s(self) -> float:
+        """Return the source timestamp attached to the decision frame."""
+
+        return self.decision.captured_monotonic_s
+
+    @property
+    def arm_raw_sha256(self) -> str:
+        """Return the exact recorded arm-frame payload identity."""
+
+        return self.arm_artifact.raw_sha256
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,6 +510,7 @@ class CameraServoStep:
 
     index: int
     pre: CameraServoFrameEvidence
+    arm: CameraServoArmEvidence
     guidance: WorldCameraGuidance
     primitive: CameraPlan
     receipt: CameraPlanReceipt | None
@@ -290,6 +529,18 @@ class CameraServoStep:
     def __post_init__(self) -> None:
         if isinstance(self.index, bool) or not isinstance(self.index, int) or self.index <= 0:
             raise ValueError("servo step index must be a positive integer")
+        if self.arm.outcome is not CameraServoArmOutcome.RETAINED:
+            raise ValueError("a servo step requires retained pre-input arm evidence")
+        if self.arm.pending_primitive_index != self.index:
+            raise ValueError("servo step index must match its arm evidence")
+        if self.arm.pending_primitive != self.primitive:
+            raise ValueError("servo step primitive must match its armed primitive")
+        if self.arm.guidance != self.guidance:
+            raise ValueError("servo step guidance must match its armed guidance")
+        if self.arm.arm_artifact != self.pre.artifact:
+            raise ValueError("servo step pre evidence must be its exact arm capture")
+        if self.arm.arm_captured_monotonic_s != self.pre.captured_monotonic_s:
+            raise ValueError("servo step pre timestamp must be its exact arm capture")
         if len(self.primitive.actions) != 1 or not isinstance(
             self.primitive.actions[0], CameraWheel
         ):
@@ -373,7 +624,44 @@ class CameraServoStep:
             if self.stagnant_steps_after != expected_after:
                 raise ValueError("stagnation counter must match effect and progress evidence")
         elif self.stagnant_steps_after != self.stagnant_steps_before:
-            raise ValueError("a step without progress cannot change the stagnation counter")
+                raise ValueError("a step without progress cannot change the stagnation counter")
+
+
+@dataclass(frozen=True, slots=True)
+class _CameraServoArmContext:
+    """Loop-local fixed inputs used to assemble one arm-attempt record."""
+
+    cycle_index: int
+    pending_primitive_index: int
+    decision: CameraServoFrameEvidence
+    guidance: WorldCameraGuidance
+    pending_primitive: CameraPlan
+    arm_frame: Frame
+    arm_artifact: CameraFrameArtifact
+
+    def evidence(
+        self,
+        outcome: CameraServoArmOutcome,
+        *,
+        readiness: ClientInputReadiness | None,
+        production: CameraEvaluation | None,
+        guard: CameraArmGuardResult | None = None,
+        error: Exception | None = None,
+    ) -> CameraServoArmEvidence:
+        return CameraServoArmEvidence(
+            cycle_index=self.cycle_index,
+            pending_primitive_index=self.pending_primitive_index,
+            decision=self.decision,
+            guidance=self.guidance,
+            pending_primitive=self.pending_primitive,
+            arm_artifact=self.arm_artifact,
+            arm_captured_monotonic_s=self.arm_frame.captured_monotonic_s,
+            readiness=readiness,
+            production=production,
+            guard=guard,
+            outcome=outcome,
+            exception=_exception_evidence(error) if error is not None else None,
+        )
 
 
 @dataclass(slots=True)
@@ -382,6 +670,7 @@ class _CameraServoStepBuilder:
 
     index: int
     pre: CameraServoFrameEvidence
+    arm: CameraServoArmEvidence
     guidance: WorldCameraGuidance
     primitive: CameraPlan
     receipt: CameraPlanReceipt | None
@@ -404,6 +693,7 @@ class _CameraServoStepBuilder:
         return CameraServoStep(
             index=self.index,
             pre=self.pre,
+            arm=self.arm,
             guidance=self.guidance,
             primitive=self.primitive,
             receipt=self.receipt,
@@ -425,6 +715,14 @@ class _CameraServoStepBuilder:
         )
 
 
+class _CameraServoSteps(list[CameraServoStep]):
+    """Loop-local trace carrying zero-input arm attempts beside input steps."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.arm_attempts: list[CameraServoArmEvidence] = []
+
+
 @dataclass(frozen=True, slots=True)
 class CameraServoResult:
     """Terminal bounded-servo evidence; only a production pass can pass."""
@@ -432,6 +730,7 @@ class CameraServoResult:
     limits: CameraServoLimits
     settle_s: float
     initial: CameraServoFrameEvidence | None
+    arm_attempts: tuple[CameraServoArmEvidence, ...]
     steps: tuple[CameraServoStep, ...]
     final: CameraServoFrameEvidence | None
     final_guidance: WorldCameraGuidance | None
@@ -443,8 +742,23 @@ class CameraServoResult:
     def __post_init__(self) -> None:
         if not isinstance(self.steps, tuple):
             raise ValueError("servo steps must be a tuple")
+        if not isinstance(self.arm_attempts, tuple):
+            raise ValueError("servo arm attempts must be a tuple")
+        if len(self.arm_attempts) > ABSOLUTE_MAX_SERVO_ARM_ATTEMPTS:
+            raise ValueError("servo evidence exceeds the absolute arm-attempt bound")
         if len(self.steps) > self.limits.max_primitives:
             raise ValueError("servo evidence exceeds the configured primitive budget")
+        retained = tuple(
+            attempt
+            for attempt in self.arm_attempts
+            if attempt.outcome is CameraServoArmOutcome.RETAINED
+        )
+        if tuple(step.arm for step in self.steps) != retained:
+            raise ValueError("servo steps must bind retained arm attempts in order")
+        if tuple(attempt.cycle_index for attempt in self.arm_attempts) != tuple(
+            range(1, len(self.arm_attempts) + 1)
+        ):
+            raise ValueError("servo arm attempts must have contiguous cycle indexes")
         if not math.isfinite(self.settle_s) or not 0.0 < self.settle_s <= (
             MAXIMUM_SERVO_SETTLE_SECONDS
         ):
@@ -552,7 +866,7 @@ def run_bounded_camera_servo(
             0.0,
             error=error,
         )
-    steps: list[CameraServoStep] = []
+    steps = _CameraServoSteps()
     seen_states: set[str] = set()
     consecutive_stagnant = 0
     previous_direction: CameraGuidanceDirection | None = None
@@ -684,35 +998,6 @@ def run_bounded_camera_servo(
                 elapsed,
             )
 
-        try:
-            state_digest = _world_state_digest(current_frame)
-        except Exception as error:
-            return _result_from_elapsed(
-                limits,
-                settle_s,
-                initial,
-                steps,
-                current,
-                guidance,
-                CameraServoTerminalReason.OBSERVATION_EXCEPTION,
-                "World-only repeated-state measurement failed closed.",
-                elapsed,
-                error=error,
-            )
-        if state_digest in seen_states:
-            return _result_from_elapsed(
-                limits,
-                settle_s,
-                initial,
-                steps,
-                current,
-                guidance,
-                CameraServoTerminalReason.REPEATED_STATE,
-                "A previously observed world-landmark state recurred.",
-                elapsed,
-            )
-        seen_states.add(state_digest)
-
         if len(steps) >= limits.max_primitives:
             return _result_from_elapsed(
                 limits,
@@ -723,6 +1008,18 @@ def run_bounded_camera_servo(
                 guidance,
                 CameraServoTerminalReason.PRIMITIVE_BUDGET_EXHAUSTED,
                 "The configured primitive budget was exhausted.",
+                elapsed,
+            )
+        if len(steps.arm_attempts) >= ABSOLUTE_MAX_SERVO_ARM_ATTEMPTS:
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                current,
+                guidance,
+                CameraServoTerminalReason.ARM_ATTEMPT_BUDGET_EXHAUSTED,
+                "The absolute pre-input arm-attempt bound was exhausted.",
                 elapsed,
             )
 
@@ -755,6 +1052,425 @@ def run_bounded_camera_servo(
 
         index = len(steps) + 1
         primitive = _zoom_primitive(index, guidance.direction)
+        cycle_index = len(steps.arm_attempts) + 1
+
+        try:
+            arm_frame = source.capture()
+            arm_artifact = _record_verified_frame(
+                recorder, f"servo-arm-{cycle_index:02d}", arm_frame
+            )
+        except Exception as error:
+            return _result(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                current,
+                guidance,
+                CameraServoTerminalReason.OBSERVATION_EXCEPTION,
+                "Dedicated pre-input arm capture or recording failed closed.",
+                start,
+                clock,
+                error=error,
+            )
+
+        arm_context = _CameraServoArmContext(
+            cycle_index=cycle_index,
+            pending_primitive_index=index,
+            decision=current,
+            guidance=guidance,
+            pending_primitive=primitive,
+            arm_frame=arm_frame,
+            arm_artifact=arm_artifact,
+        )
+        arm_is_fresh = (
+            arm_frame.frame_id > current_frame.frame_id
+            and arm_frame.captured_monotonic_s
+            > current_frame.captured_monotonic_s
+        )
+        if not arm_is_fresh:
+            try:
+                nonfresh_guard = evaluate_camera_arm_guard(current_frame, arm_frame)
+            except Exception as error:
+                return _result(
+                    limits,
+                    settle_s,
+                    initial,
+                    steps,
+                    current,
+                    guidance,
+                    CameraServoTerminalReason.OBSERVATION_EXCEPTION,
+                    "Non-fresh pre-input arm guard failed closed.",
+                    start,
+                    clock,
+                    error=error,
+                )
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.NON_FRESH_STOP,
+                    readiness=None,
+                    production=None,
+                    guard=nonfresh_guard,
+                )
+            )
+            return _result(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                current,
+                guidance,
+                CameraServoTerminalReason.OBSERVATION_EXCEPTION,
+                "The dedicated arm capture was not strictly newer; input was vetoed.",
+                start,
+                clock,
+            )
+
+        try:
+            arm_readiness = evaluate_client_input_readiness(arm_frame)
+        except Exception as error:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.EVALUATION_ERROR,
+                    readiness=None,
+                    production=None,
+                    error=error,
+                )
+            )
+            return _result(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                current,
+                guidance,
+                CameraServoTerminalReason.OBSERVATION_EXCEPTION,
+                "Pre-input arm readiness evaluation failed closed.",
+                start,
+                clock,
+                error=error,
+            )
+        if not arm_readiness.safe_to_attempt_camera_input:
+            armed = arm_context.evidence(
+                CameraServoArmOutcome.READINESS_LOST,
+                readiness=arm_readiness,
+                production=None,
+            )
+            steps.arm_attempts.append(armed)
+            arm_current = CameraServoFrameEvidence(
+                artifact=arm_artifact,
+                captured_monotonic_s=arm_frame.captured_monotonic_s,
+                readiness=arm_readiness,
+                production=None,
+            )
+            return _result(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.READINESS_LOST,
+                "Fresh pre-input gameplay readiness vetoed camera input.",
+                start,
+                clock,
+            )
+
+        try:
+            arm_production = evaluate_varrock_east_camera(arm_frame)
+        except Exception as error:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.EVALUATION_ERROR,
+                    readiness=arm_readiness,
+                    production=None,
+                    error=error,
+                )
+            )
+            return _result(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                current,
+                guidance,
+                CameraServoTerminalReason.OBSERVATION_EXCEPTION,
+                "Pre-input arm production evaluation failed closed.",
+                start,
+                clock,
+                error=error,
+            )
+        arm_current = CameraServoFrameEvidence(
+            artifact=arm_artifact,
+            captured_monotonic_s=arm_frame.captured_monotonic_s,
+            readiness=arm_readiness,
+            production=arm_production,
+        )
+        arm_elapsed, clock_error = _safe_elapsed(start, clock)
+        if clock_error is not None:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.CLOCK_ERROR,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    error=clock_error,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.CLOCK_ERROR,
+                "The post-arm evaluation clock sample was invalid.",
+                arm_elapsed,
+                error=clock_error,
+            )
+        if arm_elapsed >= limits.max_elapsed_s:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.DEADLINE_EXHAUSTED,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.TIME_BUDGET_EXHAUSTED,
+                "The fresh arm evaluations exhausted the elapsed-time budget.",
+                arm_elapsed,
+            )
+        if arm_production.passed:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.PRODUCTION_PASS,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                )
+            )
+            return _result(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                None,
+                CameraServoTerminalReason.PRODUCTION_PASS,
+                "The fresh arm frame passed the unchanged production evaluator.",
+                start,
+                clock,
+            )
+        if not _is_fail_closed_production_rejection(arm_production):
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.PRODUCTION_REJECTION_NOT_FAIL_CLOSED,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                )
+            )
+            return _result(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.PRODUCTION_REJECTION_NOT_FAIL_CLOSED,
+                "Fresh arm production was not the required zero-target fail-closed state.",
+                start,
+                clock,
+            )
+
+        try:
+            arm_guard = evaluate_camera_arm_guard(current_frame, arm_frame)
+        except Exception as error:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.GUARD_ERROR,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    error=error,
+                )
+            )
+            return _result(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.OBSERVATION_EXCEPTION,
+                "Pre-input stale-guidance guard failed closed.",
+                start,
+                clock,
+                error=error,
+            )
+
+        seam_elapsed, clock_error = _safe_elapsed(start, clock)
+        if clock_error is not None:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.CLOCK_ERROR,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    guard=arm_guard,
+                    error=clock_error,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.CLOCK_ERROR,
+                "The post-arm monotonic clock sample was invalid.",
+                seam_elapsed,
+                error=clock_error,
+            )
+        if seam_elapsed >= limits.max_elapsed_s:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.DEADLINE_EXHAUSTED,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    guard=arm_guard,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.TIME_BUDGET_EXHAUSTED,
+                "The dedicated pre-input arm seam exhausted the elapsed-time budget.",
+                seam_elapsed,
+            )
+
+        if arm_guard.disposition is CameraArmGuardDisposition.DISCARD_RESTART:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.STALE_DISCARDED_RESTART,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    guard=arm_guard,
+                )
+            )
+            current_frame = arm_frame
+            current = arm_current
+            current_guidance = None
+            continue
+
+        current_frame = arm_frame
+        current = arm_current
+        try:
+            state_digest = _world_state_digest(current_frame)
+        except Exception as error:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.EVALUATION_ERROR,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    guard=arm_guard,
+                    error=error,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                current,
+                guidance,
+                CameraServoTerminalReason.OBSERVATION_EXCEPTION,
+                "Armed world-only repeated-state measurement failed closed.",
+                seam_elapsed,
+                error=error,
+            )
+        if state_digest in seen_states:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.REPEATED_STATE_STOP,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    guard=arm_guard,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                current,
+                guidance,
+                CameraServoTerminalReason.REPEATED_STATE,
+                "A previously armed world-landmark state recurred.",
+                seam_elapsed,
+            )
+        seen_states.add(state_digest)
+
+        immediate_elapsed, clock_error = _safe_elapsed(start, clock)
+        if clock_error is not None:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.CLOCK_ERROR,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    guard=arm_guard,
+                    error=clock_error,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.CLOCK_ERROR,
+                "The immediate pre-input monotonic clock sample was invalid.",
+                immediate_elapsed,
+                error=clock_error,
+            )
+        if immediate_elapsed >= limits.max_elapsed_s:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.DEADLINE_EXHAUSTED,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    guard=arm_guard,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.TIME_BUDGET_EXHAUSTED,
+                "The immediate pre-input deadline check exhausted the budget.",
+                immediate_elapsed,
+            )
+
+        armed = arm_context.evidence(
+            CameraServoArmOutcome.RETAINED,
+            readiness=arm_readiness,
+            production=arm_production,
+            guard=arm_guard,
+        )
+        steps.arm_attempts.append(armed)
+
         runner = CameraPlanRunner(control, sleeper)
         receipt: CameraPlanReceipt | None = None
         try:
@@ -766,6 +1482,7 @@ def run_bounded_camera_servo(
                 CameraServoStep(
                     index=index,
                     pre=current,
+                    arm=armed,
                     guidance=guidance,
                     primitive=primitive,
                     receipt=receipt,
@@ -815,6 +1532,7 @@ def run_bounded_camera_servo(
                 CameraServoStep(
                     index=index,
                     pre=current,
+                    arm=armed,
                     guidance=guidance,
                     primitive=primitive,
                     receipt=receipt,
@@ -866,6 +1584,7 @@ def run_bounded_camera_servo(
                 CameraServoStep(
                     index=index,
                     pre=current,
+                    arm=armed,
                     guidance=guidance,
                     primitive=primitive,
                     receipt=receipt,
@@ -915,6 +1634,7 @@ def run_bounded_camera_servo(
         step_builder = _CameraServoStepBuilder(
             index=index,
             pre=current,
+            arm=armed,
             guidance=guidance,
             primitive=primitive,
             receipt=receipt,
@@ -1196,7 +1916,7 @@ def _capture_evidence(
     label: str,
 ) -> tuple[Frame, CameraServoFrameEvidence]:
     frame = source.capture()
-    artifact = recorder(label, frame)
+    artifact = _record_verified_frame(recorder, label, frame)
     readiness = evaluate_client_input_readiness(frame)
     production = (
         evaluate_varrock_east_camera(frame)
@@ -1205,9 +1925,31 @@ def _capture_evidence(
     )
     return frame, CameraServoFrameEvidence(
         artifact=artifact,
+        captured_monotonic_s=frame.captured_monotonic_s,
         readiness=readiness,
         production=production,
     )
+
+
+def _record_verified_frame(
+    recorder: CameraArtifactRecorder,
+    label: str,
+    frame: Frame,
+) -> CameraFrameArtifact:
+    """Record and immediately bind artifact identity to the captured frame."""
+
+    artifact = recorder(label, frame)
+    expected_sha256 = hashlib.sha256(frame.payload).hexdigest()
+    if (
+        artifact.label != label
+        or artifact.frame_id != frame.frame_id
+        or artifact.width != frame.width
+        or artifact.height != frame.height
+        or artifact.pixel_format != frame.pixel_format.value
+        or artifact.raw_sha256 != expected_sha256
+    ):
+        raise ValueError("recorder artifact does not bind the exact captured frame")
+    return artifact
 
 
 def _readiness_terminal(
@@ -1396,6 +2138,9 @@ def _result_from_elapsed(
         limits=limits,
         settle_s=float(settle_s),
         initial=initial,
+        arm_attempts=tuple(
+            steps.arm_attempts if isinstance(steps, _CameraServoSteps) else ()
+        ),
         steps=tuple(steps),
         final=final,
         final_guidance=final_guidance,

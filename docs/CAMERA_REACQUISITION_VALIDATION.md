@@ -276,8 +276,16 @@ Its fixed sequence is:
 5. otherwise require a fully fail-closed production rejection;
 6. compute world-only diagnostic guidance using all candidate and fixed-UI
    exclusions;
-7. execute at most one reviewed primitive;
-8. settle, capture, and repeat from the readiness veto.
+7. capture and privately record a dedicated pre-input arm frame;
+8. rerun input readiness and the unchanged production evaluator on the arm
+   frame; a readiness veto stops, a production pass succeeds without input,
+   and anything other than an exact fail-closed rejection stops;
+9. compare the decision and arm frames with the cheap world-only stale-guidance
+   guard; any material or ambiguous structural change discards the pending
+   sign and restarts from the arm frame without immediate input;
+10. recheck the deadline and execute at most one reviewed primitive only when
+    the arm frame is fresh, ready, fail-closed, and unchanged; and
+11. settle, capture, and repeat from the readiness veto.
 
 These are deliberately separate authorities. Gameplay-chrome readiness can
 only veto input. It cannot validate Varrock, contribute to world-scene
@@ -295,9 +303,22 @@ and evidence inside the motion deadband all return
 `INSUFFICIENT_GUIDANCE`. Candidate pixels, the minimap, compass, chat, and other
 fixed UI are excluded from direction selection.
 
-The initial experiment budget is at most eight feedback primitives for one
-normalization boundary. Absolute defensive limits additionally cap requested
-events, elapsed time, and cumulative movement. Observed effect and useful
+The arm guard is also permanently non-authoritative. It compares only the six
+frozen structural landmark regions, with candidate pixels, fixed UI, and
+gameplay-readiness chrome excluded. Every landmark must remain strictly inside
+the frozen material-change limits; one threshold-equal, changed, uncovered, or
+otherwise ambiguous region discards the pending sign. A discard never chooses
+a replacement sign and never permits input from the arm frame. The next cycle
+must perform the full production/readiness/guidance path and then prove a new
+fresh arm seam. Decision and arm frame IDs, monotonic capture timestamps,
+payload hashes, readiness/production results, guard metrics, and the retained
+or discarded primitive outcome remain immutable report evidence.
+
+The initial experiment budget is at most eight feedback primitives and sixteen
+recorded arm attempts for one normalization boundary. The separate arm bound
+also terminates a changing-frame restart loop when the injected servo clock is
+frozen. Absolute defensive limits additionally cap requested events, elapsed
+time, and cumulative movement. Observed effect and useful
 progress are separate requirements: a pulse must change at least three frozen
 world landmarks across all three macro zones, and its next coherent zoom fit
 must materially reduce `abs(log(scale))`. An increased error stops after one
@@ -316,9 +337,12 @@ that crosses any landmark/zone/coherence/axis-isolation boundary becomes
 `INSUFFICIENT_GUIDANCE` immediately. Continuous residual or axis-margin
 degradation inside that gate is recorded but is not yet a separately calibrated
 controller score. Likewise, synthetic raster tests prove selector sign math,
-not real RuneLite wheel consumption. Readiness freshness across the relatively
-expensive wide search and an isolated one-detent real sign calibration remain
-explicit lead-review gates before any live closed-loop command can be enabled.
+not real RuneLite wheel consumption. The dedicated arm capture now closes the
+readiness/pixel-freshness seam after the relatively expensive wide search; it
+does not prove real RuneLite wheel consumption. An isolated one-detent real
+sign/effect calibration and a real actionable unsupported view therefore
+remain explicit lead-review gates before any live closed-loop command can be
+enabled.
 
 The read-only proof command automatically includes every reviewed supported
 fixture, requires the complete 36-frame drift set, and binds its canonical

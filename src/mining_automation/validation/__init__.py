@@ -7,6 +7,26 @@ contracts remain importable on every supported development platform.
 
 from __future__ import annotations
 
+from .camera_arm_guard import (
+    CAMERA_ARM_GUARD_EXCLUDED_REGIONS,
+    CAMERA_ARM_GUARD_ID,
+    CAMERA_ARM_GUARD_LANDMARK_IDS,
+    CAMERA_ARM_GUARD_STRUCTURAL_REGIONS,
+    CAMERA_ARM_GUARD_VERSION,
+    CAMERA_ARM_MATERIAL_CHANNEL_DELTA,
+    CAMERA_ARM_MAXIMUM_CHANGED_PIXEL_FRACTION,
+    CAMERA_ARM_MAXIMUM_MEAN_CHANNEL_DELTA,
+    CAMERA_ARM_MINIMUM_REGION_COVERAGE,
+    CAMERA_ARM_REQUIRED_REGION_COUNT,
+    CAMERA_ARM_REQUIRED_STABLE_LANDMARKS,
+    CAMERA_ARM_REQUIRED_STABLE_ZONES,
+    CAMERA_ARM_REQUIRED_ZONE_COUNT,
+    CameraArmGuardDisposition,
+    CameraArmGuardReason,
+    CameraArmGuardRegionMetric,
+    CameraArmGuardResult,
+    evaluate_camera_arm_guard,
+)
 from .camera_evaluation import (
     ISSUE31_REQUIRED_LANDMARK_COUNT,
     ISSUE31_REQUIRED_LANDMARK_MATCHES,
@@ -83,8 +103,11 @@ from .camera_report import (
     write_camera_validation_report,
 )
 from .camera_servo import (
+    ABSOLUTE_MAX_SERVO_ARM_ATTEMPTS,
     ABSOLUTE_MAX_SERVO_PRIMITIVES,
     DEFAULT_MAX_SERVO_PRIMITIVES,
+    CameraServoArmEvidence,
+    CameraServoArmOutcome,
     CameraServoExceptionEvidence,
     CameraServoFrameEvidence,
     CameraServoLimits,
@@ -137,7 +160,21 @@ from .windows_camera import (
 )
 
 __all__ = [
+    "ABSOLUTE_MAX_SERVO_ARM_ATTEMPTS",
     "ABSOLUTE_MAX_SERVO_PRIMITIVES",
+    "CAMERA_ARM_GUARD_ID",
+    "CAMERA_ARM_GUARD_EXCLUDED_REGIONS",
+    "CAMERA_ARM_GUARD_LANDMARK_IDS",
+    "CAMERA_ARM_GUARD_STRUCTURAL_REGIONS",
+    "CAMERA_ARM_GUARD_VERSION",
+    "CAMERA_ARM_MATERIAL_CHANNEL_DELTA",
+    "CAMERA_ARM_MAXIMUM_CHANGED_PIXEL_FRACTION",
+    "CAMERA_ARM_MAXIMUM_MEAN_CHANNEL_DELTA",
+    "CAMERA_ARM_MINIMUM_REGION_COVERAGE",
+    "CAMERA_ARM_REQUIRED_REGION_COUNT",
+    "CAMERA_ARM_REQUIRED_STABLE_LANDMARKS",
+    "CAMERA_ARM_REQUIRED_STABLE_ZONES",
+    "CAMERA_ARM_REQUIRED_ZONE_COUNT",
     "CAMERA_GUIDANCE_ID",
     "CAMERA_GUIDANCE_VERSION",
     "CAMERA_INPUT_LEASE_NAME",
@@ -164,6 +201,10 @@ __all__ = [
     "GAMEPLAY_CHROME_POLICIES",
     "CameraAction",
     "CameraActionReceipt",
+    "CameraArmGuardDisposition",
+    "CameraArmGuardReason",
+    "CameraArmGuardRegionMetric",
+    "CameraArmGuardResult",
     "CameraControl",
     "CameraDragAxis",
     "CameraGuidanceAxis",
@@ -208,6 +249,8 @@ __all__ = [
     "CameraReportProvenance",
     "CameraReportWriteResult",
     "CameraResourceEvaluation",
+    "CameraServoArmEvidence",
+    "CameraServoArmOutcome",
     "CameraServoExceptionEvidence",
     "CameraServoFrameEvidence",
     "CameraServoLimits",
@@ -238,6 +281,7 @@ __all__ = [
     "WorldLandmarkEffect",
     "WorldLandmarkEffectItem",
     "camera_validation_report_bytes",
+    "evaluate_camera_arm_guard",
     "evaluate_varrock_east_camera",
     "evaluate_varrock_east_camera_guidance",
     "evaluate_client_input_readiness",

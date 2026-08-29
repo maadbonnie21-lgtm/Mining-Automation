@@ -391,6 +391,7 @@ def test_report_preserves_authority_separation_and_distributed_evidence(
         }
     assert report["authority"] == {
         "acceptance_path": "unchanged_production_camera_evaluation",
+        "arm_guard_can_accept": False,
         "diagnostics_can_expose_resources": False,
         "guidance_can_accept": False,
         "production_acceptance_only": True,
@@ -477,6 +478,8 @@ def test_report_binds_exact_git_command_and_frozen_policy(
         command_argv=command,
     )
 
+    assert report["report_schema_version"] == 2
+    assert report["tool"]["version"] == "1.1.0"
     assert report["overall_passed"] is False
     assert report["proof"] == {
         "authority_invariants_passed": True,
@@ -506,6 +509,78 @@ def test_report_binds_exact_git_command_and_frozen_policy(
     assert report["configuration"]["readiness"]["edge_luma_delta"] == 20
     assert report["configuration"]["readiness"]["dark_luma_maximum"] == 16
     assert report["configuration"]["servo"]["absolute_max_primitives"] == 8
+    assert report["configuration"]["servo"]["absolute_max_arm_attempts"] == 16
+    assert report["configuration"]["arm_guard"] == {
+        "acceptance_authority": False,
+        "can_accept": False,
+        "can_expose_resources": False,
+        "can_validate_scene": False,
+        "decision_authority": "retain_or_discard_pending_guidance_only",
+        "discard_requires_new_full_cycle_and_fresh_arm": True,
+        "excluded_regions": [
+            [263, 409, 20, 20],
+            [295, 490, 20, 20],
+            [405, 424, 20, 20],
+            [590, 365, 20, 20],
+            [0, 0, 1005, 34],
+            [545, 34, 222, 220],
+            [767, 34, 238, 816],
+            [520, 500, 485, 350],
+            [0, 850, 1005, 228],
+            [588, 34, 40, 40],
+            [628, 74, 139, 180],
+            [0, 834, 520, 16],
+        ],
+        "freshness_policy": {
+            "arm_frame_id_strictly_greater": True,
+            "arm_timestamp_strictly_greater": True,
+            "dedicated_capture_after_guidance": True,
+        },
+        "guard_id": "issue31-world-only-arm-guard",
+        "guard_version": "1.0.0",
+        "material_channel_delta": 24,
+        "maximum_changed_pixel_fraction_exclusive": 0.08,
+        "maximum_mean_channel_delta_exclusive": 4.0,
+        "minimum_region_coverage": 0.75,
+        "required_stable_landmarks": 6,
+        "required_stable_zones": 3,
+        "single_outlier_discards": True,
+        "structural_regions": [
+            {
+                "landmark_id": "west-ridge",
+                "region": [6, 376, 48, 48],
+                "zone": "north_west",
+            },
+            {
+                "landmark_id": "west-lower-ridge",
+                "region": [6, 448, 48, 48],
+                "zone": "north_west",
+            },
+            {
+                "landmark_id": "south-path",
+                "region": [258, 784, 48, 48],
+                "zone": "south_west",
+            },
+            {
+                "landmark_id": "south-central-edge",
+                "region": [426, 736, 48, 48],
+                "zone": "south_west",
+            },
+            {
+                "landmark_id": "north-east-wall",
+                "region": [689, 299, 48, 48],
+                "zone": "north_east",
+            },
+            {
+                "landmark_id": "east-bank-edge",
+                "region": [678, 448, 48, 48],
+                "zone": "north_east",
+            },
+        ],
+        "threshold_equality_discards": True,
+    }
+    assert report["profile"]["arm_guard_id"] == "issue31-world-only-arm-guard"
+    assert report["profile"]["arm_guard_version"] == "1.0.0"
 
 
 def test_exact_count_gate_distinguishes_35_from_36_and_blocks_mismatch(

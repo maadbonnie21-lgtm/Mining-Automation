@@ -54,7 +54,11 @@ Rules:
 feedback design. It evaluates reviewed supported fixtures plus explicitly
 labeled private/diagnostic frames through three separate authorities: fixed-UI
 readiness (veto only), unchanged production camera evaluation (acceptance
-only), and world-only diagnostic guidance (never acceptance). Every external
+only), and world-only diagnostic guidance (never acceptance). Its frozen
+configuration also records the dedicated fresh arm-frame guard: immediately
+before any future input, readiness and production are rerun and only unchanged
+structural evidence may retain the already-pending sign. The guard can only
+discard/restart and cannot validate a scene or expose resources. Every external
 group must provide `--expect`, `--expect-readiness`, and `--require-count` for a
 proof-eligible run. Canonical JSON records exact Git/command/configuration and
 per-frame hashes/scalars without copying or embedding pixels; the adjacent
