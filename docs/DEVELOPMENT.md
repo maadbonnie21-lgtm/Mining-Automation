@@ -66,6 +66,17 @@ fail-closed policies. Read
 [Camera reacquisition validation](CAMERA_REACQUISITION_VALIDATION.md) before
 running it.
 
+The former fixed candidate/open-loop strategy is retained for regression
+compatibility but is no longer canonical after clean real-client evidence
+proved that complete Windows receipts can correspond to a RuneLite camera
+no-op. The bounded feedback path remains offline-only until its readiness,
+world-only guidance, state-machine, replay proof, and exact-head CI checkpoint
+receive lead approval. Do not run new live camera input from that path before
+the approval is recorded on PR #32. Use
+`tools/analyze_issue31_servo_offline.py` for the required read-only proof; it
+requires explicit production/readiness/count expectations for every private or
+diagnostic frame group and rejects dirty or changing Git provenance.
+
 All raw frames, BMP previews, unreviewed drafts, JSON reports, and report digest
 sidecars stay beneath ignored `diagnostics/`. The camera recipe remains pending
 until repeated real RuneLite trials and the complete 36-frame drift set both

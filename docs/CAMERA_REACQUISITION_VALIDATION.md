@@ -210,12 +210,18 @@ before JSON, so a report never claims a missing artifact. All paths are
 exclusive and must resolve to distinct files. Visual inspection is still
 required; the report never infers compass identity from a pixel hash.
 
-## Deterministic production-gated normalization strategy
+## Legacy fixed candidate strategy (non-canonical)
 
-Acceptance runs use the explicit
-`varrock-east-production-gated-search-v1@1.0.0` strategy. It is a fixed,
-center-out list of eleven candidates. Every candidate is a complete independent
-reset in this order:
+The original validator exposes
+`varrock-east-production-gated-search-v1@1.0.0`, a fixed center-out list of
+eleven candidates. It remains available only for regression compatibility.
+Exact-head real-client evidence showed that complete Win32 receipts can still
+correspond to a semantic camera no-op inside RuneLite: one clean in-game repeat
+changed projective geometry while the other retained byte-identical static
+terrain. The fixed/open-loop path is therefore not canonical Issue #31
+acceptance evidence and must not be used for another parameter grid.
+
+Every legacy candidate is a complete independent reset in this order:
 
 1. Click the reviewed fixed-UI compass point to face north, holding the
    injected left-button press for the fixed 100-millisecond semantic dwell.
@@ -253,14 +259,88 @@ Endpoint saturation makes every candidate independent of the starting pitch or
 zoom. Each wheel detent crosses the Win32 boundary as a separate event with a
 fixed interval because RuneLite can coalesce a batch even when Windows
 acknowledges every event in it. The adapter recomputes the mapped screen point
-and rechecks its safety gates before every detent. The legacy `single-plan`
-mode remains available for bounded development experiments, including a
-separately reviewed reset key, but it is not the canonical Issue #31 acceptance
-command.
+and rechecks its safety gates before every detent. The `single-plan` mode
+likewise remains available only for bounded regression and diagnostic
+reproduction. Neither open-loop mode is a canonical Issue #31 acceptance
+command after the real semantic-no-op failure.
 
-Use `--dry-run` to inspect the bounded plans without opening capture or sending
-input. For example, this prints an illustrative endpoint plan only; it does not
-declare those values reviewed:
+## Bounded closed-loop normalization (Phase 1)
+
+The replacement normalization boundary is validation-only and feedback gated.
+Its fixed sequence is:
+
+1. capture and privately record a fresh frame;
+2. evaluate fixed gameplay chrome as an input-readiness veto;
+3. run the unchanged production camera evaluator;
+4. stop immediately if production passes;
+5. otherwise require a fully fail-closed production rejection;
+6. compute world-only diagnostic guidance using all candidate and fixed-UI
+   exclusions;
+7. execute at most one reviewed primitive;
+8. settle, capture, and repeat from the readiness veto.
+
+These are deliberately separate authorities. Gameplay-chrome readiness can
+only veto input. It cannot validate Varrock, contribute to world-scene
+identity, or expose a resource. Diagnostic guidance carries
+`can_accept=false`, can select only one bounded axis/sign, and cannot promote a
+production-rejected frame. Only `evaluate_varrock_east_camera()` can end a
+normalization boundary successfully.
+
+The first guidance policy is intentionally refusal-oriented. It requires at
+least five independently recovered world landmarks across all three macro
+zones plus a low-residual distributed similarity fit. It authorizes only a
+one-detent zoom sign when scale clearly dominates every uncalibrated transform
+component. Yaw, pitch, incoherent minima, ambiguous axes, unsupported geometry,
+and evidence inside the motion deadband all return
+`INSUFFICIENT_GUIDANCE`. Candidate pixels, the minimap, compass, chat, and other
+fixed UI are excluded from direction selection.
+
+The initial experiment budget is at most eight feedback primitives for one
+normalization boundary. Absolute defensive limits additionally cap requested
+events, elapsed time, and cumulative movement. Observed effect and useful
+progress are separate requirements: a pulse must change at least three frozen
+world landmarks across all three macro zones, and its next coherent zoom fit
+must materially reduce `abs(log(scale))`. An increased error stops after one
+pulse; two semantic no-ops or no-progress steps stop the boundary. A repeated
+state, direction reversal, ambiguous guidance, readiness loss, non-fail-closed
+production output, safety or receipt failure, or any exhausted budget also
+stops input immediately. A complete OS receipt alone never proves that RuneLite
+consumed an action.
+
+Phase 1 is offline-only until its exact implementation head, replay outcomes,
+tests, and CI receive a separate lead review. Do not send live camera input from
+the closed-loop path merely because the state machine exists.
+
+Within the actionable gate, v1 requires monotonic zoom-error reduction; a fit
+that crosses any landmark/zone/coherence/axis-isolation boundary becomes
+`INSUFFICIENT_GUIDANCE` immediately. Continuous residual or axis-margin
+degradation inside that gate is recorded but is not yet a separately calibrated
+controller score. Likewise, synthetic raster tests prove selector sign math,
+not real RuneLite wheel consumption. Readiness freshness across the relatively
+expensive wide search and an isolated one-detent real sign calibration remain
+explicit lead-review gates before any live closed-loop command can be enabled.
+
+The read-only proof command automatically includes every reviewed supported
+fixture, requires the complete 36-frame drift set, and binds its canonical
+report to the exact clean Git head and frozen readiness/guidance/servo policy:
+
+```powershell
+python tools/analyze_issue31_servo_offline.py --fixture-manifest tests/fixtures/perception/varrock-east-iron-v1/manifest.json --fixture-root tests/fixtures/perception/varrock-east-iron-v1 --frames drift=diagnostics/issue18-drift-v3 --expect drift=fail-closed --expect-readiness drift=ready --require-count drift=36 --report diagnostics/issue31-servo-offline.json
+```
+
+Repeat `--frames LABEL=FILE_OR_DIRECTORY`, `--expect`,
+`--expect-readiness`, and `--require-count` together for each private evidence
+set. Omitting any expectation/count makes the report observational rather than
+proof-eligible. The tool never instantiates input control, copies pixels, or
+embeds discovered absolute frame paths; it writes only hashes/scalars to
+exclusive JSON and `.sha256` outputs. Exact command arguments are retained
+verbatim for provenance, so a report remains private when its invocation used
+absolute private paths. A dirty or changing nonignored worktree, an exact count
+mismatch, a readiness mismatch, a production mismatch, or an authority
+invariant failure makes the proof ineligible and returns nonzero.
+
+Use `--dry-run` to inspect the retained legacy plans without opening capture or
+sending input. This is regression evidence only:
 
 ```powershell
 python tools/validate_varrock_east_camera.py --normalization-strategy varrock-east-production-gated-search-v1 --dry-run
@@ -269,11 +349,9 @@ python tools/validate_varrock_east_camera.py --normalization-strategy varrock-ea
 The dry run prints all eleven full candidates, the three perturbations, and
 the worst-case bounded plan/input/frame counts while sending no input.
 
-The canonical live command is one invocation (use a new case prefix each run):
-
-```powershell
-python tools/validate_varrock_east_camera.py --normalization-strategy varrock-east-production-gated-search-v1 --case-prefix issue31-live-final
-```
+There is currently no approved canonical live command. A closed-loop command
+must not be published until the offline selector proof, exact-head tests, and CI
+are reviewed and the lead explicitly authorizes a bounded live experiment.
 
 ## Repeated trial protocol
 

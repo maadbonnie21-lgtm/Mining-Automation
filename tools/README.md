@@ -50,13 +50,28 @@ Rules:
 
 ## Camera reacquisition validation
 
-`validate_varrock_east_camera.py` is the development-only Issue #31 real-client
-harness. At exact `1005 x 1078` client geometry it applies a bounded,
-deterministic, production-gated list of independent north/pitch/zoom reset
-candidates across three distinct camera perturbations, then requires at least
-two fresh production-detector confirmations per perturbation. The selected
-candidate frame is provisional and is never a confirmation. Candidate pixels,
-fixed UI, and diagnostic searches cannot establish or override scene identity.
+`analyze_issue31_servo_offline.py` is the no-input Phase 1 proof for the bounded
+feedback design. It evaluates reviewed supported fixtures plus explicitly
+labeled private/diagnostic frames through three separate authorities: fixed-UI
+readiness (veto only), unchanged production camera evaluation (acceptance
+only), and world-only diagnostic guidance (never acceptance). Every external
+group must provide `--expect`, `--expect-readiness`, and `--require-count` for a
+proof-eligible run. Canonical JSON records exact Git/command/configuration and
+per-frame hashes/scalars without copying or embedding pixels; the adjacent
+SHA-256 sidecar is written exclusively. The tool returns nonzero for incomplete
+expectations, count/readiness/production mismatches, dirty or changing Git
+state, or an authority-invariant failure.
+
+`validate_varrock_east_camera.py` retains the development-only Issue #31
+fixed-candidate harness for regression compatibility. That open-loop path is
+no longer canonical after real evidence showed complete Windows receipts can
+correspond to a RuneLite semantic no-op. At exact `1005 x 1078` client geometry
+it applies its bounded, production-gated list of independent north/pitch/zoom
+reset candidates across three perturbations, then requires at least two fresh
+production-detector confirmations per perturbation. The selected candidate
+frame is provisional and is never a confirmation. Candidate pixels, fixed UI,
+and diagnostic searches cannot establish or override scene identity. No live
+closed-loop command is published before the separate offline proof/CI review.
 Only one live validator process may operate at a time: a machine-global Windows
 named mutex is acquired before capture/focus/input and held through cleanup and
 report publication; a contender fails immediately without touching RuneLite.
