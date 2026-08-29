@@ -45,10 +45,13 @@ from mining_automation.validation.camera_servo import (
     ABSOLUTE_MAX_SERVO_ARM_ATTEMPTS,
     ABSOLUTE_MAX_SERVO_PRIMITIVES,
     DEFAULT_MAX_SERVO_PRIMITIVES,
+    MAXIMUM_ARM_TO_INPUT_AGE_SECONDS,
     WORLD_EFFECT_DESCRIPTOR_EPSILON,
     WORLD_EFFECT_REQUIRED_LANDMARKS,
     WORLD_EFFECT_REQUIRED_ZONES,
+    CameraServoArmAgeStatus,
     CameraServoArmOutcome,
+    CameraServoCommitOutcome,
     CameraServoLimits,
     CameraServoProgressStatus,
     CameraServoTerminalReason,
@@ -75,6 +78,7 @@ _HEIGHT = 1078
 _FRAME_BYTES = _WIDTH * _HEIGHT * 4
 _BLANK_PAYLOAD = bytes(_FRAME_BYTES)
 _ARM_FRAME_OFFSET = 1_000_000
+_COMMIT_FRAME_OFFSET = 2_000_000
 
 
 def _frame(frame_id: int, payload: bytes = _BLANK_PAYLOAD) -> Frame:
@@ -112,7 +116,11 @@ class SequenceSource:
         expand_arm_frames: bool = True,
     ) -> None:
         self.frames = (
-            [item for frame in frames for item in (frame, _arm_frame(frame))]
+            [
+                item
+                for frame in frames
+                for item in (frame, _arm_frame(frame), _commit_frame(frame))
+            ]
             if expand_arm_frames
             else frames
         )
@@ -139,12 +147,25 @@ def _arm_frame(decision: Frame) -> Frame:
     )
 
 
-def _logical_frame_id(frame: Frame) -> int:
-    return (
-        frame.frame_id - _ARM_FRAME_OFFSET
-        if frame.frame_id >= _ARM_FRAME_OFFSET
-        else frame.frame_id
+def _commit_frame(decision: Frame) -> Frame:
+    return Frame.from_raw(
+        RawFrame(
+            bytes(decision.payload),
+            decision.width,
+            decision.height,
+            decision.pixel_format,
+        ),
+        frame_id=_COMMIT_FRAME_OFFSET + decision.frame_id,
+        captured_monotonic_s=decision.captured_monotonic_s + 0.75,
     )
+
+
+def _logical_frame_id(frame: Frame) -> int:
+    if frame.frame_id >= _COMMIT_FRAME_OFFSET:
+        return frame.frame_id - _COMMIT_FRAME_OFFSET
+    if frame.frame_id >= _ARM_FRAME_OFFSET:
+        return frame.frame_id - _ARM_FRAME_OFFSET
+    return frame.frame_id
 
 
 class CompleteControl:
@@ -530,6 +551,9 @@ def test_one_step_exact_order_records_before_each_evaluation(
         f"record:{_ARM_FRAME_OFFSET + 1}",
         f"readiness:{_ARM_FRAME_OFFSET + 1}",
         f"production:{_ARM_FRAME_OFFSET + 1}",
+        "capture",
+        f"record:{_COMMIT_FRAME_OFFSET + 1}",
+        f"readiness:{_COMMIT_FRAME_OFFSET + 1}",
         "preflight",
         "wheel:1",
         "settle",
@@ -537,7 +561,7 @@ def test_one_step_exact_order_records_before_each_evaluation(
         "record:2",
         "readiness:2",
         "production:2",
-        f"effect:{_ARM_FRAME_OFFSET + 1}->2",
+        f"effect:{_COMMIT_FRAME_OFFSET + 1}->2",
     ]
     assert len(result.steps) == 1
     assert result.steps[0].receipt is not None
@@ -595,7 +619,7 @@ def test_guidance_exception_stops_before_arm_capture_or_input(
     assert result.arm_attempts == ()
     assert result.steps == ()
     assert control.calls == []
-    assert len(source.frames) == 1
+    assert len(source.frames) == 2
 
 
 def test_arm_capture_disconnect_after_guidance_stops_before_input(
@@ -705,7 +729,7 @@ def test_material_arm_change_discards_sign_then_requires_second_fresh_arm(
     events: list[str] = []
     _patch_pipeline(
         monkeypatch,
-        production={4: _production(passed=True)},
+        production={5: _production(passed=True)},
         guidance={
             1: _guidance(CameraGuidanceDirection.POSITIVE),
             2: _guidance(CameraGuidanceDirection.NEGATIVE),
@@ -713,7 +737,13 @@ def test_material_arm_change_discards_sign_then_requires_second_fresh_arm(
         events=events,
     )
     source = SequenceSource(
-        [_frame(1), _frame(2, changed), _frame(3, changed), _frame(4, changed)],
+        [
+            _frame(1),
+            _frame(2, changed),
+            _frame(3, changed),
+            _frame(4, changed),
+            _frame(5, changed),
+        ],
         events,
         expand_arm_frames=False,
     )
@@ -741,7 +771,7 @@ def test_material_arm_change_discards_sign_then_requires_second_fresh_arm(
     assert control.calls == ["preflight", ("wheel", 400, 50, -1)]
     assert len(result.steps) == 1
     assert result.steps[0].pre.artifact.frame_id == 3
-    assert result.steps[0].pre_world_state_digest == hashlib.sha256(b"3").hexdigest()
+    assert result.steps[0].pre_world_state_digest == hashlib.sha256(b"4").hexdigest()
 
 
 @pytest.mark.parametrize(
@@ -893,7 +923,7 @@ def test_deadline_is_rechecked_after_arm_and_immediately_before_runner(
         result.arm_attempts[0].outcome
         is CameraServoArmOutcome.DEADLINE_EXHAUSTED
     )
-    assert result.arm_attempts[0].guard is not None
+    assert (result.arm_attempts[0].guard is not None) is (len(times) == 6)
 
 
 @pytest.mark.parametrize(
@@ -975,6 +1005,320 @@ def test_arm_evidence_binds_hashes_timestamps_and_is_immutable(
         replace(attempt, arm_captured_monotonic_s=cast(Any, True))
     with pytest.raises(ValueError, match="bind retained arm attempts"):
         replace(result, arm_attempts=(*result.arm_attempts, attempt))
+
+
+@pytest.mark.parametrize(
+    ("final_clock_s", "expected_status"),
+    [
+        (10.999999, CameraServoArmAgeStatus.WITHIN_LIMIT),
+        (11.0, CameraServoArmAgeStatus.EXPIRED),
+        (11.000001, CameraServoArmAgeStatus.EXPIRED),
+    ],
+)
+def test_arm_age_boundary_is_exclusive_after_preflight_and_vetoes_input(
+    monkeypatch: pytest.MonkeyPatch,
+    final_clock_s: float,
+    expected_status: CameraServoArmAgeStatus,
+) -> None:
+    _patch_pipeline(monkeypatch)
+    times = iter((0.0, 0.0, 0.0, 10.0, 10.0, 10.0, final_clock_s, 12.0))
+    control = CompleteControl()
+
+    result = _run(
+        SequenceSource([_frame(1)]), control, clock=lambda: next(times)
+    )
+
+    attempt = result.arm_attempts[0]
+    assert attempt.age.status is expected_status
+    assert attempt.age.maximum_age_s == MAXIMUM_ARM_TO_INPUT_AGE_SECONDS == 1.0
+    if expected_status is CameraServoArmAgeStatus.WITHIN_LIMIT:
+        assert control.calls == ["preflight", ("wheel", 400, 50, 1)]
+        assert attempt.outcome is CameraServoArmOutcome.RETAINED
+        assert len(result.steps) == 1
+    else:
+        assert result.terminal_reason is CameraServoTerminalReason.ARM_FRESHNESS_EXPIRED
+        assert attempt.outcome is CameraServoArmOutcome.ARM_FRESHNESS_EXPIRED
+        assert result.steps == ()
+        assert control.calls == ["preflight"]
+
+
+def test_slow_preflight_expires_arm_and_vetoes_physical_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pipeline(monkeypatch)
+    now = [0.0]
+
+    class SlowPreflightControl(CompleteControl):
+        def preflight(self) -> CameraPreflightReceipt:
+            receipt = super().preflight()
+            now[0] = MAXIMUM_ARM_TO_INPUT_AGE_SECONDS
+            return receipt
+
+    control = SlowPreflightControl()
+    result = _run(
+        SequenceSource([_frame(1)]),
+        control,
+        clock=lambda: now[0],
+    )
+
+    assert result.terminal_reason is CameraServoTerminalReason.ARM_FRESHNESS_EXPIRED
+    assert result.steps == ()
+    assert control.calls == ["preflight"]
+    attempt = result.arm_attempts[0]
+    assert attempt.outcome is CameraServoArmOutcome.ARM_FRESHNESS_EXPIRED
+    assert attempt.age.status is CameraServoArmAgeStatus.EXPIRED
+    assert attempt.age.age_s == MAXIMUM_ARM_TO_INPUT_AGE_SECONDS
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+def test_invalid_arm_origin_clock_vetoes_with_typed_zero_input_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    invalid: float,
+) -> None:
+    _patch_pipeline(monkeypatch)
+    times = iter((0.0, 0.0, 0.0, invalid))
+    control = CompleteControl()
+
+    result = _run(
+        SequenceSource([_frame(1)]), control, clock=lambda: next(times)
+    )
+
+    assert result.terminal_reason is CameraServoTerminalReason.CLOCK_ERROR
+    assert result.steps == ()
+    assert control.calls == []
+    attempt = result.arm_attempts[0]
+    assert attempt.outcome is CameraServoArmOutcome.CLOCK_ERROR
+    assert attempt.age.status is CameraServoArmAgeStatus.ORIGIN_CLOCK_ERROR
+    assert attempt.exception is not None
+
+
+def test_regressing_arm_origin_clock_vetoes_before_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pipeline(monkeypatch)
+    times = iter((5.0, 5.0, 5.0, 4.999))
+    control = CompleteControl()
+
+    result = _run(
+        SequenceSource([_frame(1)]), control, clock=lambda: next(times)
+    )
+
+    assert result.terminal_reason is CameraServoTerminalReason.CLOCK_ERROR
+    assert result.arm_attempts[0].age.status is CameraServoArmAgeStatus.ORIGIN_CLOCK_ERROR
+    assert control.calls == []
+
+
+@pytest.mark.parametrize("final", [float("nan"), float("inf"), 9.999])
+def test_invalid_or_regressing_final_arm_clock_vetoes_after_read_only_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+    final: float,
+) -> None:
+    _patch_pipeline(monkeypatch)
+    times = iter((0.0, 0.0, 0.0, 10.0, 10.0, 10.0, final))
+    control = CompleteControl()
+
+    result = _run(
+        SequenceSource([_frame(1)]), control, clock=lambda: next(times)
+    )
+
+    assert result.terminal_reason is CameraServoTerminalReason.CLOCK_ERROR
+    assert result.steps == ()
+    assert control.calls == ["preflight"]
+    attempt = result.arm_attempts[0]
+    assert attempt.outcome is CameraServoArmOutcome.CLOCK_ERROR
+    assert attempt.age.status is CameraServoArmAgeStatus.FINAL_CLOCK_ERROR
+    assert attempt.exception is not None
+
+
+@pytest.mark.parametrize(
+    "commit_frame",
+    [_frame_at(2, 3.0), _frame_at(3, 2.0), _frame_at(3, 1.5)],
+)
+def test_final_commit_must_be_strictly_newer_than_the_accepted_arm(
+    monkeypatch: pytest.MonkeyPatch,
+    commit_frame: Frame,
+) -> None:
+    _patch_pipeline(monkeypatch)
+    control = CompleteControl()
+    source = SequenceSource(
+        [_frame_at(1, 1.0), _frame_at(2, 2.0), commit_frame],
+        expand_arm_frames=False,
+    )
+
+    result = _run(source, control)
+
+    assert result.terminal_reason is CameraServoTerminalReason.COMMIT_OBSERVATION_REJECTED
+    assert result.steps == ()
+    assert control.calls == []
+    attempt = result.arm_attempts[0]
+    assert attempt.outcome is CameraServoArmOutcome.COMMIT_STOP
+    assert attempt.commit is not None
+    assert attempt.commit.outcome is CameraServoCommitOutcome.NON_FRESH_STOP
+    assert attempt.commit.guard is not None
+    assert attempt.commit.guard.reason is CameraArmGuardReason.NON_FRESH_ARM_FRAME
+
+
+def test_final_commit_readiness_vetoes_without_production_or_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    commit_id = _COMMIT_FRAME_OFFSET + 1
+    _patch_pipeline(monkeypatch, readiness={commit_id: _not_ready()}, events=events)
+    control = CompleteControl()
+
+    result = _run(SequenceSource([_frame(1)]), control)
+
+    assert result.terminal_reason is CameraServoTerminalReason.READINESS_LOST
+    assert result.steps == ()
+    assert control.calls == []
+    assert f"production:{commit_id}" not in events
+    attempt = result.arm_attempts[0]
+    assert attempt.outcome is CameraServoArmOutcome.COMMIT_STOP
+    assert attempt.commit is not None
+    assert attempt.commit.outcome is CameraServoCommitOutcome.READINESS_LOST
+    assert attempt.commit.guard is None
+
+
+def test_material_final_commit_change_vetoes_without_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pipeline(monkeypatch)
+    source = SequenceSource(
+        [
+            _frame_at(1, 1.0),
+            _frame_at(2, 2.0),
+            _frame_at(3, 3.0, _material_world_payload()),
+        ],
+        expand_arm_frames=False,
+    )
+    control = CompleteControl()
+
+    result = _run(source, control)
+
+    assert result.terminal_reason is CameraServoTerminalReason.COMMIT_OBSERVATION_REJECTED
+    assert result.steps == ()
+    assert control.calls == []
+    commit = result.arm_attempts[0].commit
+    assert commit is not None
+    assert commit.outcome is CameraServoCommitOutcome.GUARD_REJECTED
+    assert commit.guard is not None
+    assert commit.guard.reason is CameraArmGuardReason.MATERIAL_WORLD_CHANGE
+
+
+def test_final_commit_recorder_mismatch_vetoes_without_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pipeline(monkeypatch)
+
+    def recorder(label: str, frame: Frame) -> CameraFrameArtifact:
+        artifact = record_frame_digest(label, frame)
+        if label.startswith("servo-commit-"):
+            return replace(artifact, raw_sha256="0" * 64)
+        return artifact
+
+    control = CompleteControl()
+    result = _run(SequenceSource([_frame(1)]), control, recorder=recorder)
+
+    assert result.terminal_reason is CameraServoTerminalReason.OBSERVATION_EXCEPTION
+    assert result.steps == ()
+    assert control.calls == []
+    attempt = result.arm_attempts[0]
+    assert attempt.outcome is CameraServoArmOutcome.EVALUATION_ERROR
+    assert attempt.commit is None
+    assert attempt.exception is not None
+
+
+@pytest.mark.parametrize("failure_stage", ["readiness", "guard", "recorder"])
+def test_final_commit_exceptions_veto_without_input(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    _patch_pipeline(monkeypatch)
+    commit_id = _COMMIT_FRAME_OFFSET + 1
+    recorder = record_frame_digest
+    if failure_stage == "readiness":
+        original_readiness = camera_servo.evaluate_client_input_readiness
+
+        def readiness(frame: Frame) -> ClientInputReadiness:
+            if frame.frame_id == commit_id:
+                raise RuntimeError("commit readiness failed")
+            return original_readiness(frame)
+
+        monkeypatch.setattr(camera_servo, "evaluate_client_input_readiness", readiness)
+    elif failure_stage == "guard":
+        original_guard = camera_servo.evaluate_camera_arm_guard
+        guard_calls = 0
+
+        def guard(decision: Frame, arm: Frame) -> Any:
+            nonlocal guard_calls
+            guard_calls += 1
+            if guard_calls == 2:
+                raise RuntimeError("commit guard failed")
+            return original_guard(decision, arm)
+
+        monkeypatch.setattr(camera_servo, "evaluate_camera_arm_guard", guard)
+    else:
+        def recorder(label: str, frame: Frame) -> CameraFrameArtifact:
+            if label.startswith("servo-commit-"):
+                raise OSError("commit recording failed")
+            return record_frame_digest(label, frame)
+
+    control = CompleteControl()
+    result = _run(SequenceSource([_frame(1)]), control, recorder=recorder)
+
+    assert result.terminal_reason is CameraServoTerminalReason.OBSERVATION_EXCEPTION
+    assert result.steps == ()
+    assert control.calls == []
+    attempt = result.arm_attempts[0]
+    if failure_stage == "guard":
+        assert attempt.outcome is CameraServoArmOutcome.COMMIT_STOP
+        assert attempt.commit is not None
+        assert attempt.commit.outcome is CameraServoCommitOutcome.GUARD_ERROR
+    elif failure_stage == "readiness":
+        assert attempt.outcome is CameraServoArmOutcome.COMMIT_STOP
+        assert attempt.commit is not None
+        assert attempt.commit.outcome is CameraServoCommitOutcome.EVALUATION_ERROR
+    else:
+        assert attempt.outcome is CameraServoArmOutcome.EVALUATION_ERROR
+        assert attempt.commit is None
+
+
+def test_retained_arm_evidence_binds_final_commit_and_independent_timing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    _patch_pipeline(monkeypatch, events=events)
+    clock_values = iter((0.0, 0.0, 0.0, 10.0, 10.0, 10.0, 10.5, 12.0))
+    control = CompleteControl(events)
+
+    result = _run(
+        SequenceSource([_frame(1)], events),
+        control,
+        clock=lambda: next(clock_values),
+    )
+
+    assert control.calls == ["preflight", ("wheel", 400, 50, 1)]
+    attempt = result.arm_attempts[0]
+    assert attempt.outcome is CameraServoArmOutcome.RETAINED
+    assert attempt.commit is not None
+    assert attempt.commit.outcome is CameraServoCommitOutcome.RETAINED
+    assert attempt.commit.accepted_arm_artifact == attempt.arm_artifact
+    assert attempt.commit.accepted_arm_captured_monotonic_s == 1.5
+    assert attempt.commit.artifact.frame_id == _COMMIT_FRAME_OFFSET + 1
+    assert attempt.commit.captured_monotonic_s == 1.75
+    assert attempt.commit.guard is not None
+    assert attempt.commit.guard.decision_payload_sha256 == attempt.arm_raw_sha256
+    assert attempt.commit.guard.arm_payload_sha256 == attempt.commit.raw_sha256
+    assert attempt.age.origin_clock_s == 10.0
+    assert attempt.age.final_clock_s == 10.5
+    assert attempt.age.age_s == 0.5
+    assert attempt.age.status is CameraServoArmAgeStatus.WITHIN_LIMIT
+    assert len(result.steps) == 1 and result.steps[0].arm is attempt
+    assert f"production:{_COMMIT_FRAME_OFFSET + 1}" not in events
+    with pytest.raises(FrozenInstanceError):
+        cast(Any, attempt.commit).outcome = CameraServoCommitOutcome.GUARD_REJECTED
+    with pytest.raises(FrozenInstanceError):
+        cast(Any, attempt.age).age_s = 0.0
 
 
 def test_readiness_veto_stops_before_production_guidance_or_input(
@@ -1061,7 +1405,7 @@ def test_safety_or_receipt_exception_is_terminal_without_post_capture(
     assert result.steps[0].exception is not None
     if isinstance(control, ExcessReceiptControl):
         assert result.steps[0].receipt is not None
-    assert len(source.frames) == 2
+    assert len(source.frames) == 3
 
 
 def test_settle_exception_is_terminal_without_post_capture(
@@ -1078,7 +1422,7 @@ def test_settle_exception_is_terminal_without_post_capture(
     assert result.terminal_reason is CameraServoTerminalReason.SETTLE_EXCEPTION
     assert result.steps[0].receipt is not None
     assert result.steps[0].post is None
-    assert len(source.frames) == 2
+    assert len(source.frames) == 3
 
 
 def test_recording_failure_stops_before_any_evaluator(
@@ -1147,7 +1491,7 @@ def test_exception_steps_record_fresh_terminal_elapsed_time(
         sleeper = fail_sleep
     else:
         source = SequenceSource([_frame(1)])
-    times = iter((0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 9.0))
+    times = iter((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 9.0))
 
     result = _run(
         source,
@@ -1166,7 +1510,7 @@ def test_terminal_clock_error_takes_precedence_over_input_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_pipeline(monkeypatch)
-    times = iter((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, float("nan")))
+    times = iter((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, float("nan")))
 
     result = _run(
         SequenceSource([_frame(1)]),
@@ -1391,7 +1735,7 @@ def test_time_budget_exhaustion_cannot_be_overridden_by_post_production_pass(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_pipeline(monkeypatch, production={2: _production(passed=True)})
-    times = iter((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0))
+    times = iter((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 2.0))
 
     result = _run(
         SequenceSource([_frame(1), _frame(2)]),
@@ -1424,7 +1768,7 @@ def test_slow_guidance_exhausts_time_budget_before_any_input(
     assert result.terminal_reason is CameraServoTerminalReason.TIME_BUDGET_EXHAUSTED
     assert result.steps == ()
     assert control.calls == []
-    assert len(source.frames) == 3
+    assert len(source.frames) == 5
 
 
 def test_invalid_initial_clock_fails_before_capture(
@@ -1437,7 +1781,7 @@ def test_invalid_initial_clock_fails_before_capture(
 
     assert result.terminal_reason is CameraServoTerminalReason.CLOCK_ERROR
     assert result.initial is None
-    assert len(source.frames) == 2
+    assert len(source.frames) == 3
 
 
 @pytest.mark.parametrize("settle_s", [0.0, 11.0, float("inf"), True])

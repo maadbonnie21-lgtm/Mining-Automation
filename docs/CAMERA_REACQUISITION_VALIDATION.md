@@ -19,6 +19,27 @@ thresholds, five-of-six landmark quorum, three-macro-zone requirement,
 candidate/resource classification rules, and fail-closed unsupported-view
 behavior remain unchanged.
 
+### Track A real-frame diagnosis
+
+The fresh real frame
+`diagnostics/varrock-east-iron/frames/issue31-one-detent-preflight-368edfb8.raw`
+was diagnosed before designing the second guidance policy. The unchanged
+production evaluator matched `0/6` landmarks, returned every profiled resource
+as `UNCERTAIN`, and exposed zero definitive target IDs. A diagnostic-only
+wide search recovered three strict local matches, distributed across the three
+macro zones, but at materially different offsets: west-lower `(39,-54)`,
+south-path `(55,-10)`, and north-east `(-44,-45)`. The best shared offset
+matched only `1/6` landmarks. The recorded conclusion was therefore
+`insufficient_registration_evidence`, not an actionable coherent translation
+or scale estimate.
+
+This evidence retires zoom-only guidance as insufficient for the current real
+camera envelope. It does not establish a replacement transform, prove that a
+camera action will have its intended RuneLite effect, or count as successful
+live reacquisition. The wide and independent recoveries remain diagnostic:
+they cannot validate the scene, expose resources, or override the production
+`0/6` result.
+
 ## Supported validation envelope
 
 The validator is deliberately narrow:
@@ -264,10 +285,10 @@ likewise remains available only for bounded regression and diagnostic
 reproduction. Neither open-loop mode is a canonical Issue #31 acceptance
 command after the real semantic-no-op failure.
 
-## Bounded closed-loop normalization (Phase 1)
+## Bounded closed-loop normalization
 
-The replacement normalization boundary is validation-only and feedback gated.
-Its fixed sequence is:
+The existing v1 servo boundary is validation-only and feedback gated. Its
+fixed sequence is:
 
 1. capture and privately record a fresh frame;
 2. evaluate fixed gameplay chrome as an input-readiness veto;
@@ -283,9 +304,14 @@ Its fixed sequence is:
 9. compare the decision and arm frames with the cheap world-only stale-guidance
    guard; any material or ambiguous structural change discards the pending
    sign and restarts from the arm frame without immediate input;
-10. recheck the deadline and execute at most one reviewed primitive only when
-    the arm frame is fresh, ready, fail-closed, and unchanged; and
-11. settle, capture, and repeat from the readiness veto.
+10. capture and privately record a final commit frame immediately before the
+    input seam, require it to be strictly newer than the accepted arm frame,
+    rerun the cheap readiness veto and the world-only arm guard, and reject any
+    change or ambiguity without input;
+11. independently prove that the accepted arm is less than one second old,
+    recheck the deadline, and execute at most one reviewed primitive only when
+    every prior gate is still valid; and
+12. settle, capture, and repeat from the readiness veto.
 
 These are deliberately separate authorities. Gameplay-chrome readiness can
 only veto input. It cannot validate Varrock, contribute to world-scene
@@ -314,6 +340,47 @@ fresh arm seam. Decision and arm frame IDs, monotonic capture timestamps,
 payload hashes, readiness/production results, guard metrics, and the retained
 or discarded primitive outcome remain immutable report evidence.
 
+In the v1 servo, the final commit observation is a separate cheap final
+pre-input commit seam, not a second scene evaluator and not an acceptance
+authority. It must be strictly newer than the arm observation and must retain
+both gameplay readiness and the same world-only structural guard. The
+arm-to-input clock has its own frozen maximum of one second: an age equal to or
+greater than that maximum is expired. Invalid, non-finite, or regressing
+origin/final clock samples, capture or recording failure, a non-fresh commit
+frame, readiness loss, or a guard reject all stop before physical input. The
+read-only platform preflight is completed before the final arm-age sample. The
+accepted arm and commit frame IDs, capture timestamps, payload
+hashes, age evidence, and commit result remain distinct report evidence.
+
+### Session-bound multi-axis guidance V2
+
+`issue31-world-only-multi-axis-guidance@2.0.0` is the smallest refusal-oriented
+extension justified by the Track A result. It accepts an exact captured frame,
+internally recomputes the frozen profile-bound v1 world evidence, and binds its
+decision to the frame ID, monotonic capture timestamp, and payload SHA-256. A
+caller cannot substitute handcrafted v1 evidence, an incomplete exclusion
+set, or a bare heading-normalized flag. V2 preserves v1's exact reviewed zoom
+sign when v1 is actionable; it does not widen the zoom acceptance envelope.
+
+When v1 has no distributed fit because landmarks are insufficient, one
+`CameraGuidanceV2Session` may reserve exactly one deterministic compass-north
+bootstrap. A second selection in that session cannot reserve another north
+action. Heading becomes normalized only after the session records the exact
+complete one-action compass receipt bound to the reserved decision and frame.
+The development-only north-bootstrap runner still performs a fresh arm and
+final commit observation, including unchanged production evaluation at those
+captured seams. It runs at most that one primitive, captures a fresh post-action
+frame, and treats only the unchanged production evaluator as success.
+
+If a coherent world-only fit instead identifies yaw or pitch as dominant, V2
+returns `CALIBRATION_REQUIRED`. It may describe one explicit signed
+development-only probe consisting of a four-logical-pixel horizontal or
+vertical middle drag. That pulse is calibration evidence only: V2 does not
+infer or authorize a yaw/pitch correction from it, and a probe receipt or
+improved diagnostic score cannot count as scene acceptance. Ambiguous axes,
+incoherent evidence, an axis inside the deadband, or a zoom case refused by v1
+remain no-input outcomes.
+
 The initial experiment budget is at most eight feedback primitives and sixteen
 recorded arm attempts for one normalization boundary. The separate arm bound
 also terminates a changing-frame restart loop when the injected servo clock is
@@ -328,9 +395,12 @@ production output, safety or receipt failure, or any exhausted budget also
 stops input immediately. A complete OS receipt alone never proves that RuneLite
 consumed an action.
 
-Phase 1 is offline-only until its exact implementation head, replay outcomes,
-tests, and CI receive a separate lead review. Do not send live camera input from
-the closed-loop path merely because the state machine exists.
+The V2 selector and north-bootstrap composition remain development/validation
+only. The dedicated live command below exposes exactly the one reviewed
+compass primitive, but its deterministic tests and bounded receipts do not
+establish real RuneLite reacquisition. No live success is claimed here; Issue
+#31 remains pending the repeated real-client trial protocol and same-head drift
+proof below.
 
 Within the actionable gate, v1 requires monotonic zoom-error reduction; a fit
 that crosses any landmark/zone/coherence/axis-isolation boundary becomes
@@ -373,9 +443,27 @@ python tools/validate_varrock_east_camera.py --normalization-strategy varrock-ea
 The dry run prints all eleven full candidates, the three perturbations, and
 the worst-case bounded plan/input/frame counts while sending no input.
 
-There is currently no approved canonical live command. A closed-loop command
-must not be published until the offline selector proof, exact-head tests, and CI
-are reviewed and the lead explicitly authorizes a bounded live experiment.
+The canonical development-only V2 north-bootstrap command is:
+
+```powershell
+python tools/validate_varrock_east_camera.py north-bootstrap-v2 --case-prefix issue31-north-YYYYMMDD-HHMMSS
+```
+
+Replace the timestamp placeholder with a permanently unique case prefix. The
+subcommand accepts only that required prefix and an optional private ignored
+`--output` root. It fixes the RuneLite window title policy, detector/profile,
+V2 selector, compass point, and settle interval; it exposes no dirty-tree,
+dry-run, title, coordinate, or control override. It requires the same clean
+exact Git head before the lease, inside the lease, and after cleanup, and holds
+the global input lease through exclusive canonical JSON/SHA publication.
+
+Exit `0` means only that the unchanged production evaluator passed. A complete
+`BOOTSTRAP_EXECUTED` receipt is canonical non-pass evidence and exits `1`;
+setup, provenance, lease, cleanup, clock, or publication errors exit `2`.
+Private initial/arm/commit/post frames, full V2/guard/readiness/production
+evidence, input-request-to-receipt timing, and the receipt-backed pointer
+policy remain under ignored `diagnostics/`. The report explicitly does not
+claim a captured numeric logical-to-physical pointer mapping.
 
 ## Repeated trial protocol
 

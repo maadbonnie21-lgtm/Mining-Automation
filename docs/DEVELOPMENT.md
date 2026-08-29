@@ -69,17 +69,45 @@ running it.
 The former fixed candidate/open-loop strategy is retained for regression
 compatibility but is no longer canonical after clean real-client evidence
 proved that complete Windows receipts can correspond to a RuneLite camera
-no-op. The bounded feedback path remains offline-only until its readiness,
-world-only guidance, dedicated pre-input arm capture/stale-guidance veto,
-state-machine, replay proof, and exact-head CI checkpoint receive lead
-approval. The arm seam reruns readiness and unchanged production perception,
-then compares only excluded-candidate structural regions; a changed or
-ambiguous frame discards the pending sign and restarts without input. Do not
-run new live camera input from that path before the approval is recorded on PR
-#32. Use
+no-op. The latest fresh real frame matched `0/6` production landmarks. Wide
+diagnostics found three strict local recoveries at noncoherent offsets, while
+the best shared displacement matched only `1/6`; the v1 zoom-only selector is
+therefore insufficient for that envelope, not safely actionable.
+
+The session-bound V2 development policy permits one receipt-bound
+compass-north bootstrap when v1 lacks distributed evidence and retains only
+v1's exact reviewed zoom sign. A dominant yaw or pitch result can request one
+signed four-pixel calibration probe, but the probe cannot authorize a
+correction or establish scene acceptance. The arm seam reruns readiness and
+unchanged production perception, compares only excluded-candidate structural
+regions, then requires a strictly newer final commit frame to retain readiness
+and the same cheap world-only guard. The accepted arm must remain less than one
+second old at input. Any changed, ambiguous, stale, non-fresh, or invalid-clock
+case stops before input. Use
 `tools/analyze_issue31_servo_offline.py` for the required read-only proof; it
 requires explicit production/readiness/count expectations for every private or
 diagnostic frame group and rejects dirty or changing Git provenance.
+
+The canonical development-only V2 boundary is one command:
+
+```powershell
+python tools/validate_varrock_east_camera.py north-bootstrap-v2 --case-prefix issue31-north-YYYYMMDD-HHMMSS
+```
+
+Use a permanently unique case prefix. The subcommand accepts no input-policy
+overrides, requires the same clean exact Git head at every provenance seam,
+and holds the global input lease through cleanup and exclusive report/SHA
+publication. Exit `0` belongs only to unchanged production success;
+`BOOTSTRAP_EXECUTED` is retained non-pass evidence and exits `1`, while setup
+or evidence-publication failure exits `2`. Its private report includes the
+complete V2/bootstrap evidence, input-request/receipt clocks and delivery
+duration, and the fixed logical
+compass-point/target-root policy without claiming a numeric pointer mapping.
+
+The V2 library, deterministic tests, and a complete Windows input receipt are
+not evidence of live RuneLite success. Production thresholds, landmark quorum,
+macro zones, scene authority, and fail-closed resource exposure remain
+unchanged; diagnostics and calibration probes never override production.
 
 All raw frames, BMP previews, unreviewed drafts, JSON reports, and report digest
 sidecars stay beneath ignored `diagnostics/`. The camera recipe remains pending

@@ -66,6 +66,36 @@ SHA-256 sidecar is written exclusively. The tool returns nonzero for incomplete
 expectations, count/readiness/production mismatches, dirty or changing Git
 state, or an authority-invariant failure.
 
+The current Track A real-frame diagnosis is intentionally separate from input
+authority. Production matched `0/6` landmarks. A wide diagnostic recovered
+only three local landmarks at noncoherent offsets, and the best shared offset
+matched `1/6`, so v1 zoom-only guidance is insufficient for that camera
+envelope. These diagnostic minima cannot validate the scene or expose a
+resource.
+
+The follow-on V2 code lives in the reusable validation package rather than in
+a one-off tool. It owns a one-time, receipt-bound compass-north bootstrap per
+reacquisition session and preserves only v1's already-reviewed zoom sign. A
+dominant yaw/pitch result may request one signed four-pixel calibration probe,
+but the probe is not a correction and cannot become production acceptance.
+Immediately before any servo input, a strictly newer final commit observation
+must retain readiness and the world-only arm guard, and the accepted arm must
+still be less than one second old. The canonical development-only live boundary
+is deliberately tiny:
+
+```powershell
+python tools/validate_varrock_east_camera.py north-bootstrap-v2 --case-prefix issue31-north-YYYYMMDD-HHMMSS
+```
+
+Use a permanently unique prefix. Only optional private `--output` is also
+accepted; title, coordinates, settle timing, detector/profile/V2 identity, and
+the one compass primitive are fixed. Exit `0` is reserved for unchanged
+production success, a completed `BOOTSTRAP_EXECUTED` run exits `1`, and setup
+or publication failures exit `2`. The clean exact Git head and global input
+lease span the complete evidence boundary. Its private report records full
+bootstrap evidence, input-request-to-receipt timing, and receipt-backed
+target-root checks but does not claim an uncaptured numeric pointer mapping.
+
 `validate_varrock_east_camera.py` retains the development-only Issue #31
 fixed-candidate harness for regression compatibility. That open-loop path is
 no longer canonical after real evidence showed complete Windows receipts can
@@ -75,7 +105,9 @@ reset candidates across three perturbations, then requires at least two fresh
 production-detector confirmations per perturbation. The selected candidate
 frame is provisional and is never a confirmation. Candidate pixels, fixed UI,
 and diagnostic searches cannot establish or override scene identity. No live
-closed-loop command is published before the separate offline proof/CI review.
+V2 closed-loop yaw/pitch/zoom command is currently published. Production
+thresholds, quorum, macro zones, scene authority, and fail-closed resource exposure remain
+unchanged by every diagnostic and calibration path.
 Only one live validator process may operate at a time: a machine-global Windows
 named mutex is acquired before capture/focus/input and held through cleanup and
 report publication; a contender fails immediately without touching RuneLite.

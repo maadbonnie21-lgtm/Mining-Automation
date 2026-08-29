@@ -29,13 +29,34 @@ from mining_automation.capture.windows import (  # noqa: E402
     DEFAULT_TITLE_SUBSTRING,
     WindowsCaptureBackend,
 )
-from mining_automation.perception import write_resource_fixture_draft  # noqa: E402
+from mining_automation.perception import (  # noqa: E402
+    RESOURCE_PROFILE_SCHEMA_VERSION,
+    VARROCK_EAST_IRON_DETECTOR_VERSION,
+    VARROCK_EAST_IRON_PROFILE_ID,
+    build_varrock_east_iron_detector,
+    load_varrock_east_iron_profile,
+    write_resource_fixture_draft,
+)
+from mining_automation.validation.camera_arm_guard import (  # noqa: E402
+    CameraArmGuardResult,
+)
+from mining_automation.validation.camera_bootstrap import (  # noqa: E402
+    CameraNorthBootstrapResult,
+    run_camera_north_bootstrap,
+)
 from mining_automation.validation.camera_evaluation import CameraEvaluation  # noqa: E402
+from mining_automation.validation.camera_guidance_v2 import (  # noqa: E402
+    CAMERA_GUIDANCE_V2_ID,
+    CAMERA_GUIDANCE_V2_VERSION,
+    WorldCameraGuidanceV2,
+)
 from mining_automation.validation.camera_input_lease import (  # noqa: E402
     CameraInputLeaseError,
     WindowsCameraInputLease,
 )
 from mining_automation.validation.camera_plan import (  # noqa: E402
+    EXPECTED_CLIENT_HEIGHT,
+    EXPECTED_CLIENT_WIDTH,
     MAX_CAMERA_DRAG_PIXELS,
     MAX_CAMERA_DRAG_STEP_PIXELS,
     MAX_CAMERA_WHEEL_DETENTS,
@@ -63,12 +84,19 @@ from mining_automation.validation.camera_report import (  # noqa: E402
     CameraReportProvenance,
     write_camera_validation_report,
 )
+from mining_automation.validation.camera_servo import (  # noqa: E402
+    CameraServoArmAgeEvidence,
+    CameraServoFrameEvidence,
+)
 from mining_automation.validation.camera_session import (  # noqa: E402
     CameraFrameArtifact,
     CameraFrameRecord,
     CameraNormalizationResult,
     CameraSessionResult,
     run_camera_validation_session,
+)
+from mining_automation.validation.client_readiness import (  # noqa: E402
+    ClientInputReadiness,
 )
 from mining_automation.validation.windows_camera import (  # noqa: E402
     CAMERA_DRAG_STEP_INTERVAL_SECONDS,
@@ -124,6 +152,15 @@ _PRODUCTION_GATED_CANDIDATE_OFFSETS: tuple[tuple[float, float], ...] = (
     (0.58, 0.06),
     (0.62, 0.06),
 )
+_NORTH_BOOTSTRAP_COMMAND = "north-bootstrap-v2"
+_NORTH_BOOTSTRAP_SETTLE_SECONDS = 1.0
+_NORTH_BOOTSTRAP_OUTPUT = Path("diagnostics/issue31-camera-reacquisition-v2")
+_EXPECTED_DETECTOR_ID = "profiled-resource:varrock-east-iron-v1"
+_EXPECTED_DETECTOR_VERSION = "2.1.0"
+_EXPECTED_PROFILE_ID = "varrock-east-iron-v1"
+_EXPECTED_PROFILE_SCHEMA_VERSION = 3
+_EXPECTED_GUIDANCE_V2_ID = "issue31-world-only-multi-axis-guidance"
+_EXPECTED_GUIDANCE_V2_VERSION = "2.0.0"
 
 
 class _PrivateArtifactRecorder:
@@ -279,6 +316,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="print the bounded plans without capture or input",
+    )
+    return parser
+
+
+def _build_north_bootstrap_parser() -> argparse.ArgumentParser:
+    """Return the isolated parser for the one-action V2 live boundary."""
+
+    parser = argparse.ArgumentParser(
+        prog=f"{Path(__file__).name} {_NORTH_BOOTSTRAP_COMMAND}",
+        description=(
+            "Run one production-gated, receipt-bound compass-north bootstrap."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=_NORTH_BOOTSTRAP_OUTPUT,
+        help="private ignored diagnostics root",
+    )
+    parser.add_argument(
+        "--case-prefix",
+        required=True,
+        help="permanently single-use artifact/report prefix",
     )
     return parser
 
@@ -528,6 +588,95 @@ def _git_state() -> tuple[str, bool]:
         text=True,
     ).stdout
     return head, not status.strip()
+
+
+def _require_north_bootstrap_runtime_identities() -> None:
+    """Pin the live command to the reviewed production and V2 identities."""
+
+    profile = load_varrock_east_iron_profile()
+    detector = build_varrock_east_iron_detector()
+    observed = {
+        "detector_id": detector.metadata.detector_id,
+        "detector_version": detector.metadata.version,
+        "detector_version_constant": VARROCK_EAST_IRON_DETECTOR_VERSION,
+        "profile_id": profile.profile_id,
+        "profile_id_constant": VARROCK_EAST_IRON_PROFILE_ID,
+        "profile_schema_version": RESOURCE_PROFILE_SCHEMA_VERSION,
+        "guidance_v2_id": CAMERA_GUIDANCE_V2_ID,
+        "guidance_v2_version": CAMERA_GUIDANCE_V2_VERSION,
+    }
+    expected: dict[str, object] = {
+        "detector_id": _EXPECTED_DETECTOR_ID,
+        "detector_version": _EXPECTED_DETECTOR_VERSION,
+        "detector_version_constant": _EXPECTED_DETECTOR_VERSION,
+        "profile_id": _EXPECTED_PROFILE_ID,
+        "profile_id_constant": _EXPECTED_PROFILE_ID,
+        "profile_schema_version": _EXPECTED_PROFILE_SCHEMA_VERSION,
+        "guidance_v2_id": _EXPECTED_GUIDANCE_V2_ID,
+        "guidance_v2_version": _EXPECTED_GUIDANCE_V2_VERSION,
+    }
+    mismatches = [
+        f"{name}={observed[name]!r} (expected {expected_value!r})"
+        for name, expected_value in expected.items()
+        if observed[name] != expected_value
+    ]
+    if mismatches:
+        raise RuntimeError(
+            "north-bootstrap runtime identity mismatch: " + "; ".join(mismatches)
+        )
+
+
+def _require_north_bootstrap_result_identities(
+    result: CameraNorthBootstrapResult,
+) -> None:
+    """Reject evidence produced by anything outside the pinned live policy."""
+
+    for stage, frame in (
+        ("initial", result.initial),
+        ("arm", result.arm),
+        ("commit", result.commit),
+        ("post", result.post),
+    ):
+        if frame is None or frame.production is None:
+            continue
+        _require_north_bootstrap_production_identity(stage, frame.production)
+    for stage, guidance in (
+        ("decision", result.guidance),
+        ("post", result.post_guidance),
+    ):
+        if guidance is None:
+            continue
+        if (
+            guidance.selector_id != _EXPECTED_GUIDANCE_V2_ID
+            or guidance.selector_version != _EXPECTED_GUIDANCE_V2_VERSION
+        ):
+            raise RuntimeError(f"{stage} guidance does not use the pinned V2 selector")
+    if result.plan is not None and (
+        result.plan.name != "issue31-v2-01-heading-north"
+        or result.plan.actions != (CompassClick(*REVIEWED_COMPASS_POINT),)
+    ):
+        raise RuntimeError("north-bootstrap result retained an unexpected camera plan")
+
+
+def _require_north_bootstrap_production_identity(
+    stage: str,
+    production: CameraEvaluation,
+) -> None:
+    if (
+        production.detector_id != _EXPECTED_DETECTOR_ID
+        or production.detector_version != _EXPECTED_DETECTOR_VERSION
+        or production.profile_id != _EXPECTED_PROFILE_ID
+        or production.profile_schema_version != _EXPECTED_PROFILE_SCHEMA_VERSION
+        or production.profile_frame_width != EXPECTED_CLIENT_WIDTH
+        or production.profile_frame_height != EXPECTED_CLIENT_HEIGHT
+        or production.profile_pixel_format.value != "bgra8888"
+        or production.required_landmark_count != 6
+        or production.required_landmark_matches != 5
+        or production.required_matched_zones != 3
+    ):
+        raise RuntimeError(
+            f"{stage} production evidence does not use the pinned detector/profile"
+        )
 
 
 def _resolve_private_output_root(output: Path) -> Path:
@@ -864,6 +1013,370 @@ def _frame_record_dict(
     return payload
 
 
+def _readiness_dict(readiness: ClientInputReadiness) -> dict[str, Any]:
+    return {
+        "evaluator_id": readiness.evaluator_id,
+        "evaluator_version": readiness.evaluator_version,
+        "reason": readiness.reason.value,
+        "detail": readiness.detail,
+        "safe_to_attempt_camera_input": readiness.safe_to_attempt_camera_input,
+        "can_accept": readiness.can_accept,
+        "can_validate_scene": readiness.can_validate_scene,
+        "can_expose_resources": readiness.can_expose_resources,
+        "anchors": [
+            {
+                "anchor_id": anchor.policy.anchor_id,
+                "region": list(anchor.policy.region),
+                "thresholds": {
+                    "minimum_luma_stddev": anchor.policy.minimum_luma_stddev,
+                    "minimum_edge_density": anchor.policy.minimum_edge_density,
+                    "maximum_dark_fraction": anchor.policy.maximum_dark_fraction,
+                },
+                "metrics": {
+                    "luma_stddev": anchor.luma_stddev,
+                    "edge_density": anchor.edge_density,
+                    "dark_fraction": anchor.dark_fraction,
+                },
+                "matched": anchor.matched,
+            }
+            for anchor in readiness.anchors
+        ],
+    }
+
+
+def _bootstrap_frame_dict(frame: CameraServoFrameEvidence) -> dict[str, Any]:
+    return {
+        "artifact": {
+            "label": frame.artifact.label,
+            "frame_id": frame.artifact.frame_id,
+            "captured_monotonic_s": frame.captured_monotonic_s,
+            "width": frame.artifact.width,
+            "height": frame.artifact.height,
+            "pixel_format": frame.artifact.pixel_format,
+            "raw_sha256": frame.artifact.raw_sha256,
+            "files": dict(frame.artifact.files),
+        },
+        "readiness": _readiness_dict(frame.readiness),
+        "production": (
+            None if frame.production is None else _evaluation_dict(frame.production)
+        ),
+    }
+
+
+def _guidance_v2_dict(guidance: WorldCameraGuidanceV2) -> dict[str, Any]:
+    base = guidance.base_guidance
+    fit = base.fit
+    analysis = base.analysis
+    shared = None if analysis is None else analysis.best_shared
+    transform = guidance.transform_error
+    return {
+        "selector_id": guidance.selector_id,
+        "selector_version": guidance.selector_version,
+        "disposition": guidance.disposition.value,
+        "reason": guidance.reason.value,
+        "detail": guidance.detail,
+        "decision_frame": {
+            "frame_id": guidance.decision_frame_id,
+            "captured_monotonic_s": guidance.decision_captured_monotonic_s,
+            "raw_sha256": guidance.decision_raw_sha256,
+        },
+        "heading_was_normalized": guidance.heading_was_normalized,
+        "axis": None if guidance.axis is None else guidance.axis.value,
+        "direction": None if guidance.direction is None else guidance.direction.value,
+        "transform_error": (
+            None
+            if transform is None
+            else {
+                "log_scale": transform.log_scale,
+                "rotation": transform.rotation,
+                "horizontal_shift": transform.horizontal_shift,
+                "vertical_shift": transform.vertical_shift,
+                "norm": transform.norm,
+            }
+        ),
+        "can_accept": guidance.can_accept,
+        "can_validate_scene": guidance.can_validate_scene,
+        "can_expose_resources": guidance.can_expose_resources,
+        "base_guidance": {
+            "selector_id": base.selector_id,
+            "selector_version": base.selector_version,
+            "disposition": base.disposition.value,
+            "reason": base.reason.value,
+            "detail": base.detail,
+            "axis": None if base.axis is None else base.axis.value,
+            "direction": None if base.direction is None else base.direction.value,
+            "fit": (
+                None
+                if fit is None
+                else {
+                    "scale": fit.scale,
+                    "rotation_degrees": fit.rotation_degrees,
+                    "centre_shift_x": fit.centre_shift_x,
+                    "centre_shift_y": fit.centre_shift_y,
+                    "rms_residual_px": fit.rms_residual_px,
+                    "maximum_residual_px": fit.maximum_residual_px,
+                    "landmark_count": fit.landmark_count,
+                    "matched_zones": [zone.value for zone in fit.matched_zones],
+                }
+            ),
+            "analysis": (
+                None
+                if analysis is None
+                else {
+                    "diagnosis": analysis.diagnosis.value,
+                    "detail": analysis.detail,
+                    "search_radius": analysis.search_radius,
+                    "coarse_step": analysis.coarse_step,
+                    "refinement_radius": analysis.refinement_radius,
+                    "matched_count": analysis.matched_count,
+                    "matched_zones": [
+                        zone.value for zone in analysis.matched_zones
+                    ],
+                    "landmarks": [
+                        {
+                            "landmark_id": landmark.landmark_id,
+                            "offset_x": landmark.offset_x,
+                            "offset_y": landmark.offset_y,
+                            "distance": landmark.distance,
+                            "maximum_distance": landmark.maximum_distance,
+                            "normalized_distance": landmark.normalized_distance,
+                            "matched": landmark.matched,
+                            "zone": landmark.zone.value,
+                            "searched_offsets": landmark.searched_offsets,
+                        }
+                        for landmark in analysis.landmarks
+                    ],
+                    "best_shared": (
+                        None
+                        if shared is None
+                        else {
+                            "offset_x": shared.offset_x,
+                            "offset_y": shared.offset_y,
+                            "matched_count": shared.matched_count,
+                            "matched_zones": [
+                                zone.value for zone in shared.matched_zones
+                            ],
+                            "required_quorum": shared.required_quorum,
+                            "required_zones": shared.required_zones,
+                            "valid_landmark_count": shared.valid_landmark_count,
+                            "normalized_distance_sum": (
+                                shared.normalized_distance_sum
+                            ),
+                            "validated_diagnostic_only": shared.validated,
+                        }
+                    ),
+                }
+            ),
+            "excluded_regions": [list(region) for region in base.excluded_regions],
+            "can_accept": base.can_accept,
+            "can_validate_scene": base.can_validate_scene,
+            "can_expose_resources": base.can_expose_resources,
+        },
+    }
+
+
+def _arm_guard_dict(guard: CameraArmGuardResult) -> dict[str, Any]:
+    return {
+        "guard_id": guard.guard_id,
+        "guard_version": guard.guard_version,
+        "disposition": guard.disposition.value,
+        "reason": guard.reason.value,
+        "detail": guard.detail,
+        "decision_frame": {
+            "frame_id": guard.decision_frame_id,
+            "captured_monotonic_s": guard.decision_captured_monotonic_s,
+            "raw_sha256": guard.decision_payload_sha256,
+        },
+        "arm_frame": {
+            "frame_id": guard.arm_frame_id,
+            "captured_monotonic_s": guard.arm_captured_monotonic_s,
+            "raw_sha256": guard.arm_payload_sha256,
+        },
+        "regions": [
+            {
+                "landmark_id": region.landmark_id,
+                "zone": region.zone.value,
+                "region": list(region.region),
+                "compared_pixel_count": region.compared_pixel_count,
+                "total_pixel_count": region.total_pixel_count,
+                "mean_absolute_channel_delta": region.mean_absolute_channel_delta,
+                "changed_pixel_fraction": region.changed_pixel_fraction,
+                "within_limit": region.within_limit,
+            }
+            for region in guard.regions
+        ],
+        "evaluated_zones": [zone.value for zone in guard.evaluated_zones],
+        "stable_landmark_count": guard.stable_landmark_count,
+        "stable_zones": [zone.value for zone in guard.stable_zones],
+        "excluded_regions": [list(region) for region in guard.excluded_regions],
+        "compared_pixel_count": guard.compared_pixel_count,
+        "mean_absolute_channel_delta": guard.mean_absolute_channel_delta,
+        "changed_pixel_fraction": guard.changed_pixel_fraction,
+        "safe_to_retain_guidance": guard.safe_to_retain_guidance,
+        "can_accept": guard.can_accept,
+        "can_validate_scene": guard.can_validate_scene,
+        "can_expose_resources": guard.can_expose_resources,
+    }
+
+
+def _arm_age_dict(age: CameraServoArmAgeEvidence) -> dict[str, Any]:
+    return {
+        "origin_clock_s": age.origin_clock_s,
+        "final_clock_s": age.final_clock_s,
+        "age_s": age.age_s,
+        "maximum_age_s": age.maximum_age_s,
+        "status": age.status.value,
+    }
+
+
+def _bootstrap_result_dict(
+    result: CameraNorthBootstrapResult,
+    *,
+    tracked_worktree_clean: bool,
+) -> dict[str, Any]:
+    return {
+        "command": _NORTH_BOOTSTRAP_COMMAND,
+        "development_only": True,
+        "identity_policy": {
+            "detector_id": _EXPECTED_DETECTOR_ID,
+            "detector_version": _EXPECTED_DETECTOR_VERSION,
+            "profile_id": _EXPECTED_PROFILE_ID,
+            "profile_schema_version": _EXPECTED_PROFILE_SCHEMA_VERSION,
+            "guidance_v2_id": _EXPECTED_GUIDANCE_V2_ID,
+            "guidance_v2_version": _EXPECTED_GUIDANCE_V2_VERSION,
+        },
+        "camera_assumptions": {
+            "compass_point": list(REVIEWED_COMPASS_POINT),
+            "compass_click_dwell_s": COMPASS_CLICK_DWELL_SECONDS,
+            "post_action_settle_s": _NORTH_BOOTSTRAP_SETTLE_SECONDS,
+            "maximum_semantic_actions": 1,
+            "permitted_action": "compass_click",
+            "diagnostics_can_override_production": False,
+        },
+        "frames": {
+            "initial": (
+                None if result.initial is None else _bootstrap_frame_dict(result.initial)
+            ),
+            "arm": None if result.arm is None else _bootstrap_frame_dict(result.arm),
+            "commit": (
+                None if result.commit is None else _bootstrap_frame_dict(result.commit)
+            ),
+            "post": None if result.post is None else _bootstrap_frame_dict(result.post),
+        },
+        "guidance": (
+            None if result.guidance is None else _guidance_v2_dict(result.guidance)
+        ),
+        "post_guidance": (
+            None
+            if result.post_guidance is None
+            else _guidance_v2_dict(result.post_guidance)
+        ),
+        "plan": None if result.plan is None else _plan_dict(result.plan),
+        "guards": {
+            "decision_to_arm": (
+                None
+                if result.arm_guard is None
+                else _arm_guard_dict(result.arm_guard)
+            ),
+            "arm_to_commit": (
+                None
+                if result.commit_guard is None
+                else _arm_guard_dict(result.commit_guard)
+            ),
+            "decision_to_commit": (
+                None
+                if result.decision_commit_guard is None
+                else _arm_guard_dict(result.decision_commit_guard)
+            ),
+        },
+        "arm_age": (
+            None if result.arm_age is None else _arm_age_dict(result.arm_age)
+        ),
+        "preflight": (
+            None
+            if result.preflight is None
+            else {
+                "focused": result.preflight.focused,
+                "client_width": result.preflight.client_width,
+                "client_height": result.preflight.client_height,
+                "supported": result.preflight.supported,
+            }
+        ),
+        "receipt": (
+            None if result.receipt is None else _plan_receipt_dict(result.receipt)
+        ),
+        "input": {
+            "state": result.input_state.value,
+            "attempted": result.input_attempted,
+            "completed": result.input_completed,
+            "start_clock_s": result.input_start_clock_s,
+            "receipt_clock_s": result.input_receipt_clock_s,
+            "delivery_duration_s": result.input_delivery_duration_s,
+        },
+        "pointer_mapping": {
+            "adapter_identity": (
+                "mining_automation.validation.windows_camera.WindowsCameraControl"
+            ),
+            "reviewed_logical_point": {
+                "x": REVIEWED_COMPASS_POINT[0],
+                "y": REVIEWED_COMPASS_POINT[1],
+                "coordinate_space": "target_logical_client_pixels",
+            },
+            "preflight": (
+                None
+                if result.preflight is None
+                else {
+                    "focused": result.preflight.focused,
+                    "client_width": result.preflight.client_width,
+                    "client_height": result.preflight.client_height,
+                    "supported": result.preflight.supported,
+                }
+            ),
+            "receipt_backed_target_root_policy": {
+                "complete_compass_receipt": result.receipt is not None,
+                "discovery_identity_bound_to_control": True,
+                "target_root_rechecked_before_button_down": (
+                    result.receipt is not None
+                ),
+                "target_root_rechecked_during_dwell_before_button_up": (
+                    result.receipt is not None
+                ),
+                "numeric_mapping_captured": False,
+                "physical_screen_point": None,
+                "target_root_handle_recorded": False,
+                "claim": (
+                    "A complete receipt proves the live WindowsCameraControl "
+                    "completed its target-root and identity rechecks; this report "
+                    "does not capture or infer a numeric logical-to-physical mapping."
+                ),
+            },
+        },
+        "exception": (
+            None
+            if result.exception is None
+            else {
+                "type": result.exception.exception_type,
+                "message": result.exception.detail,
+            }
+        ),
+        "terminal_reason": result.terminal_reason.value,
+        "detail": result.detail,
+        "acceptance": {
+            "authority": "unchanged_production_evaluator_only",
+            "passed": result.passed,
+            "input_receipt_is_acceptance": False,
+            "capture_is_acceptance": False,
+        },
+        "tracked_worktree_clean": tracked_worktree_clean,
+        "camera_evidence_eligible": result.passed and tracked_worktree_clean,
+        "combined_issue31_acceptance": {
+            "complete": False,
+            "reviewed_live_resource_states_included": False,
+            "same_head_drift_proof_included": False,
+        },
+    }
+
+
 def _normalization_result_dict(
     result: CameraNormalizationResult,
 ) -> dict[str, Any]:
@@ -1112,6 +1625,272 @@ def _print_summary(
     print(f"Report SHA-256: {report_sha256}")
 
 
+def _print_north_bootstrap_summary(
+    result: CameraNorthBootstrapResult,
+    *,
+    report_path: Path,
+    report_sha256: str,
+    git_head_sha: str,
+) -> None:
+    print(
+        "UNCHANGED PRODUCTION CAMERA EVIDENCE: "
+        f"{'PASSED' if result.passed else 'NOT PASSED'}"
+    )
+    print(f"Head: {git_head_sha}")
+    print(f"Terminal reason: {result.terminal_reason.value}")
+    print(f"Input state: {result.input_state.value}")
+    print(f"Report: {report_path}")
+    print(f"Report SHA-256: {report_sha256}")
+
+
+def _run_live_north_bootstrap(
+    *,
+    output_root: Path,
+    report_path: Path,
+    digest_path: Path,
+    case_prefix: str,
+    git_head_before: str,
+    command_argv: tuple[str, ...],
+    publication_state: _ReportPublicationState,
+) -> int:
+    """Run the one-action V2 boundary while the caller owns the input lease."""
+
+    backend: WindowsCaptureBackend | None = None
+    source: CaptureSource | None = None
+    control: WindowsCameraControl | None = None
+    result: CameraNorthBootstrapResult | None = None
+    handled_error: Exception | None = None
+    unhandled_error: BaseException | None = None
+    cleanup_errors: list[str] = []
+    try:
+        git_head_inside, clean_inside = _git_state()
+        if git_head_inside != git_head_before or not clean_inside:
+            raise RuntimeError(
+                "Git HEAD/worktree changed before the leased bootstrap boundary"
+            )
+        _reserve_case_namespace(
+            output_root,
+            case_prefix,
+            report_path,
+            digest_path,
+            git_head_sha=git_head_before,
+        )
+        backend = WindowsCaptureBackend(title_substring=DEFAULT_TITLE_SUBSTRING)
+        source = CaptureSource(backend, max_consecutive_failures=1)
+        source.open()
+        # Resolve and bind the exact RuneLite HWND. This discovery frame is not
+        # evidence; the bootstrap runner captures and records its own decision.
+        source.capture()
+        selected = backend.selected_window
+        if selected is None:
+            raise RuntimeError("capture succeeded without a selected RuneLite window")
+        recorder = _PrivateArtifactRecorder(
+            output_root,
+            case_prefix=case_prefix,
+            git_head_sha=git_head_before,
+            plan_id=_EXPECTED_GUIDANCE_V2_ID,
+            plan_version=_EXPECTED_GUIDANCE_V2_VERSION,
+        )
+        control = WindowsCameraControl(
+            selected.hwnd,
+            expected_class_name=selected.class_name,
+            expected_title=selected.title,
+        )
+        def require_same_clean_head_before_input(
+            initial: CameraServoFrameEvidence,
+            arm: CameraServoFrameEvidence,
+            commit: CameraServoFrameEvidence,
+        ) -> None:
+            current_head, current_clean = _git_state()
+            if current_head != git_head_before or not current_clean:
+                raise RuntimeError(
+                    "Git HEAD/worktree changed before the physical input seam"
+                )
+            for stage, evidence in (
+                ("initial", initial),
+                ("arm", arm),
+                ("commit", commit),
+            ):
+                if evidence.production is None:
+                    raise RuntimeError(
+                        f"{stage} production evidence is missing at the input seam"
+                    )
+                _require_north_bootstrap_production_identity(
+                    stage,
+                    evidence.production,
+                )
+
+        result = run_camera_north_bootstrap(
+            source,
+            control,
+            sleeper=time.sleep,
+            settle_s=_NORTH_BOOTSTRAP_SETTLE_SECONDS,
+            recorder=recorder,
+            pre_input_guard=require_same_clean_head_before_input,
+            final_input_guard=require_same_clean_head_before_input,
+        )
+    except (
+        CaptureError,
+        FileExistsError,
+        OSError,
+        RuntimeError,
+        ValueError,
+        WindowsCameraError,
+        subprocess.CalledProcessError,
+    ) as exc:
+        handled_error = exc
+    except BaseException as exc:
+        unhandled_error = exc
+    finally:
+        if control is not None:
+            try:
+                control.release_all_held_keys()
+            except (OSError, RuntimeError, WindowsCameraError) as exc:
+                cleanup_errors.append(f"camera input cleanup failed: {exc}")
+        if source is not None:
+            try:
+                source.close()
+            except (CaptureError, OSError, RuntimeError) as exc:
+                cleanup_errors.append(f"capture cleanup failed: {exc}")
+
+    if handled_error is not None:
+        print(f"North bootstrap failed: {handled_error}", file=sys.stderr)
+        if cleanup_errors:
+            print("; ".join(cleanup_errors), file=sys.stderr)
+        return 2
+    if unhandled_error is not None:
+        if cleanup_errors:
+            print("; ".join(cleanup_errors), file=sys.stderr)
+        raise unhandled_error
+    if cleanup_errors:
+        print("; ".join(cleanup_errors), file=sys.stderr)
+        return 2
+    if result is None:  # pragma: no cover - defensive composition guard
+        print("North bootstrap produced no result.", file=sys.stderr)
+        return 2
+
+    try:
+        git_head_after, clean_after = _git_state()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"Cannot re-establish Git provenance: {exc}", file=sys.stderr)
+        return 2
+    if git_head_after != git_head_before or not clean_after:
+        print(
+            "Git HEAD/worktree changed during north bootstrap; refusing report.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        _require_north_bootstrap_result_identities(result)
+        provenance = CameraReportProvenance(
+            git_head_sha=git_head_before,
+            detector_id=_EXPECTED_DETECTOR_ID,
+            detector_version=_EXPECTED_DETECTOR_VERSION,
+            profile_id=_EXPECTED_PROFILE_ID,
+            plan_id=_EXPECTED_GUIDANCE_V2_ID,
+            plan_version=_EXPECTED_GUIDANCE_V2_VERSION,
+            command_argv=command_argv,
+            tracked_worktree_clean=True,
+        )
+        written = write_camera_validation_report(
+            report_path,
+            _bootstrap_result_dict(result, tracked_worktree_clean=True),
+            provenance,
+        )
+        publication_state.published_by_this_invocation = True
+    except (FileExistsError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        print(f"Cannot write north-bootstrap report: {exc}", file=sys.stderr)
+        return 2
+
+    _print_north_bootstrap_summary(
+        result,
+        report_path=written.report_path,
+        report_sha256=written.sha256,
+        git_head_sha=git_head_before,
+    )
+    return 0 if result.passed else 1
+
+
+def _main_north_bootstrap(command_args: list[str]) -> int:
+    """Validate and execute the isolated V2 subcommand."""
+
+    args = _build_north_bootstrap_parser().parse_args(command_args[1:])
+    try:
+        case_prefix = _validate_case_prefix(args.case_prefix)
+        command_argv = _exact_command_argv(command_args)
+        _validate_command_argv(command_argv)
+        _require_north_bootstrap_runtime_identities()
+        output_root = _resolve_private_output_root(args.output)
+        report_path, digest_path = _report_paths(output_root, case_prefix)
+        _preflight_case_namespace(
+            output_root,
+            case_prefix,
+            report_path,
+            digest_path,
+        )
+        git_head_before, clean_before = _git_state()
+        if re.fullmatch(r"[0-9a-f]{40}", git_head_before) is None:
+            raise ValueError("Git HEAD must be a full lowercase 40-character SHA")
+    except (
+        FileExistsError,
+        OSError,
+        RuntimeError,
+        subprocess.CalledProcessError,
+        ValueError,
+    ) as exc:
+        print(f"Cannot establish north-bootstrap provenance: {exc}", file=sys.stderr)
+        return 2
+    if not clean_before:
+        print(
+            "Refusing north-bootstrap input unless the worktree is exactly clean.",
+            file=sys.stderr,
+        )
+        return 2
+
+    lease = WindowsCameraInputLease()
+    lease_entered = False
+    publication_state = _ReportPublicationState()
+    try:
+        with lease:
+            lease_entered = True
+            return _run_live_north_bootstrap(
+                output_root=output_root,
+                report_path=report_path,
+                digest_path=digest_path,
+                case_prefix=case_prefix,
+                git_head_before=git_head_before,
+                command_argv=command_argv,
+                publication_state=publication_state,
+            )
+    except CameraInputLeaseError as exc:
+        retraction_errors: tuple[str, ...] = ()
+        if (
+            lease_entered
+            and lease.acquired
+            and publication_state.published_by_this_invocation
+        ):
+            retraction_errors = _retract_report_targets_after_lease_failure(
+                report_path,
+                digest_path,
+            )
+        print(f"North-bootstrap input lease unavailable: {exc}", file=sys.stderr)
+        if retraction_errors:
+            print("; ".join(retraction_errors), file=sys.stderr)
+        return 2
+    except BaseException as exc:
+        if (
+            lease_entered
+            and lease.acquired
+            and publication_state.published_by_this_invocation
+        ):
+            for retraction_error in _retract_report_targets_after_lease_failure(
+                report_path,
+                digest_path,
+            ):
+                exc.add_note(retraction_error)
+        raise
+
+
 def _run_live_validation(
     args: argparse.Namespace,
     *,
@@ -1276,6 +2055,8 @@ def _run_live_validation(
 
 def main(argv: list[str] | None = None) -> int:
     command_args = list(sys.argv[1:] if argv is None else argv)
+    if command_args and command_args[0] == _NORTH_BOOTSTRAP_COMMAND:
+        return _main_north_bootstrap(command_args)
     args = build_parser().parse_args(command_args)
     try:
         _validate_cli_text("--title", args.title)

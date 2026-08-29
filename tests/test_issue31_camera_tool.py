@@ -7,6 +7,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -16,7 +17,25 @@ import pytest
 from mining_automation.capture import Frame, PixelFormat, RawFrame
 from mining_automation.perception import (
     VARROCK_EAST_IRON_FIXED_UI_REGIONS,
+    WideLandmarkSearch,
+    WideRegistrationDiagnosis,
+    WideSceneRegistrationAnalysis,
     load_varrock_east_iron_profile,
+    varrock_east_iron_scene_excluded_regions,
+)
+from mining_automation.perception.resource import ResourceVisualState
+from mining_automation.perception.scene_landmarks import MacroZone
+from mining_automation.validation import camera_bootstrap, camera_guidance_v2
+from mining_automation.validation.camera_evaluation import (
+    CameraEvaluation,
+    CameraResourceEvaluation,
+)
+from mining_automation.validation.camera_guidance import (
+    CAMERA_GUIDANCE_ID,
+    CAMERA_GUIDANCE_VERSION,
+    CameraGuidanceDisposition,
+    CameraGuidanceReason,
+    WorldCameraGuidance,
 )
 from mining_automation.validation.camera_plan import (
     MAX_CAMERA_DRAG_PIXELS,
@@ -35,6 +54,14 @@ from mining_automation.validation.camera_plan import (
     CompassClick,
     ResetZoomKey,
     camera_drag_path,
+)
+from mining_automation.validation.client_readiness import (
+    CLIENT_INPUT_READINESS_ID,
+    CLIENT_INPUT_READINESS_VERSION,
+    GAMEPLAY_CHROME_POLICIES,
+    ClientInputReadiness,
+    ClientReadinessAnchorEvaluation,
+    ClientReadinessReason,
 )
 
 FIXTURE_ROOT = (
@@ -620,6 +647,56 @@ class _FakeControl:
         error = type(self).cleanup_error
         if error is not None:
             raise error
+
+
+class _NorthBootstrapFakeControl(_FakeControl):
+    last: _NorthBootstrapFakeControl | None = None
+
+    def __init__(
+        self,
+        hwnd: int,
+        *,
+        expected_class_name: str,
+        expected_title: str,
+    ) -> None:
+        super().__init__(
+            hwnd,
+            expected_class_name=expected_class_name,
+            expected_title=expected_title,
+        )
+        self.calls: list[object] = []
+        type(self).last = self
+
+    def preflight(self) -> CameraPreflightReceipt:
+        self.calls.append("preflight")
+        return super().preflight()
+
+    def click_compass(self, x: int, y: int) -> CameraInputReceipt:
+        self.calls.append(("compass", x, y))
+        return super().click_compass(x, y)
+
+    def key_down(self, key: str) -> CameraInputReceipt:
+        raise AssertionError(f"north bootstrap must not hold key {key!r}")
+
+    def key_up(self, key: str) -> CameraInputReceipt:
+        raise AssertionError(f"north bootstrap must not release key {key!r}")
+
+    def scroll_camera(self, x: int, y: int, detents: int) -> CameraInputReceipt:
+        raise AssertionError(
+            f"north bootstrap must not scroll at {(x, y)} by {detents}"
+        )
+
+    def drag_camera(
+        self,
+        x: int,
+        y: int,
+        delta_x: int,
+        delta_y: int,
+    ) -> tuple[CameraInputReceipt, CameraInputReceipt, CameraInputReceipt]:
+        raise AssertionError(
+            "north bootstrap must not drag "
+            f"from {(x, y)} by {(delta_x, delta_y)}"
+        )
 
 
 class _FakeInputLease:
@@ -1645,6 +1722,656 @@ def test_invalid_pre_input_metadata_stops_before_capture(
     assert _FakeBackend.constructed == 0
 
 
+@pytest.mark.parametrize(
+    "override",
+    [
+        ["--allow-dirty"],
+        ["--dry-run"],
+        ["--title", "forged"],
+        ["--settle", "0.01"],
+        ["--plan-id", "forged"],
+        ["--plan-version", "9.9.9"],
+        ["--normalization-strategy", "single-plan"],
+        ["--yaw-drag-pixels", "4"],
+        ["--pitch-drag-pixels", "4"],
+        ["--zoom-offset-detents", "1"],
+    ],
+)
+def test_north_bootstrap_parser_rejects_every_control_override(
+    tool: ModuleType,
+    override: list[str],
+) -> None:
+    _FakeBackend.constructed = 0
+    with pytest.raises(SystemExit) as raised:
+        tool.main(
+            [
+                "north-bootstrap-v2",
+                "--case-prefix",
+                "parser-refusal",
+                *override,
+            ]
+        )
+    assert raised.value.code == 2
+    assert _FakeBackend.constructed == 0
+
+
+def test_north_bootstrap_one_runner_call_publishes_canonical_nonpass(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _north_bootstrap_frames())
+    _install_north_bootstrap_pipeline(monkeypatch)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _NorthBootstrapFakeControl)
+    _FakeInputLease.events = []
+    original_runner = tool.run_camera_north_bootstrap
+    runner_calls = 0
+
+    def counted_runner(*args: object, **kwargs: object) -> object:
+        nonlocal runner_calls
+        runner_calls += 1
+        return original_runner(*args, **kwargs)
+
+    monkeypatch.setattr(tool, "run_camera_north_bootstrap", counted_runner)
+    command_args = [
+        "north-bootstrap-v2",
+        "--output",
+        str(output),
+        "--case-prefix",
+        "north-integration",
+    ]
+
+    assert tool.main(command_args) == 1
+    assert runner_calls == 1
+    assert _NorthBootstrapFakeControl.last is not None
+    assert _NorthBootstrapFakeControl.last.calls == [
+        "preflight",
+        ("compass", 608, 49),
+    ]
+    assert _NorthBootstrapFakeControl.last.released
+    assert _FakeSource.last is not None and _FakeSource.last.closed
+    assert _FakeInputLease.events == ["lease_acquired", "lease_released"]
+
+    report_path = output / "reports" / "north-integration.camera.json"
+    report_bytes = report_path.read_bytes()
+    payload = json.loads(report_bytes)
+    provenance = payload["provenance"]
+    assert provenance == {
+        "command_argv": [
+            str(Path(sys.executable).resolve()),
+            str(Path(tool.__file__).resolve()),
+            *command_args,
+        ],
+        "detector_id": "profiled-resource:varrock-east-iron-v1",
+        "detector_version": "2.1.0",
+        "git_head_sha": "a" * 40,
+        "plan_id": "issue31-world-only-multi-axis-guidance",
+        "plan_version": "2.0.0",
+        "profile_id": "varrock-east-iron-v1",
+        "tracked_worktree_clean": True,
+    }
+    evidence = payload["evidence"]
+    assert evidence["terminal_reason"] == "bootstrap_executed"
+    assert evidence["acceptance"] == {
+        "authority": "unchanged_production_evaluator_only",
+        "capture_is_acceptance": False,
+        "input_receipt_is_acceptance": False,
+        "passed": False,
+    }
+    assert evidence["camera_evidence_eligible"] is False
+    assert evidence["input"]["attempted"] is True
+    assert evidence["input"]["completed"] is True
+    assert evidence["input"]["state"] == "complete"
+    assert evidence["input"]["start_clock_s"] == evidence["arm_age"][
+        "final_clock_s"
+    ]
+    assert evidence["input"]["receipt_clock_s"] >= evidence["input"][
+        "start_clock_s"
+    ]
+    assert evidence["input"]["delivery_duration_s"] == pytest.approx(
+        evidence["input"]["receipt_clock_s"]
+        - evidence["input"]["start_clock_s"]
+    )
+    pointer = evidence["pointer_mapping"]
+    assert pointer["adapter_identity"].endswith(".WindowsCameraControl")
+    assert pointer["reviewed_logical_point"] == {
+        "coordinate_space": "target_logical_client_pixels",
+        "x": 608,
+        "y": 49,
+    }
+    assert pointer["preflight"]["supported"] is True
+    pointer_policy = pointer["receipt_backed_target_root_policy"]
+    assert pointer_policy["complete_compass_receipt"] is True
+    assert pointer_policy["target_root_rechecked_before_button_down"] is True
+    assert pointer_policy["target_root_rechecked_during_dwell_before_button_up"] is True
+    assert pointer_policy["numeric_mapping_captured"] is False
+    assert pointer_policy["physical_screen_point"] is None
+    assert pointer_policy["target_root_handle_recorded"] is False
+    assert evidence["plan"]["actions"] == [
+        {"kind": "compass_click", "x": 608, "y": 49}
+    ]
+    assert len(evidence["receipt"]["actions"]) == 1
+    assert evidence["receipt"]["actions"][0]["input_receipts"] == [
+        {
+            "complete": True,
+            "completed_events": 2,
+            "operation": "compass_click",
+            "requested_events": 2,
+        }
+    ]
+    assert evidence["guards"]["decision_to_arm"] is not None
+    assert evidence["guards"]["arm_to_commit"] is not None
+    assert evidence["guards"]["decision_to_commit"] is not None
+    assert evidence["arm_age"]["status"] == "within_limit"
+    assert evidence["guidance"]["selector_id"] == (
+        "issue31-world-only-multi-axis-guidance"
+    )
+    assert evidence["post_guidance"]["heading_was_normalized"] is True
+    assert set(evidence["frames"]) == {"initial", "arm", "commit", "post"}
+    for label, frame in evidence["frames"].items():
+        assert frame["artifact"]["label"] == f"v2-{label}"
+        assert len(frame["artifact"]["raw_sha256"]) == 64
+        assert all(
+            not Path(path).is_absolute()
+            for path in frame["artifact"]["files"].values()
+        )
+    digest = hashlib.sha256(report_bytes).hexdigest()
+    assert Path(f"{report_path}.sha256").read_text(encoding="ascii") == f"{digest}\n"
+
+
+def test_north_bootstrap_existing_production_pass_sends_zero_input(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _north_bootstrap_frames())
+    _install_north_bootstrap_pipeline(monkeypatch, initial_pass=True)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _NorthBootstrapFakeControl)
+
+    assert tool.main(
+        [
+            "north-bootstrap-v2",
+            "--output",
+            str(output),
+            "--case-prefix",
+            "already-supported",
+        ]
+    ) == 0
+    assert _NorthBootstrapFakeControl.last is not None
+    assert _NorthBootstrapFakeControl.last.calls == []
+    payload = json.loads(
+        (output / "reports" / "already-supported.camera.json").read_text()
+    )
+    evidence = payload["evidence"]
+    assert evidence["acceptance"]["passed"] is True
+    assert evidence["input"] == {
+        "attempted": False,
+        "completed": False,
+        "delivery_duration_s": None,
+        "receipt_clock_s": None,
+        "start_clock_s": None,
+        "state": "none",
+    }
+    pointer_policy = evidence["pointer_mapping"][
+        "receipt_backed_target_root_policy"
+    ]
+    assert pointer_policy["complete_compass_receipt"] is False
+    assert pointer_policy["target_root_rechecked_before_button_down"] is False
+
+
+def test_north_bootstrap_clean_identity_and_inside_head_gates_precede_input(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    arguments = [
+        "north-bootstrap-v2",
+        "--output",
+        str(output),
+        "--case-prefix",
+        "pre-input-gate",
+    ]
+
+    _install_main_fakes(
+        tool,
+        output,
+        monkeypatch,
+        _north_bootstrap_frames(),
+        clean=False,
+    )
+    assert tool.main(arguments) == 2
+    assert _FakeBackend.constructed == 0
+
+    _install_main_fakes(tool, output, monkeypatch, _north_bootstrap_frames())
+    monkeypatch.setattr(tool, "CAMERA_GUIDANCE_V2_VERSION", "forged")
+    assert tool.main(arguments) == 2
+    assert _FakeBackend.constructed == 0
+
+    monkeypatch.setattr(tool, "CAMERA_GUIDANCE_V2_VERSION", "2.0.0")
+    states = iter((("a" * 40, True), ("b" * 40, True)))
+    monkeypatch.setattr(tool, "_git_state", states.__next__)
+    assert tool.main(arguments) == 2
+    assert _FakeBackend.constructed == 0
+    assert not (output / "reservations" / "pre-input-gate.camera-reservation.json").exists()
+
+
+def test_north_bootstrap_dirty_after_input_refuses_canonical_report(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _north_bootstrap_frames())
+    _install_north_bootstrap_pipeline(monkeypatch)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _NorthBootstrapFakeControl)
+    states = iter(
+        (
+            ("a" * 40, True),
+            ("a" * 40, True),
+            ("a" * 40, True),
+            ("a" * 40, True),
+            ("a" * 40, False),
+        )
+    )
+    monkeypatch.setattr(tool, "_git_state", states.__next__)
+
+    assert tool.main(
+        [
+            "north-bootstrap-v2",
+            "--output",
+            str(output),
+            "--case-prefix",
+            "dirty-after",
+        ]
+    ) == 2
+    assert _NorthBootstrapFakeControl.last is not None
+    assert _NorthBootstrapFakeControl.last.calls == [
+        "preflight",
+        ("compass", 608, 49),
+    ]
+    assert _NorthBootstrapFakeControl.last.released
+    assert _FakeSource.last is not None and _FakeSource.last.closed
+    report = output / "reports" / "dirty-after.camera.json"
+    assert not report.exists()
+    assert not Path(f"{report}.sha256").exists()
+
+
+def test_north_bootstrap_git_change_during_preflight_sends_no_compass_input(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _north_bootstrap_frames())
+    _install_north_bootstrap_pipeline(monkeypatch)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _NorthBootstrapFakeControl)
+    states = iter(
+        (
+            ("a" * 40, True),
+            ("a" * 40, True),
+            ("a" * 40, True),
+            ("b" * 40, True),
+            ("b" * 40, True),
+        )
+    )
+    monkeypatch.setattr(tool, "_git_state", states.__next__)
+
+    assert tool.main(
+        [
+            "north-bootstrap-v2",
+            "--output",
+            str(output),
+            "--case-prefix",
+            "changed-during-preflight",
+        ]
+    ) == 2
+    assert _NorthBootstrapFakeControl.last is not None
+    assert _NorthBootstrapFakeControl.last.calls == ["preflight"]
+    assert not (output / "reports" / "changed-during-preflight.camera.json").exists()
+
+
+def test_north_bootstrap_observed_identity_mismatch_refuses_report(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _north_bootstrap_frames())
+    _install_north_bootstrap_pipeline(monkeypatch)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _NorthBootstrapFakeControl)
+    monkeypatch.setattr(
+        camera_bootstrap,
+        "evaluate_varrock_east_camera",
+        lambda _frame: replace(_north_production(), detector_version="9.9.9"),
+    )
+
+    assert tool.main(
+        [
+            "north-bootstrap-v2",
+            "--output",
+            str(output),
+            "--case-prefix",
+            "identity-drift",
+        ]
+    ) == 2
+    assert _NorthBootstrapFakeControl.last is not None
+    assert _NorthBootstrapFakeControl.last.calls == []
+    assert not (output / "reports" / "identity-drift.camera.json").exists()
+
+
+@pytest.mark.parametrize("stage_frame_id", [2, 3, 4])
+def test_north_bootstrap_identity_drift_at_any_preinput_stage_sends_zero_input(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage_frame_id: int,
+) -> None:
+    output = tmp_path / f"private-{stage_frame_id}"
+    _install_main_fakes(tool, output, monkeypatch, _north_bootstrap_frames())
+    _install_north_bootstrap_pipeline(monkeypatch)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _NorthBootstrapFakeControl)
+
+    def production(frame: Frame) -> CameraEvaluation:
+        value = _north_production()
+        return (
+            replace(value, detector_version="9.9.9")
+            if frame.frame_id == stage_frame_id
+            else value
+        )
+
+    monkeypatch.setattr(
+        camera_bootstrap,
+        "evaluate_varrock_east_camera",
+        production,
+    )
+
+    assert tool.main(
+        [
+            "north-bootstrap-v2",
+            "--output",
+            str(output),
+            "--case-prefix",
+            f"identity-stage-{stage_frame_id}",
+        ]
+    ) == 2
+    assert _NorthBootstrapFakeControl.last is not None
+    assert _NorthBootstrapFakeControl.last.calls == []
+
+
+def test_north_bootstrap_lease_spans_cleanup_and_publication(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _north_bootstrap_frames())
+    _install_north_bootstrap_pipeline(monkeypatch)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _NorthBootstrapFakeControl)
+    events: list[str] = []
+    _FakeInputLease.events = events
+    original_runner = tool.run_camera_north_bootstrap
+    original_cleanup = _NorthBootstrapFakeControl.release_all_held_keys
+    original_writer = tool.write_camera_validation_report
+
+    def runner(*args: object, **kwargs: object) -> object:
+        events.append("runner")
+        return original_runner(*args, **kwargs)
+
+    def cleanup(self: _NorthBootstrapFakeControl) -> None:
+        events.append("cleanup")
+        original_cleanup(self)
+
+    def writer(*args: object, **kwargs: object) -> object:
+        events.append("report")
+        return original_writer(*args, **kwargs)
+
+    monkeypatch.setattr(tool, "run_camera_north_bootstrap", runner)
+    monkeypatch.setattr(_NorthBootstrapFakeControl, "release_all_held_keys", cleanup)
+    monkeypatch.setattr(tool, "write_camera_validation_report", writer)
+
+    assert tool.main(
+        [
+            "north-bootstrap-v2",
+            "--output",
+            str(output),
+            "--case-prefix",
+            "lease-lifetime-v2",
+        ]
+    ) == 1
+    assert events == [
+        "lease_acquired",
+        "runner",
+        "cleanup",
+        "report",
+        "lease_released",
+    ]
+
+
+def test_north_bootstrap_release_failure_retracts_only_its_report(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _north_bootstrap_frames())
+    _install_north_bootstrap_pipeline(monkeypatch)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _NorthBootstrapFakeControl)
+
+    class ReleaseFailingLease(_FakeInputLease):
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: object,
+        ) -> None:
+            del exc_type, exc, traceback
+            raise tool.CameraInputLeaseError("ReleaseMutex failed; process poisoned")
+
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", ReleaseFailingLease)
+    report = output / "reports" / "release-failure-v2.camera.json"
+    unrelated = output / "reports" / "unrelated.camera.json"
+    unrelated.parent.mkdir(parents=True, exist_ok=True)
+    unrelated.write_text("keep", encoding="utf-8")
+
+    assert tool.main(
+        [
+            "north-bootstrap-v2",
+            "--output",
+            str(output),
+            "--case-prefix",
+            "release-failure-v2",
+        ]
+    ) == 2
+    assert not report.exists()
+    assert not Path(f"{report}.sha256").exists()
+    assert unrelated.read_text(encoding="utf-8") == "keep"
+
+
+def test_north_bootstrap_collision_cleanup_and_report_failures_are_no_overwrite(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _install_main_fakes(tool, output, monkeypatch, _north_bootstrap_frames())
+    arguments = [
+        "north-bootstrap-v2",
+        "--output",
+        str(output),
+        "--case-prefix",
+        "collision-v2",
+    ]
+    report = output / "reports" / "collision-v2.camera.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("winner", encoding="utf-8")
+    assert tool.main(arguments) == 2
+    assert _FakeBackend.constructed == 0
+    assert report.read_text(encoding="utf-8") == "winner"
+
+    output = tmp_path / "private-cleanup"
+    _install_main_fakes(tool, output, monkeypatch, _north_bootstrap_frames())
+    _install_north_bootstrap_pipeline(monkeypatch)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _NorthBootstrapFakeControl)
+    _NorthBootstrapFakeControl.cleanup_error = OSError("cleanup failed")
+    arguments[2] = str(output)
+    arguments[-1] = "cleanup-v2"
+    assert tool.main(arguments) == 2
+    assert not (output / "reports" / "cleanup-v2.camera.json").exists()
+
+    output = tmp_path / "private-report"
+    _install_main_fakes(tool, output, monkeypatch, _north_bootstrap_frames())
+    _install_north_bootstrap_pipeline(monkeypatch)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _NorthBootstrapFakeControl)
+    monkeypatch.setattr(
+        tool,
+        "write_camera_validation_report",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("report failed")),
+    )
+    arguments[2] = str(output)
+    arguments[-1] = "report-v2"
+    assert tool.main(arguments) == 2
+    assert not (output / "reports" / "report-v2.camera.json").exists()
+
+
+def _north_ready() -> ClientInputReadiness:
+    return ClientInputReadiness(
+        evaluator_id=CLIENT_INPUT_READINESS_ID,
+        evaluator_version=CLIENT_INPUT_READINESS_VERSION,
+        reason=ClientReadinessReason.READY,
+        detail="ready",
+        anchors=tuple(
+            ClientReadinessAnchorEvaluation(
+                policy=policy,
+                luma_stddev=100.0,
+                edge_density=1.0,
+                dark_fraction=0.0,
+                matched=True,
+            )
+            for policy in GAMEPLAY_CHROME_POLICIES
+        ),
+        safe_to_attempt_camera_input=True,
+    )
+
+
+def _north_production(*, passed: bool = False) -> CameraEvaluation:
+    resources = tuple(
+        CameraResourceEvaluation(
+            f"rock-{index}",
+            (
+                ResourceVisualState.AVAILABLE
+                if passed
+                else ResourceVisualState.UNCERTAIN
+            ),
+            1.0 if passed else 0.0,
+        )
+        for index in range(4)
+    )
+    return CameraEvaluation(
+        detector_id="profiled-resource:varrock-east-iron-v1",
+        detector_version="2.1.0",
+        profile_id="varrock-east-iron-v1",
+        profile_schema_version=3,
+        profile_frame_width=1005,
+        profile_frame_height=1078,
+        profile_pixel_format=PixelFormat.BGRA8888,
+        frame_geometry_supported=True,
+        landmarks=(),
+        matched_landmark_count=6 if passed else 0,
+        required_landmark_count=6,
+        required_landmark_matches=5,
+        matched_zones=(
+            MacroZone.NORTH_WEST,
+            MacroZone.SOUTH_WEST,
+            MacroZone.NORTH_EAST,
+        )
+        if passed
+        else (),
+        required_matched_zones=3,
+        scene_reason="scene_validated" if passed else "insufficient_landmark_quorum",
+        scene_validated=passed,
+        resource_states=resources,
+        definitive_target_ids=(
+            tuple(resource.resource_id for resource in resources) if passed else ()
+        ),
+        passed=passed,
+    )
+
+
+def _north_trusted_refusal() -> WorldCameraGuidance:
+    profile = load_varrock_east_iron_profile()
+    zones = (
+        MacroZone.NORTH_WEST,
+        MacroZone.SOUTH_WEST,
+        MacroZone.NORTH_EAST,
+    )
+    analysis = WideSceneRegistrationAnalysis(
+        landmarks=tuple(
+            WideLandmarkSearch(
+                landmark_id=f"landmark-{index}",
+                offset_x=0,
+                offset_y=0,
+                distance=0.01 if index < 3 else 0.5,
+                maximum_distance=0.12,
+                matched=index < 3,
+                zone=zones[index % 3],
+                searched_offsets=1,
+            )
+            for index in range(6)
+        ),
+        best_shared=None,
+        diagnosis=WideRegistrationDiagnosis.INSUFFICIENT_REGISTRATION_EVIDENCE,
+        detail="test refusal",
+        search_radius=96,
+        coarse_step=4,
+        refinement_radius=3,
+    )
+    exclusions = tuple(
+        dict.fromkeys(
+            (
+                *varrock_east_iron_scene_excluded_regions(profile),
+                *(policy.region for policy in GAMEPLAY_CHROME_POLICIES),
+            )
+        )
+    )
+    return WorldCameraGuidance(
+        selector_id=CAMERA_GUIDANCE_ID,
+        selector_version=CAMERA_GUIDANCE_VERSION,
+        disposition=CameraGuidanceDisposition.INSUFFICIENT_GUIDANCE,
+        reason=CameraGuidanceReason.INSUFFICIENT_DISTRIBUTED_LANDMARKS,
+        detail="three distributed landmarks are insufficient",
+        axis=None,
+        direction=None,
+        fit=None,
+        analysis=analysis,
+        excluded_regions=exclusions,
+    )
+
+
+def _install_north_bootstrap_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    initial_pass: bool = False,
+) -> None:
+    monkeypatch.setattr(
+        camera_bootstrap,
+        "evaluate_client_input_readiness",
+        lambda _frame: _north_ready(),
+    )
+    monkeypatch.setattr(
+        camera_bootstrap,
+        "evaluate_varrock_east_camera",
+        lambda frame: _north_production(passed=initial_pass and frame.frame_id == 2),
+    )
+    monkeypatch.setattr(
+        camera_guidance_v2,
+        "evaluate_varrock_east_camera_guidance",
+        lambda _frame: _north_trusted_refusal(),
+    )
+
+
 def _install_main_fakes(
     tool: ModuleType,
     output: Path,
@@ -1657,7 +2384,9 @@ def _install_main_fakes(
     _FakeSource.frames = frames
     _FakeSource.last = None
     _FakeControl.last = None
+    _NorthBootstrapFakeControl.last = None
     _FakeControl.cleanup_error = None
+    _NorthBootstrapFakeControl.cleanup_error = None
     _FakeInputLease.active = False
     _FakeInputLease.events = None
     monkeypatch.setattr(tool, "_resolve_private_output_root", lambda _path: output)
@@ -1688,6 +2417,19 @@ def _install_main_fakes(
         )
 
     monkeypatch.setattr(tool, "write_resource_fixture_draft", write_draft)
+
+
+def _north_bootstrap_frames() -> list[Frame]:
+    payload = bytes(1005 * 1078 * 4)
+    raw = RawFrame(payload, 1005, 1078, PixelFormat.BGRA8888)
+    return [
+        Frame.from_raw(
+            raw,
+            frame_id=frame_id,
+            captured_monotonic_s=float(frame_id),
+        )
+        for frame_id in range(1, 6)
+    ]
 
 
 def _passing_frames() -> list[Frame]:

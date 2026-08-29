@@ -39,9 +39,11 @@ from .camera_guidance import (
 from .camera_plan import (
     REVIEWED_CAMERA_WHEEL_POINT,
     CameraControl,
+    CameraInputReceipt,
     CameraPlan,
     CameraPlanReceipt,
     CameraPlanRunner,
+    CameraPreflightReceipt,
     CameraWheel,
     Sleeper,
 )
@@ -58,9 +60,14 @@ __all__ = [
     "ABSOLUTE_MAX_SERVO_ELAPSED_SECONDS",
     "ABSOLUTE_MAX_SERVO_PRIMITIVES",
     "DEFAULT_MAX_SERVO_PRIMITIVES",
+    "MAXIMUM_ARM_TO_INPUT_AGE_SECONDS",
+    "CameraServoArmAgeEvidence",
+    "CameraServoArmAgeStatus",
     "CameraServoExceptionEvidence",
     "CameraServoArmEvidence",
     "CameraServoArmOutcome",
+    "CameraServoCommitEvidence",
+    "CameraServoCommitOutcome",
     "CameraServoFrameEvidence",
     "CameraServoLimits",
     "CameraServoProgress",
@@ -85,6 +92,7 @@ WORLD_EFFECT_REQUIRED_LANDMARKS: Final[int] = 3
 WORLD_EFFECT_REQUIRED_ZONES: Final[int] = 3
 ZOOM_ERROR_PROGRESS_TOLERANCE: Final[float] = 0.0005
 MAXIMUM_CONSECUTIVE_STAGNANT_STEPS: Final[int] = 2
+MAXIMUM_ARM_TO_INPUT_AGE_SECONDS: Final[float] = 1.0
 
 
 class CameraServoTerminalReason(StrEnum):
@@ -106,6 +114,8 @@ class CameraServoTerminalReason(StrEnum):
     TIME_BUDGET_EXHAUSTED = "time_budget_exhausted"
     CLOCK_ERROR = "clock_error"
     ARM_ATTEMPT_BUDGET_EXHAUSTED = "arm_attempt_budget_exhausted"
+    ARM_FRESHNESS_EXPIRED = "arm_freshness_expired"
+    COMMIT_OBSERVATION_REJECTED = "commit_observation_rejected"
 
 
 class CameraServoArmOutcome(StrEnum):
@@ -122,6 +132,29 @@ class CameraServoArmOutcome(StrEnum):
     EVALUATION_ERROR = "evaluation_error"
     GUARD_ERROR = "guard_error"
     REPEATED_STATE_STOP = "repeated_state_stop"
+    ARM_FRESHNESS_EXPIRED = "arm_freshness_expired"
+    COMMIT_STOP = "commit_stop"
+
+
+class CameraServoArmAgeStatus(StrEnum):
+    """Independent injected-clock status from arm recording to input."""
+
+    NOT_REACHED = "not_reached"
+    WITHIN_LIMIT = "within_limit"
+    EXPIRED = "expired"
+    ORIGIN_CLOCK_ERROR = "origin_clock_error"
+    FINAL_CLOCK_ERROR = "final_clock_error"
+
+
+class CameraServoCommitOutcome(StrEnum):
+    """Zero-authority verdict for the final visual commit observation."""
+
+    RETAINED = "retained"
+    NON_FRESH_STOP = "non_fresh_stop"
+    READINESS_LOST = "readiness_lost"
+    GUARD_REJECTED = "guard_rejected"
+    EVALUATION_ERROR = "evaluation_error"
+    GUARD_ERROR = "guard_error"
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +264,170 @@ class CameraServoFrameEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class CameraServoArmAgeEvidence:
+    """Independent injected-clock freshness evidence for one arm attempt."""
+
+    origin_clock_s: float | None
+    final_clock_s: float | None
+    age_s: float | None
+    maximum_age_s: float
+    status: CameraServoArmAgeStatus
+
+    def __post_init__(self) -> None:
+        if self.maximum_age_s != MAXIMUM_ARM_TO_INPUT_AGE_SECONDS:
+            raise ValueError("arm age evidence must use the frozen maximum")
+        for name, value in (
+            ("origin_clock_s", self.origin_clock_s),
+            ("final_clock_s", self.final_clock_s),
+            ("age_s", self.age_s),
+        ):
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0.0
+            ):
+                raise ValueError(f"{name} must be finite and non-negative or None")
+        if self.status is CameraServoArmAgeStatus.ORIGIN_CLOCK_ERROR:
+            if any(
+                value is not None
+                for value in (self.origin_clock_s, self.final_clock_s, self.age_s)
+            ):
+                raise ValueError("origin clock error cannot retain numeric age evidence")
+            return
+        if self.origin_clock_s is None:
+            raise ValueError("arm age evidence requires a valid origin clock")
+        if self.status in (
+            CameraServoArmAgeStatus.NOT_REACHED,
+            CameraServoArmAgeStatus.FINAL_CLOCK_ERROR,
+        ):
+            if self.final_clock_s is not None or self.age_s is not None:
+                raise ValueError("unfinished arm age evidence cannot retain a final sample")
+            return
+        if self.final_clock_s is None or self.age_s is None:
+            raise ValueError("completed arm age evidence requires both clock samples")
+        if not math.isclose(
+            self.age_s,
+            self.final_clock_s - self.origin_clock_s,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            raise ValueError("arm age must match the exact injected-clock samples")
+        expected = (
+            CameraServoArmAgeStatus.EXPIRED
+            if self.age_s >= self.maximum_age_s
+            else CameraServoArmAgeStatus.WITHIN_LIMIT
+        )
+        if self.status is not expected:
+            raise ValueError("arm age status must match the exclusive freshness limit")
+
+
+@dataclass(frozen=True, slots=True)
+class CameraServoCommitEvidence:
+    """Fresh no-production observation committed immediately before input."""
+
+    accepted_arm_artifact: CameraFrameArtifact
+    accepted_arm_captured_monotonic_s: float
+    artifact: CameraFrameArtifact
+    captured_monotonic_s: float
+    readiness: ClientInputReadiness | None
+    guard: CameraArmGuardResult | None
+    outcome: CameraServoCommitOutcome
+    exception: CameraServoExceptionEvidence | None = None
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("accepted_arm_captured_monotonic_s", self.accepted_arm_captured_monotonic_s),
+            ("captured_monotonic_s", self.captured_monotonic_s),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0.0
+            ):
+                raise ValueError(f"commit {name} must be finite and non-negative")
+        fresh = (
+            self.artifact.frame_id > self.accepted_arm_artifact.frame_id
+            and self.captured_monotonic_s
+            > self.accepted_arm_captured_monotonic_s
+        )
+        recorded_nonfresh = (
+            self.outcome is CameraServoCommitOutcome.NON_FRESH_STOP
+            and self.guard is not None
+            and self.guard.reason is CameraArmGuardReason.NON_FRESH_ARM_FRAME
+        )
+        recorded_nonfresh_guard_error = (
+            self.outcome is CameraServoCommitOutcome.GUARD_ERROR
+            and self.readiness is None
+            and self.guard is None
+            and self.exception is not None
+        )
+        if not fresh and not (
+            recorded_nonfresh or recorded_nonfresh_guard_error
+        ):
+            raise ValueError("non-fresh commit requires the guard's non-fresh stop")
+        error_outcomes = (
+            CameraServoCommitOutcome.EVALUATION_ERROR,
+            CameraServoCommitOutcome.GUARD_ERROR,
+        )
+        if (self.outcome in error_outcomes) is (self.exception is None):
+            raise ValueError("commit exception must exactly match an error outcome")
+        if self.guard is not None:
+            if (
+                self.guard.decision_frame_id != self.accepted_arm_artifact.frame_id
+                or self.guard.decision_captured_monotonic_s
+                != self.accepted_arm_captured_monotonic_s
+                or self.guard.decision_payload_sha256
+                != self.accepted_arm_artifact.raw_sha256
+                or self.guard.arm_frame_id != self.artifact.frame_id
+                or self.guard.arm_captured_monotonic_s != self.captured_monotonic_s
+                or self.guard.arm_payload_sha256 != self.artifact.raw_sha256
+            ):
+                raise ValueError("commit guard must bind the exact arm/commit frame pair")
+        if self.readiness is None:
+            if self.outcome not in (
+                CameraServoCommitOutcome.NON_FRESH_STOP,
+                CameraServoCommitOutcome.EVALUATION_ERROR,
+                CameraServoCommitOutcome.GUARD_ERROR,
+            ):
+                raise ValueError("missing commit readiness requires an early stop")
+            return
+        if not self.readiness.safe_to_attempt_camera_input:
+            if self.outcome is not CameraServoCommitOutcome.READINESS_LOST:
+                raise ValueError("commit readiness veto requires readiness-lost outcome")
+            if self.guard is not None:
+                raise ValueError("commit readiness veto must stop before its guard")
+            return
+        if self.outcome is CameraServoCommitOutcome.GUARD_ERROR:
+            if self.guard is not None:
+                raise ValueError("commit guard error cannot contain a guard result")
+            return
+        if self.guard is None:
+            raise ValueError("ready commit evidence requires a guard result")
+        if self.outcome is CameraServoCommitOutcome.RETAINED:
+            if self.guard.disposition is not CameraArmGuardDisposition.RETAIN:
+                raise ValueError("retained commit requires an unchanged-world guard")
+        elif self.outcome is CameraServoCommitOutcome.GUARD_REJECTED:
+            if self.guard.disposition is not CameraArmGuardDisposition.DISCARD_RESTART:
+                raise ValueError("rejected commit requires a guard discard")
+        elif self.outcome is not CameraServoCommitOutcome.NON_FRESH_STOP:
+            raise ValueError("ready commit outcome does not match its guard evidence")
+
+    @property
+    def accepted_arm_raw_sha256(self) -> str:
+        """Return the exact accepted-arm payload identity."""
+
+        return self.accepted_arm_artifact.raw_sha256
+
+    @property
+    def raw_sha256(self) -> str:
+        """Return the exact final commit payload identity."""
+
+        return self.artifact.raw_sha256
+
+
+@dataclass(frozen=True, slots=True)
 class CameraServoArmEvidence:
     """Immutable decision-to-arm evidence immediately preceding possible input."""
 
@@ -244,6 +441,8 @@ class CameraServoArmEvidence:
     readiness: ClientInputReadiness | None
     production: CameraEvaluation | None
     guard: CameraArmGuardResult | None
+    age: CameraServoArmAgeEvidence
+    commit: CameraServoCommitEvidence | None
     outcome: CameraServoArmOutcome
     exception: CameraServoExceptionEvidence | None = None
 
@@ -292,7 +491,14 @@ class CameraServoArmEvidence:
             and self.guard is not None
             and self.guard.reason is CameraArmGuardReason.NON_FRESH_ARM_FRAME
         )
-        if not fresh and not recorded_nonfresh_discard:
+        recorded_origin_clock_stop = (
+            self.outcome is CameraServoArmOutcome.CLOCK_ERROR
+            and self.age.status is CameraServoArmAgeStatus.ORIGIN_CLOCK_ERROR
+            and self.guard is None
+        )
+        if not fresh and not (
+            recorded_nonfresh_discard or recorded_origin_clock_stop
+        ):
             raise ValueError(
                 "non-fresh arm capture requires the guard's non-fresh discard"
             )
@@ -303,12 +509,49 @@ class CameraServoArmEvidence:
         )
         if (self.outcome in error_outcomes) is (self.exception is None):
             raise ValueError("arm exception evidence must exactly match an error outcome")
+        if self.age.status in (
+            CameraServoArmAgeStatus.ORIGIN_CLOCK_ERROR,
+            CameraServoArmAgeStatus.FINAL_CLOCK_ERROR,
+        ):
+            if self.outcome is not CameraServoArmOutcome.CLOCK_ERROR:
+                raise ValueError("arm clock error requires a typed clock-error outcome")
+        elif self.age.status is CameraServoArmAgeStatus.EXPIRED:
+            if self.outcome is not CameraServoArmOutcome.ARM_FRESHNESS_EXPIRED:
+                raise ValueError("expired arm age requires a typed expiry outcome")
+        elif self.outcome is CameraServoArmOutcome.ARM_FRESHNESS_EXPIRED:
+            raise ValueError("arm expiry outcome requires expired age evidence")
+        if self.outcome is CameraServoArmOutcome.RETAINED:
+            if self.age.status is not CameraServoArmAgeStatus.WITHIN_LIMIT:
+                raise ValueError("retained arm requires a fresh injected-clock age")
+            if (
+                self.commit is None
+                or self.commit.outcome is not CameraServoCommitOutcome.RETAINED
+            ):
+                raise ValueError("retained arm requires a retained final commit")
+        if self.outcome is CameraServoArmOutcome.COMMIT_STOP:
+            if (
+                self.commit is None
+                or self.commit.outcome is CameraServoCommitOutcome.RETAINED
+            ):
+                raise ValueError("commit stop requires rejected commit evidence")
+        elif self.commit is not None and (
+            self.commit.outcome is not CameraServoCommitOutcome.RETAINED
+        ):
+            raise ValueError("a rejected commit can only produce a commit stop")
+        if self.commit is not None and (
+            self.commit.accepted_arm_artifact != self.arm_artifact
+            or self.commit.accepted_arm_captured_monotonic_s
+            != self.arm_captured_monotonic_s
+        ):
+            raise ValueError("commit evidence must bind this exact accepted arm")
 
         guard_outcome = self.outcome in (
             CameraServoArmOutcome.RETAINED,
             CameraServoArmOutcome.STALE_DISCARDED_RESTART,
             CameraServoArmOutcome.NON_FRESH_STOP,
             CameraServoArmOutcome.REPEATED_STATE_STOP,
+            CameraServoArmOutcome.ARM_FRESHNESS_EXPIRED,
+            CameraServoArmOutcome.COMMIT_STOP,
         )
         if self.guard is None and guard_outcome:
             raise ValueError("guard evidence is required for a post-guard outcome")
@@ -320,6 +563,8 @@ class CameraServoArmEvidence:
             CameraServoArmOutcome.CLOCK_ERROR,
             CameraServoArmOutcome.EVALUATION_ERROR,
             CameraServoArmOutcome.REPEATED_STATE_STOP,
+            CameraServoArmOutcome.ARM_FRESHNESS_EXPIRED,
+            CameraServoArmOutcome.COMMIT_STOP,
         ):
             raise ValueError("guard evidence is forbidden before the guard stage")
         if self.guard is not None:
@@ -342,6 +587,8 @@ class CameraServoArmEvidence:
                     CameraServoArmOutcome.CLOCK_ERROR,
                     CameraServoArmOutcome.EVALUATION_ERROR,
                     CameraServoArmOutcome.REPEATED_STATE_STOP,
+                    CameraServoArmOutcome.ARM_FRESHNESS_EXPIRED,
+                    CameraServoArmOutcome.COMMIT_STOP,
                 )
                 if self.guard.disposition is CameraArmGuardDisposition.RETAIN
                 else (
@@ -366,6 +613,7 @@ class CameraServoArmEvidence:
                 CameraServoArmOutcome.GUARD_ERROR,
                 CameraServoArmOutcome.STALE_DISCARDED_RESTART,
                 CameraServoArmOutcome.NON_FRESH_STOP,
+                CameraServoArmOutcome.CLOCK_ERROR,
             )
             if self.outcome not in allowed_without_readiness:
                 raise ValueError("missing readiness requires a pre-readiness stop outcome")
@@ -646,6 +894,8 @@ class _CameraServoArmContext:
         readiness: ClientInputReadiness | None,
         production: CameraEvaluation | None,
         guard: CameraArmGuardResult | None = None,
+        age: CameraServoArmAgeEvidence,
+        commit: CameraServoCommitEvidence | None = None,
         error: Exception | None = None,
     ) -> CameraServoArmEvidence:
         return CameraServoArmEvidence(
@@ -658,6 +908,39 @@ class _CameraServoArmContext:
             arm_captured_monotonic_s=self.arm_frame.captured_monotonic_s,
             readiness=readiness,
             production=production,
+            guard=guard,
+            age=age,
+            commit=commit,
+            outcome=outcome,
+            exception=_exception_evidence(error) if error is not None else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _CameraServoCommitContext:
+    """Loop-local fixed inputs used to assemble one final commit record."""
+
+    accepted_arm_artifact: CameraFrameArtifact
+    accepted_arm_captured_monotonic_s: float
+    frame: Frame
+    artifact: CameraFrameArtifact
+
+    def evidence(
+        self,
+        outcome: CameraServoCommitOutcome,
+        *,
+        readiness: ClientInputReadiness | None,
+        guard: CameraArmGuardResult | None = None,
+        error: Exception | None = None,
+    ) -> CameraServoCommitEvidence:
+        return CameraServoCommitEvidence(
+            accepted_arm_artifact=self.accepted_arm_artifact,
+            accepted_arm_captured_monotonic_s=(
+                self.accepted_arm_captured_monotonic_s
+            ),
+            artifact=self.artifact,
+            captured_monotonic_s=self.frame.captured_monotonic_s,
+            readiness=readiness,
             guard=guard,
             outcome=outcome,
             exception=_exception_evidence(error) if error is not None else None,
@@ -1074,6 +1357,42 @@ def run_bounded_camera_servo(
                 error=error,
             )
 
+        try:
+            arm_origin_clock_s = _read_clock(clock)
+            if arm_origin_clock_s < start:
+                raise ValueError("arm freshness clock regressed before the run start")
+        except Exception as error:
+            arm_context = _CameraServoArmContext(
+                cycle_index=cycle_index,
+                pending_primitive_index=index,
+                decision=current,
+                guidance=guidance,
+                pending_primitive=primitive,
+                arm_frame=arm_frame,
+                arm_artifact=arm_artifact,
+            )
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.CLOCK_ERROR,
+                    readiness=None,
+                    production=None,
+                    age=_arm_age_origin_error(),
+                    error=error,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                current,
+                guidance,
+                CameraServoTerminalReason.CLOCK_ERROR,
+                "The arm-origin freshness clock sample was invalid.",
+                0.0,
+                error=error,
+            )
+
         arm_context = _CameraServoArmContext(
             cycle_index=cycle_index,
             pending_primitive_index=index,
@@ -1083,6 +1402,7 @@ def run_bounded_camera_servo(
             arm_frame=arm_frame,
             arm_artifact=arm_artifact,
         )
+        pending_arm_age = _arm_age_not_reached(arm_origin_clock_s)
         arm_is_fresh = (
             arm_frame.frame_id > current_frame.frame_id
             and arm_frame.captured_monotonic_s
@@ -1111,6 +1431,7 @@ def run_bounded_camera_servo(
                     readiness=None,
                     production=None,
                     guard=nonfresh_guard,
+                    age=pending_arm_age,
                 )
             )
             return _result(
@@ -1134,6 +1455,7 @@ def run_bounded_camera_servo(
                     CameraServoArmOutcome.EVALUATION_ERROR,
                     readiness=None,
                     production=None,
+                    age=pending_arm_age,
                     error=error,
                 )
             )
@@ -1155,6 +1477,7 @@ def run_bounded_camera_servo(
                 CameraServoArmOutcome.READINESS_LOST,
                 readiness=arm_readiness,
                 production=None,
+                age=pending_arm_age,
             )
             steps.arm_attempts.append(armed)
             arm_current = CameraServoFrameEvidence(
@@ -1184,6 +1507,7 @@ def run_bounded_camera_servo(
                     CameraServoArmOutcome.EVALUATION_ERROR,
                     readiness=arm_readiness,
                     production=None,
+                    age=pending_arm_age,
                     error=error,
                 )
             )
@@ -1213,6 +1537,7 @@ def run_bounded_camera_servo(
                     CameraServoArmOutcome.CLOCK_ERROR,
                     readiness=arm_readiness,
                     production=arm_production,
+                    age=pending_arm_age,
                     error=clock_error,
                 )
             )
@@ -1234,6 +1559,7 @@ def run_bounded_camera_servo(
                     CameraServoArmOutcome.DEADLINE_EXHAUSTED,
                     readiness=arm_readiness,
                     production=arm_production,
+                    age=pending_arm_age,
                 )
             )
             return _result_from_elapsed(
@@ -1253,6 +1579,7 @@ def run_bounded_camera_servo(
                     CameraServoArmOutcome.PRODUCTION_PASS,
                     readiness=arm_readiness,
                     production=arm_production,
+                    age=pending_arm_age,
                 )
             )
             return _result(
@@ -1273,6 +1600,7 @@ def run_bounded_camera_servo(
                     CameraServoArmOutcome.PRODUCTION_REJECTION_NOT_FAIL_CLOSED,
                     readiness=arm_readiness,
                     production=arm_production,
+                    age=pending_arm_age,
                 )
             )
             return _result(
@@ -1296,6 +1624,7 @@ def run_bounded_camera_servo(
                     CameraServoArmOutcome.GUARD_ERROR,
                     readiness=arm_readiness,
                     production=arm_production,
+                    age=pending_arm_age,
                     error=error,
                 )
             )
@@ -1321,6 +1650,7 @@ def run_bounded_camera_servo(
                     readiness=arm_readiness,
                     production=arm_production,
                     guard=arm_guard,
+                    age=pending_arm_age,
                     error=clock_error,
                 )
             )
@@ -1343,6 +1673,7 @@ def run_bounded_camera_servo(
                     readiness=arm_readiness,
                     production=arm_production,
                     guard=arm_guard,
+                    age=pending_arm_age,
                 )
             )
             return _result_from_elapsed(
@@ -1364,6 +1695,7 @@ def run_bounded_camera_servo(
                     readiness=arm_readiness,
                     production=arm_production,
                     guard=arm_guard,
+                    age=pending_arm_age,
                 )
             )
             current_frame = arm_frame
@@ -1371,7 +1703,225 @@ def run_bounded_camera_servo(
             current_guidance = None
             continue
 
-        current_frame = arm_frame
+        try:
+            commit_frame = source.capture()
+            commit_artifact = _record_verified_frame(
+                recorder, f"servo-commit-{cycle_index:02d}", commit_frame
+            )
+        except Exception as error:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.EVALUATION_ERROR,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    guard=arm_guard,
+                    age=pending_arm_age,
+                    error=error,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.OBSERVATION_EXCEPTION,
+                "Final commit capture or recording failed closed.",
+                seam_elapsed,
+                error=error,
+            )
+
+        commit_context = _CameraServoCommitContext(
+            accepted_arm_artifact=arm_artifact,
+            accepted_arm_captured_monotonic_s=arm_frame.captured_monotonic_s,
+            frame=commit_frame,
+            artifact=commit_artifact,
+        )
+        commit_is_fresh = (
+            commit_frame.frame_id > arm_frame.frame_id
+            and commit_frame.captured_monotonic_s
+            > arm_frame.captured_monotonic_s
+        )
+        if not commit_is_fresh:
+            try:
+                commit_guard = evaluate_camera_arm_guard(arm_frame, commit_frame)
+            except Exception as error:
+                commit = commit_context.evidence(
+                    CameraServoCommitOutcome.GUARD_ERROR,
+                    readiness=None,
+                    error=error,
+                )
+                steps.arm_attempts.append(
+                    arm_context.evidence(
+                        CameraServoArmOutcome.COMMIT_STOP,
+                        readiness=arm_readiness,
+                        production=arm_production,
+                        guard=arm_guard,
+                        age=pending_arm_age,
+                        commit=commit,
+                    )
+                )
+                return _result_from_elapsed(
+                    limits,
+                    settle_s,
+                    initial,
+                    steps,
+                    arm_current,
+                    guidance,
+                    CameraServoTerminalReason.OBSERVATION_EXCEPTION,
+                    "Non-fresh final commit guard failed closed.",
+                    seam_elapsed,
+                    error=error,
+                )
+            commit = commit_context.evidence(
+                CameraServoCommitOutcome.NON_FRESH_STOP,
+                readiness=None,
+                guard=commit_guard,
+            )
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.COMMIT_STOP,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    guard=arm_guard,
+                    age=pending_arm_age,
+                    commit=commit,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.COMMIT_OBSERVATION_REJECTED,
+                "The final commit capture was not strictly newer than its arm.",
+                seam_elapsed,
+            )
+
+        try:
+            commit_readiness = evaluate_client_input_readiness(commit_frame)
+        except Exception as error:
+            commit = commit_context.evidence(
+                CameraServoCommitOutcome.EVALUATION_ERROR,
+                readiness=None,
+                error=error,
+            )
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.COMMIT_STOP,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    guard=arm_guard,
+                    age=pending_arm_age,
+                    commit=commit,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.OBSERVATION_EXCEPTION,
+                "Final commit readiness evaluation failed closed.",
+                seam_elapsed,
+                error=error,
+            )
+        if not commit_readiness.safe_to_attempt_camera_input:
+            commit = commit_context.evidence(
+                CameraServoCommitOutcome.READINESS_LOST,
+                readiness=commit_readiness,
+            )
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.COMMIT_STOP,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    guard=arm_guard,
+                    age=pending_arm_age,
+                    commit=commit,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.READINESS_LOST,
+                "Final commit gameplay readiness vetoed camera input.",
+                seam_elapsed,
+            )
+
+        try:
+            commit_guard = evaluate_camera_arm_guard(arm_frame, commit_frame)
+        except Exception as error:
+            commit = commit_context.evidence(
+                CameraServoCommitOutcome.GUARD_ERROR,
+                readiness=commit_readiness,
+                error=error,
+            )
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.COMMIT_STOP,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    guard=arm_guard,
+                    age=pending_arm_age,
+                    commit=commit,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.OBSERVATION_EXCEPTION,
+                "Final world-only commit guard failed closed.",
+                seam_elapsed,
+                error=error,
+            )
+        commit_outcome = (
+            CameraServoCommitOutcome.RETAINED
+            if commit_guard.disposition is CameraArmGuardDisposition.RETAIN
+            else CameraServoCommitOutcome.GUARD_REJECTED
+        )
+        commit = commit_context.evidence(
+            commit_outcome,
+            readiness=commit_readiness,
+            guard=commit_guard,
+        )
+        if commit_outcome is CameraServoCommitOutcome.GUARD_REJECTED:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.COMMIT_STOP,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    guard=arm_guard,
+                    age=pending_arm_age,
+                    commit=commit,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.COMMIT_OBSERVATION_REJECTED,
+                "The final world-only commit guard rejected the accepted arm.",
+                seam_elapsed,
+            )
+
+        current_frame = commit_frame
         current = arm_current
         try:
             state_digest = _world_state_digest(current_frame)
@@ -1382,6 +1932,8 @@ def run_bounded_camera_servo(
                     readiness=arm_readiness,
                     production=arm_production,
                     guard=arm_guard,
+                    age=pending_arm_age,
+                    commit=commit,
                     error=error,
                 )
             )
@@ -1404,6 +1956,8 @@ def run_bounded_camera_servo(
                     readiness=arm_readiness,
                     production=arm_production,
                     guard=arm_guard,
+                    age=pending_arm_age,
+                    commit=commit,
                 )
             )
             return _result_from_elapsed(
@@ -1419,15 +1973,30 @@ def run_bounded_camera_servo(
             )
         seen_states.add(state_digest)
 
-        immediate_elapsed, clock_error = _safe_elapsed(start, clock)
-        if clock_error is not None:
+        preflight: CameraPreflightReceipt | None = None
+        preflight_error: Exception | None = None
+        try:
+            preflight = control.preflight()
+        except Exception as error:
+            preflight_error = error
+
+        try:
+            arm_final_clock_s = _read_clock(clock)
+            if arm_final_clock_s < start:
+                raise ValueError("monotonic clock regressed before the run start")
+            completed_arm_age = _completed_arm_age(
+                arm_origin_clock_s, arm_final_clock_s
+            )
+        except Exception as error:
             steps.arm_attempts.append(
                 arm_context.evidence(
                     CameraServoArmOutcome.CLOCK_ERROR,
                     readiness=arm_readiness,
                     production=arm_production,
                     guard=arm_guard,
-                    error=clock_error,
+                    age=_arm_age_final_error(arm_origin_clock_s),
+                    commit=commit,
+                    error=error,
                 )
             )
             return _result_from_elapsed(
@@ -1438,9 +2007,32 @@ def run_bounded_camera_servo(
                 arm_current,
                 guidance,
                 CameraServoTerminalReason.CLOCK_ERROR,
-                "The immediate pre-input monotonic clock sample was invalid.",
+                "The final arm-freshness clock sample was invalid.",
+                seam_elapsed,
+                error=error,
+            )
+        immediate_elapsed = arm_final_clock_s - start
+        if completed_arm_age.status is CameraServoArmAgeStatus.EXPIRED:
+            steps.arm_attempts.append(
+                arm_context.evidence(
+                    CameraServoArmOutcome.ARM_FRESHNESS_EXPIRED,
+                    readiness=arm_readiness,
+                    production=arm_production,
+                    guard=arm_guard,
+                    age=completed_arm_age,
+                    commit=commit,
+                )
+            )
+            return _result_from_elapsed(
+                limits,
+                settle_s,
+                initial,
+                steps,
+                arm_current,
+                guidance,
+                CameraServoTerminalReason.ARM_FRESHNESS_EXPIRED,
+                "The validation-only arm-to-input freshness ceiling expired.",
                 immediate_elapsed,
-                error=clock_error,
             )
         if immediate_elapsed >= limits.max_elapsed_s:
             steps.arm_attempts.append(
@@ -1449,6 +2041,8 @@ def run_bounded_camera_servo(
                     readiness=arm_readiness,
                     production=arm_production,
                     guard=arm_guard,
+                    age=completed_arm_age,
+                    commit=commit,
                 )
             )
             return _result_from_elapsed(
@@ -1468,13 +2062,18 @@ def run_bounded_camera_servo(
             readiness=arm_readiness,
             production=arm_production,
             guard=arm_guard,
+            age=completed_arm_age,
+            commit=commit,
         )
         steps.arm_attempts.append(armed)
 
-        runner = CameraPlanRunner(control, sleeper)
         receipt: CameraPlanReceipt | None = None
         try:
-            receipt = runner.run(primitive)
+            if preflight_error is not None:
+                raise preflight_error
+            assert preflight is not None
+            prepared_control = _PreparedServoCameraControl(control, preflight)
+            receipt = CameraPlanRunner(prepared_control, sleeper).run(primitive)
             _require_one_detent_receipt(receipt)
         except Exception as error:
             terminal_elapsed, terminal_clock_error = _safe_elapsed(start, clock)
@@ -2070,6 +2669,99 @@ def _read_clock(clock: Callable[[], float]) -> float:
     if not math.isfinite(result):
         raise ValueError("clock must return a finite real number")
     return result
+
+
+def _arm_age_not_reached(origin_clock_s: float) -> CameraServoArmAgeEvidence:
+    return CameraServoArmAgeEvidence(
+        origin_clock_s=origin_clock_s,
+        final_clock_s=None,
+        age_s=None,
+        maximum_age_s=MAXIMUM_ARM_TO_INPUT_AGE_SECONDS,
+        status=CameraServoArmAgeStatus.NOT_REACHED,
+    )
+
+
+def _arm_age_origin_error() -> CameraServoArmAgeEvidence:
+    return CameraServoArmAgeEvidence(
+        origin_clock_s=None,
+        final_clock_s=None,
+        age_s=None,
+        maximum_age_s=MAXIMUM_ARM_TO_INPUT_AGE_SECONDS,
+        status=CameraServoArmAgeStatus.ORIGIN_CLOCK_ERROR,
+    )
+
+
+def _arm_age_final_error(origin_clock_s: float) -> CameraServoArmAgeEvidence:
+    return CameraServoArmAgeEvidence(
+        origin_clock_s=origin_clock_s,
+        final_clock_s=None,
+        age_s=None,
+        maximum_age_s=MAXIMUM_ARM_TO_INPUT_AGE_SECONDS,
+        status=CameraServoArmAgeStatus.FINAL_CLOCK_ERROR,
+    )
+
+
+class _PreparedServoCameraControl:
+    """Replay one completed preflight immediately before a servo primitive."""
+
+    __slots__ = ("_control", "_preflight", "_served")
+
+    def __init__(
+        self,
+        control: CameraControl,
+        preflight: CameraPreflightReceipt,
+    ) -> None:
+        self._control = control
+        self._preflight = preflight
+        self._served = False
+
+    def preflight(self) -> CameraPreflightReceipt:
+        if self._served:
+            raise RuntimeError("prepared servo preflight is single-use")
+        self._served = True
+        return self._preflight
+
+    def click_compass(self, x: int, y: int) -> CameraInputReceipt:
+        return self._control.click_compass(x, y)
+
+    def key_down(self, key: str) -> CameraInputReceipt:
+        return self._control.key_down(key)
+
+    def key_up(self, key: str) -> CameraInputReceipt:
+        return self._control.key_up(key)
+
+    def scroll_camera(self, x: int, y: int, detents: int) -> CameraInputReceipt:
+        return self._control.scroll_camera(x, y, detents)
+
+    def drag_camera(
+        self,
+        x: int,
+        y: int,
+        delta_x: int,
+        delta_y: int,
+    ) -> tuple[CameraInputReceipt, CameraInputReceipt, CameraInputReceipt]:
+        return self._control.drag_camera(x, y, delta_x, delta_y)
+
+
+def _completed_arm_age(
+    origin_clock_s: float,
+    final_clock_s: float,
+) -> CameraServoArmAgeEvidence:
+    age_s = final_clock_s - origin_clock_s
+    if age_s < 0.0:
+        raise ValueError("arm freshness clock regressed")
+    status = (
+        CameraServoArmAgeStatus.EXPIRED
+        if age_s >= MAXIMUM_ARM_TO_INPUT_AGE_SECONDS
+        else CameraServoArmAgeStatus.WITHIN_LIMIT
+    )
+    return CameraServoArmAgeEvidence(
+        origin_clock_s=origin_clock_s,
+        final_clock_s=final_clock_s,
+        age_s=age_s,
+        maximum_age_s=MAXIMUM_ARM_TO_INPUT_AGE_SECONDS,
+        status=status,
+    )
 
 
 def _safe_elapsed(
