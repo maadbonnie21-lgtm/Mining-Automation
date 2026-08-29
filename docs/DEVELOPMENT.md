@@ -112,6 +112,23 @@ not evidence of live RuneLite success. Production thresholds, landmark quorum,
 macro zones, scene authority, and fail-closed resource exposure remain
 unchanged; diagnostics and calibration probes never override production.
 
+The lead-approved fixed system-identification boundary is:
+
+```powershell
+python tools/validate_varrock_east_camera.py fixed-aba-probe-v2 --case-prefix issue31-system-id-YYYYMMDD-HHMMSS
+```
+
+It accepts no control parameters. It captures two no-input baselines, executes
+separate guarded horizontal `+4/-4` middle drags, and runs the equivalent
+vertical A/B/A only after strict distributed horizontal response qualifies.
+Every action has its own fresh arm/preflight/commit seam. The canonical private
+report contains all eight per-action observations. Forward/reverse response is
+measured only from each exact commit to its post frame, against all-pairs
+same-pose offset and descriptor jitter. It also records closure, production
+evaluations, exact input receipts, adapter/pointer policy, Git identity, and
+SHA-256. Its conclusion is calibration evidence only and cannot override
+the production scene gate or satisfy Issue #31 reacquisition acceptance.
+
 All raw frames, BMP previews, unreviewed drafts, JSON reports, and report digest
 sidecars stay beneath ignored `diagnostics/`. The camera recipe remains pending
 until repeated real RuneLite trials and the complete 36-frame drift set both

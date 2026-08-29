@@ -470,6 +470,74 @@ evidence, input-request-to-receipt timing, and the receipt-backed pointer
 policy remain under ignored `diagnostics/`. The report explicitly does not
 claim a captured numeric logical-to-physical pointer mapping.
 
+### Fixed A/B/A camera system identification
+
+After the corrected north-bootstrap experiment left the real client at only
+three independently recoverable landmarks and no coherent shared transform,
+Issue #31 uses one bounded system-identification command before accepting or
+retiring the landmark-only controller:
+
+```powershell
+python tools/validate_varrock_east_camera.py fixed-aba-probe-v2 --case-prefix issue31-system-id-YYYYMMDD-HHMMSS
+```
+
+The isolated subcommand accepts only a permanently unique case prefix and an
+optional private ignored `--output` root. Axis, sign, movement, coordinates,
+settle timing, title selection, dirty-tree operation, and production policy are
+not command-line inputs. The reviewed strategy is frozen as:
+
+1. capture two fresh no-input horizontal baselines one second apart;
+2. execute one `+4` logical-pixel horizontal middle drag from `(200,600)`
+   through the full decision/arm/preflight/commit/input/post seam;
+3. execute the exact `-4` return only after a second independent guarded seam;
+4. compare strict existing wide-search matches across both baselines plus each
+   action's exact arm, commit, and post frame;
+5. run the identical `+4/-4` vertical A/B/A only if horizontal evidence
+   qualifies; and
+6. stop all live probing when horizontal evidence does not qualify.
+
+Each pulse is its own one-action `CameraPlan`; positive and return movement are
+never combined open-loop. The machine-global input lease spans every frame,
+action, cleanup attempt, provenance recheck, and canonical report/digest write.
+The no-camera-input Windows preflight completes before each final commit frame.
+Every action therefore receives a distinct fresh decision, arm, and commit
+chain, exact geometry/focus/pointer/button checks, the exclusive arm-age gate,
+and immediate post-action observation.
+
+Every frozen landmark remains visible in the report, but only IDs that retain
+their existing strict descriptor match in all eight observations participate.
+A minimum at the edge of the existing wide-search radius is excluded as
+truncated evidence. The forward effect is measured from the positive action's
+exact commit to its post frame; the reverse effect is measured from the return
+action's exact commit to its post frame. This prevents no-input movement before
+commit from being credited to physical input.
+
+Natural offset and descriptor jitter use every pair inside the no-input
+same-pose chains: baseline-one/baseline-two/positive-arm/positive-commit and
+positive-post/return-arm/return-commit. Both response vectors and both
+tested-axis components must be strictly above those measured jitter bounds.
+Descriptor threshold margin must also remain strictly above measured
+descriptor-distance jitter, the reverse vector and tested-axis sign must oppose
+the forward response, and the returned `(x,y)` offset must lie inside the full
+pre-positive baseline envelope. The forward sign must be coherent across at
+least three same IDs spanning exactly the profile's three frozen zones. A
+production PASS is safety-valid and does not truncate the required return
+pulse. No descriptor threshold, search radius, production threshold, quorum,
+or macro-zone requirement is relaxed by this comparison.
+
+The final conclusive report says exactly `control derivative usable` only when
+both mandatory axes qualify, or `landmark controller retired` when a completed
+axis does not. A safety, freshness, capture, provenance, or receipt failure is
+reported as inconclusive rather than mislabeled as control-model evidence.
+Exit `0` means one of the two system-identification conclusions was reached;
+exit `1` means the bounded attempt was inconclusive; exit `2` is a setup,
+lease, cleanup, provenance, or report-publication failure.
+
+This remains calibration evidence only. The unchanged production camera
+evaluation is still the sole scene-acceptance authority. Wide minima, a clean
+control derivative, or a completed Windows receipt cannot validate the scene,
+expose a resource, or satisfy the Issue #31 positive-side acceptance gate.
+
 ## Repeated trial protocol
 
 A complete run applies three distinct deliberate perturbations. The current

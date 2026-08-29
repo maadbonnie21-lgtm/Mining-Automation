@@ -44,8 +44,18 @@ from mining_automation.validation.camera_bootstrap import (  # noqa: E402
     CameraNorthBootstrapResult,
     run_camera_north_bootstrap,
 )
-from mining_automation.validation.camera_evaluation import CameraEvaluation  # noqa: E402
+from mining_automation.validation.camera_evaluation import (  # noqa: E402
+    CameraEvaluation,
+    evaluate_varrock_east_camera,
+)
+from mining_automation.validation.camera_guidance import (  # noqa: E402
+    CAMERA_GUIDANCE_ID,
+    CAMERA_GUIDANCE_VERSION,
+    WorldCameraGuidance,
+    evaluate_varrock_east_camera_guidance,
+)
 from mining_automation.validation.camera_guidance_v2 import (  # noqa: E402
+    CAMERA_GUIDANCE_V2_DRAG_PULSE_PIXELS,
     CAMERA_GUIDANCE_V2_ID,
     CAMERA_GUIDANCE_V2_VERSION,
     WorldCameraGuidanceV2,
@@ -95,8 +105,22 @@ from mining_automation.validation.camera_session import (  # noqa: E402
     CameraSessionResult,
     run_camera_validation_session,
 )
+from mining_automation.validation.camera_system_id import (  # noqa: E402
+    CAMERA_SYSTEM_ID_DRAG_PIXELS,
+    CAMERA_SYSTEM_ID_ID,
+    CAMERA_SYSTEM_ID_SETTLE_SECONDS,
+    CAMERA_SYSTEM_ID_VERSION,
+    CameraSystemIdAxisResult,
+    CameraSystemIdComparison,
+    CameraSystemIdLandmarkComparison,
+    CameraSystemIdObservation,
+    CameraSystemIdResult,
+    CameraSystemIdStepResult,
+    run_fixed_camera_system_identification,
+)
 from mining_automation.validation.client_readiness import (  # noqa: E402
     ClientInputReadiness,
+    evaluate_client_input_readiness,
 )
 from mining_automation.validation.windows_camera import (  # noqa: E402
     CAMERA_DRAG_STEP_INTERVAL_SECONDS,
@@ -155,12 +179,17 @@ _PRODUCTION_GATED_CANDIDATE_OFFSETS: tuple[tuple[float, float], ...] = (
 _NORTH_BOOTSTRAP_COMMAND = "north-bootstrap-v2"
 _NORTH_BOOTSTRAP_SETTLE_SECONDS = 1.0
 _NORTH_BOOTSTRAP_OUTPUT = Path("diagnostics/issue31-camera-reacquisition-v2")
+_FIXED_SYSTEM_ID_COMMAND = "fixed-aba-probe-v2"
+_FIXED_SYSTEM_ID_OUTPUT = Path("diagnostics/issue31-camera-system-id-v2")
 _EXPECTED_DETECTOR_ID = "profiled-resource:varrock-east-iron-v1"
 _EXPECTED_DETECTOR_VERSION = "2.1.0"
 _EXPECTED_PROFILE_ID = "varrock-east-iron-v1"
 _EXPECTED_PROFILE_SCHEMA_VERSION = 3
 _EXPECTED_GUIDANCE_V2_ID = "issue31-world-only-multi-axis-guidance"
 _EXPECTED_GUIDANCE_V2_VERSION = "2.0.0"
+_EXPECTED_WINDOWS_CAMERA_ADAPTER = (
+    "mining_automation.validation.windows_camera.WindowsCameraControl"
+)
 
 
 class _PrivateArtifactRecorder:
@@ -333,6 +362,30 @@ def _build_north_bootstrap_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=_NORTH_BOOTSTRAP_OUTPUT,
+        help="private ignored diagnostics root",
+    )
+    parser.add_argument(
+        "--case-prefix",
+        required=True,
+        help="permanently single-use artifact/report prefix",
+    )
+    return parser
+
+
+def _build_fixed_system_id_parser() -> argparse.ArgumentParser:
+    """Return the isolated parser for the fixed A/B/A live boundary."""
+
+    parser = argparse.ArgumentParser(
+        prog=f"{Path(__file__).name} {_FIXED_SYSTEM_ID_COMMAND}",
+        description=(
+            "Run the fixed horizontal A/B/A system-identification probe and "
+            "conditionally the identical vertical probe."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=_FIXED_SYSTEM_ID_OUTPUT,
         help="private ignored diagnostics root",
     )
     parser.add_argument(
@@ -626,6 +679,37 @@ def _require_north_bootstrap_runtime_identities() -> None:
         )
 
 
+def _require_fixed_system_id_runtime_identities() -> None:
+    """Pin the fixed live probe to reviewed production/control identities."""
+
+    _require_north_bootstrap_runtime_identities()
+    observed: dict[str, object] = {
+        "system_id": CAMERA_SYSTEM_ID_ID,
+        "system_id_version": CAMERA_SYSTEM_ID_VERSION,
+        "system_id_drag_pixels": CAMERA_SYSTEM_ID_DRAG_PIXELS,
+        "v2_drag_pixels": CAMERA_GUIDANCE_V2_DRAG_PULSE_PIXELS,
+        "drag_point": REVIEWED_CAMERA_DRAG_POINT,
+        "settle_s": CAMERA_SYSTEM_ID_SETTLE_SECONDS,
+    }
+    expected: dict[str, object] = {
+        "system_id": "issue31-fixed-camera-system-identification",
+        "system_id_version": "1.0.0",
+        "system_id_drag_pixels": 4,
+        "v2_drag_pixels": 4,
+        "drag_point": (200, 600),
+        "settle_s": 1.0,
+    }
+    mismatches = [
+        f"{name}={observed[name]!r} (expected {expected_value!r})"
+        for name, expected_value in expected.items()
+        if observed[name] != expected_value
+    ]
+    if mismatches:
+        raise RuntimeError(
+            "fixed-system-id runtime identity mismatch: " + "; ".join(mismatches)
+        )
+
+
 def _require_north_bootstrap_result_identities(
     result: CameraNorthBootstrapResult,
 ) -> None:
@@ -677,6 +761,92 @@ def _require_north_bootstrap_production_identity(
         raise RuntimeError(
             f"{stage} production evidence does not use the pinned detector/profile"
         )
+
+
+def _require_fixed_system_id_result_identities(
+    result: CameraSystemIdResult,
+) -> None:
+    """Re-evaluate every retained payload before canonical publication."""
+
+    axes = (result.horizontal,) + (
+        () if result.vertical is None else (result.vertical,)
+    )
+    unique_observations: dict[tuple[int, float, str], CameraSystemIdObservation] = {}
+    frame_hashes: dict[tuple[int, float], str] = {}
+    for axis in axes:
+        observations = [axis.baseline_one, axis.baseline_two]
+        frames: list[CameraServoFrameEvidence | None] = []
+        for step in (axis.positive_step, axis.return_step):
+            if step is None:
+                continue
+            observations.extend(
+                (
+                    step.decision,
+                    step.arm_observation,
+                    step.commit_observation,
+                    step.post,
+                )
+            )
+            frames.extend((step.arm, step.commit))
+        for index, observation in enumerate(observations):
+            if observation is None:
+                continue
+            guidance = observation.guidance
+            if (
+                guidance.selector_id != CAMERA_GUIDANCE_ID
+                or guidance.selector_version != CAMERA_GUIDANCE_VERSION
+                or guidance.analysis is None
+                or guidance.can_accept
+                or guidance.can_validate_scene
+                or guidance.can_expose_resources
+            ):
+                raise RuntimeError(
+                    f"{axis.axis.value} observation {index} does not use the "
+                    "pinned world-only diagnostic"
+                )
+            frames.append(observation.evidence)
+            key = (
+                observation.frame.frame_id,
+                observation.frame.captured_monotonic_s,
+                observation.evidence.artifact.raw_sha256,
+            )
+            frame_key = key[:2]
+            existing_hash = frame_hashes.setdefault(
+                frame_key,
+                observation.evidence.artifact.raw_sha256,
+            )
+            if existing_hash != observation.evidence.artifact.raw_sha256:
+                raise RuntimeError("one frame identity retained conflicting payloads")
+            existing = unique_observations.setdefault(key, observation)
+            if existing != observation:
+                raise RuntimeError("one retained frame has conflicting observations")
+        for index, evidence in enumerate(frames):
+            if evidence is None or evidence.production is None:
+                continue
+            _require_north_bootstrap_production_identity(
+                f"{axis.axis.value}-frame-{index}",
+                evidence.production,
+            )
+    for index, observation in enumerate(unique_observations.values()):
+        expected_readiness = evaluate_client_input_readiness(observation.frame)
+        if observation.evidence.readiness != expected_readiness:
+            raise RuntimeError(
+                f"observation {index} readiness does not bind its exact payload"
+            )
+        expected_production = (
+            evaluate_varrock_east_camera(observation.frame)
+            if expected_readiness.safe_to_attempt_camera_input
+            else None
+        )
+        if observation.evidence.production != expected_production:
+            raise RuntimeError(
+                f"observation {index} production does not bind its exact payload"
+            )
+        expected_guidance = evaluate_varrock_east_camera_guidance(observation.frame)
+        if observation.guidance != expected_guidance:
+            raise RuntimeError(
+                f"observation {index} guidance does not bind its exact payload"
+            )
 
 
 def _resolve_private_output_root(output: Path) -> Path:
@@ -1175,6 +1345,187 @@ def _guidance_v2_dict(guidance: WorldCameraGuidanceV2) -> dict[str, Any]:
     }
 
 
+def _world_guidance_dict(guidance: WorldCameraGuidance) -> dict[str, Any]:
+    analysis = guidance.analysis
+    shared = None if analysis is None else analysis.best_shared
+    fit = guidance.fit
+    return {
+        "selector_id": guidance.selector_id,
+        "selector_version": guidance.selector_version,
+        "disposition": guidance.disposition.value,
+        "reason": guidance.reason.value,
+        "detail": guidance.detail,
+        "axis": None if guidance.axis is None else guidance.axis.value,
+        "direction": None if guidance.direction is None else guidance.direction.value,
+        "fit": (
+            None
+            if fit is None
+            else {
+                "scale": fit.scale,
+                "rotation_degrees": fit.rotation_degrees,
+                "centre_shift_x": fit.centre_shift_x,
+                "centre_shift_y": fit.centre_shift_y,
+                "rms_residual_px": fit.rms_residual_px,
+                "maximum_residual_px": fit.maximum_residual_px,
+                "landmark_count": fit.landmark_count,
+                "matched_zones": [zone.value for zone in fit.matched_zones],
+            }
+        ),
+        "analysis": (
+            None
+            if analysis is None
+            else {
+                "diagnosis": analysis.diagnosis.value,
+                "detail": analysis.detail,
+                "search_radius": analysis.search_radius,
+                "coarse_step": analysis.coarse_step,
+                "refinement_radius": analysis.refinement_radius,
+                "matched_count": analysis.matched_count,
+                "matched_zones": [zone.value for zone in analysis.matched_zones],
+                "landmarks": [
+                    {
+                        "landmark_id": landmark.landmark_id,
+                        "offset_x": landmark.offset_x,
+                        "offset_y": landmark.offset_y,
+                        "distance": landmark.distance,
+                        "maximum_distance": landmark.maximum_distance,
+                        "normalized_distance": landmark.normalized_distance,
+                        "matched": landmark.matched,
+                        "zone": landmark.zone.value,
+                        "searched_offsets": landmark.searched_offsets,
+                    }
+                    for landmark in analysis.landmarks
+                ],
+                "best_shared": (
+                    None
+                    if shared is None
+                    else {
+                        "offset_x": shared.offset_x,
+                        "offset_y": shared.offset_y,
+                        "matched_count": shared.matched_count,
+                        "matched_zones": [
+                            zone.value for zone in shared.matched_zones
+                        ],
+                        "required_quorum": shared.required_quorum,
+                        "required_zones": shared.required_zones,
+                        "valid_landmark_count": shared.valid_landmark_count,
+                        "normalized_distance_sum": shared.normalized_distance_sum,
+                        "validated_diagnostic_only": shared.validated,
+                    }
+                ),
+            }
+        ),
+        "excluded_regions": [list(region) for region in guidance.excluded_regions],
+        "can_accept": guidance.can_accept,
+        "can_validate_scene": guidance.can_validate_scene,
+        "can_expose_resources": guidance.can_expose_resources,
+    }
+
+
+def _system_id_observation_dict(
+    observation: CameraSystemIdObservation,
+) -> dict[str, Any]:
+    return {
+        "frame": _bootstrap_frame_dict(observation.evidence),
+        "world_only_diagnostic": _world_guidance_dict(observation.guidance),
+    }
+
+
+def _system_id_landmark_comparison_dict(
+    item: CameraSystemIdLandmarkComparison,
+) -> dict[str, Any]:
+    def search(value: Any) -> dict[str, Any]:
+        return {
+            "offset_x": value.offset_x,
+            "offset_y": value.offset_y,
+            "distance": value.distance,
+            "maximum_distance": value.maximum_distance,
+            "normalized_distance": value.normalized_distance,
+            "matched": value.matched,
+            "searched_offsets": value.searched_offsets,
+        }
+
+    return {
+        "landmark_id": item.landmark_id,
+        "zone": item.zone.value,
+        "strict_matches": {
+            "baseline_one": search(item.baseline_one),
+            "baseline_two": search(item.baseline_two),
+            "positive_arm": search(item.positive_arm),
+            "positive_commit": search(item.positive_commit),
+            "positive_post": search(item.positive),
+            "return_arm": search(item.return_arm),
+            "return_commit": search(item.return_commit),
+            "return_post": search(item.returned),
+        },
+        "vectors": {
+            "baseline_one_to_two": [
+                item.baseline_delta_x,
+                item.baseline_delta_y,
+            ],
+            "no_input_same_pose_samples": [
+                [delta_x, delta_y] for delta_x, delta_y in item.no_input_deltas
+            ],
+            "positive_commit_to_post": [
+                item.positive_delta_x,
+                item.positive_delta_y,
+            ],
+            "return_commit_to_post": [item.return_delta_x, item.return_delta_y],
+            "positive_commit_to_final_residual": [
+                item.return_residual_x,
+                item.return_residual_y,
+            ],
+        },
+        "magnitudes_px": {
+            "maximum_natural_offset_jitter": item.baseline_jitter_px,
+            "positive_commit_to_post": item.positive_magnitude_px,
+            "return_commit_to_post": item.return_magnitude_px,
+            "final_residual": item.return_residual_px,
+        },
+        "tested_axis": {
+            "maximum_natural_jitter": item.tested_axis_baseline_jitter,
+            "positive_commit_to_post": item.tested_axis_positive_delta,
+            "return_commit_to_post": item.tested_axis_return_delta,
+        },
+        "descriptor_stability": {
+            "same_pose_distance_deltas": list(
+                item.no_input_descriptor_deltas
+            ),
+            "maximum_natural_distance_jitter": item.descriptor_jitter,
+            "minimum_threshold_margin": item.minimum_descriptor_margin,
+            "stable": item.descriptor_stable,
+        },
+        "strictly_matched_in_all_frames": item.strictly_matched,
+        "above_baseline_jitter": item.above_baseline_jitter,
+        "opposite_return": item.opposite_return,
+        "opposite_vector_return": item.opposite_vector_return,
+        "closed_inside_baseline_envelope": item.closed_inside_baseline_envelope,
+        "qualified": item.qualified,
+    }
+
+
+def _system_id_comparison_dict(
+    comparison: CameraSystemIdComparison,
+) -> dict[str, Any]:
+    return {
+        "axis": comparison.axis.value,
+        "required_landmarks": comparison.required_landmarks,
+        "required_zones": comparison.required_zones,
+        "common_matched_zones": [
+            zone.value for zone in comparison.common_matched_zones
+        ],
+        "qualified_landmark_ids": list(comparison.qualified_landmark_ids),
+        "qualified_zones": [zone.value for zone in comparison.qualified_zones],
+        "coherent_forward_sign": comparison.coherent_forward_sign,
+        "derivative_usable": comparison.derivative_usable,
+        "detail": comparison.detail,
+        "landmarks": [
+            _system_id_landmark_comparison_dict(item)
+            for item in comparison.landmarks
+        ],
+    }
+
+
 def _arm_guard_dict(guard: CameraArmGuardResult) -> dict[str, Any]:
     return {
         "guard_id": guard.guard_id,
@@ -1226,6 +1577,210 @@ def _arm_age_dict(age: CameraServoArmAgeEvidence) -> dict[str, Any]:
         "age_s": age.age_s,
         "maximum_age_s": age.maximum_age_s,
         "status": age.status.value,
+    }
+
+
+def _system_id_step_dict(step: CameraSystemIdStepResult) -> dict[str, Any]:
+    return {
+        "axis": step.axis.value,
+        "direction": step.direction,
+        "terminal_reason": step.terminal_reason.value,
+        "detail": step.detail,
+        "input_state": step.input_state.value,
+        "decision": _system_id_observation_dict(step.decision),
+        "arm": None if step.arm is None else _bootstrap_frame_dict(step.arm),
+        "arm_world_observation": (
+            None
+            if step.arm_observation is None
+            else _system_id_observation_dict(step.arm_observation)
+        ),
+        "commit": (
+            None if step.commit is None else _bootstrap_frame_dict(step.commit)
+        ),
+        "commit_world_observation": (
+            None
+            if step.commit_observation is None
+            else _system_id_observation_dict(step.commit_observation)
+        ),
+        "post": (
+            None if step.post is None else _system_id_observation_dict(step.post)
+        ),
+        "plan": _plan_dict(step.plan),
+        "preflight": (
+            None
+            if step.preflight is None
+            else {
+                "focused": step.preflight.focused,
+                "client_width": step.preflight.client_width,
+                "client_height": step.preflight.client_height,
+                "supported": step.preflight.supported,
+            }
+        ),
+        "guards": {
+            "decision_to_arm": (
+                None
+                if step.arm_guard is None
+                else _arm_guard_dict(step.arm_guard)
+            ),
+            "arm_to_commit": (
+                None
+                if step.commit_guard is None
+                else _arm_guard_dict(step.commit_guard)
+            ),
+            "decision_to_commit": (
+                None
+                if step.decision_commit_guard is None
+                else _arm_guard_dict(step.decision_commit_guard)
+            ),
+        },
+        "arm_age": None if step.arm_age is None else _arm_age_dict(step.arm_age),
+        "receipt": (
+            None if step.receipt is None else _plan_receipt_dict(step.receipt)
+        ),
+        "timing": {
+            "input_start_clock_s": step.input_start_clock_s,
+            "input_receipt_clock_s": step.input_receipt_clock_s,
+            "input_delivery_duration_s": step.input_delivery_duration_s,
+        },
+        "exception": (
+            None
+            if step.exception is None
+            else {
+                "type": step.exception.exception_type,
+                "message": step.exception.detail,
+            }
+        ),
+    }
+
+
+def _system_id_axis_dict(axis: CameraSystemIdAxisResult) -> dict[str, Any]:
+    return {
+        "axis": axis.axis.value,
+        "detail": axis.detail,
+        "complete": axis.complete,
+        "baseline_one": (
+            None
+            if axis.baseline_one is None
+            else _system_id_observation_dict(axis.baseline_one)
+        ),
+        "baseline_two": (
+            None
+            if axis.baseline_two is None
+            else _system_id_observation_dict(axis.baseline_two)
+        ),
+        "baseline_guard": (
+            None
+            if axis.baseline_guard is None
+            else _arm_guard_dict(axis.baseline_guard)
+        ),
+        "positive_step": (
+            None
+            if axis.positive_step is None
+            else _system_id_step_dict(axis.positive_step)
+        ),
+        "return_step": (
+            None
+            if axis.return_step is None
+            else _system_id_step_dict(axis.return_step)
+        ),
+        "comparison": (
+            None
+            if axis.comparison is None
+            else _system_id_comparison_dict(axis.comparison)
+        ),
+    }
+
+
+def _system_id_result_dict(
+    result: CameraSystemIdResult,
+    *,
+    tracked_worktree_clean: bool,
+    adapter_identity: str,
+) -> dict[str, Any]:
+    steps = tuple(
+        step
+        for axis in (result.horizontal, result.vertical)
+        if axis is not None
+        for step in (axis.positive_step, axis.return_step)
+        if step is not None
+    )
+    return {
+        "command": _FIXED_SYSTEM_ID_COMMAND,
+        "development_only": True,
+        "system_identification": {
+            "id": CAMERA_SYSTEM_ID_ID,
+            "version": CAMERA_SYSTEM_ID_VERSION,
+            "conclusive": result.conclusive,
+            "conclusion": (
+                None if result.conclusion is None else result.conclusion.value
+            ),
+            "detail": result.detail,
+        },
+        "fixed_policy": {
+            "drag_point": list(REVIEWED_CAMERA_DRAG_POINT),
+            "logical_pixels": CAMERA_SYSTEM_ID_DRAG_PIXELS,
+            "order": [
+                "horizontal_positive",
+                "horizontal_return",
+                "vertical_positive_if_horizontal_usable",
+                "vertical_return_if_horizontal_usable",
+            ],
+            "post_action_settle_s": CAMERA_SYSTEM_ID_SETTLE_SECONDS,
+            "maximum_physical_primitives": 4,
+            "caller_selectable_axis": False,
+            "caller_selectable_direction": False,
+            "caller_selectable_magnitude": False,
+            "caller_selectable_coordinate": False,
+        },
+        "pointer_mapping": {
+            "adapter_identity": adapter_identity,
+            "expected_adapter_identity": _EXPECTED_WINDOWS_CAMERA_ADAPTER,
+            "coordinate_space": "target_logical_client_pixels",
+            "reviewed_start": list(REVIEWED_CAMERA_DRAG_POINT),
+            "reviewed_open_viewport": _drag_open_viewport_dict(),
+            "numeric_physical_mapping_captured": False,
+            "adapter_contract": {
+                "unique_target_root_required": True,
+                "logical_to_physical_mapping_rechecked": True,
+                "target_root_ownership_rechecked_before_middle_down": True,
+                "target_root_ownership_rechecked_for_every_held_move": True,
+                "target_root_ownership_rechecked_before_and_after_middle_up": True,
+                "exact_geometry_and_focus_required": True,
+                "middle_release_observable": True,
+            },
+            "steps": [
+                {
+                    "axis": step.axis.value,
+                    "direction": step.direction,
+                    "plan": step.plan.name,
+                    "complete_receipt": step.receipt is not None,
+                    "middle_release_acknowledged": (
+                        step.receipt is not None
+                        and step.receipt.action_receipts[-1].input_receipts[-1].complete
+                    ),
+                }
+                for step in steps
+            ],
+        },
+        "authority": {
+            "scene_acceptance": "unchanged_production_camera_evaluation_only",
+            "diagnostic_registration_can_override_production": False,
+            "calibration_can_expose_resources": False,
+        },
+        "identity_policy": {
+            "detector_id": _EXPECTED_DETECTOR_ID,
+            "detector_version": _EXPECTED_DETECTOR_VERSION,
+            "profile_id": _EXPECTED_PROFILE_ID,
+            "profile_schema_version": _EXPECTED_PROFILE_SCHEMA_VERSION,
+            "guidance_id": CAMERA_GUIDANCE_ID,
+            "guidance_version": CAMERA_GUIDANCE_VERSION,
+        },
+        "horizontal": _system_id_axis_dict(result.horizontal),
+        "vertical": (
+            None if result.vertical is None else _system_id_axis_dict(result.vertical)
+        ),
+        "tracked_worktree_clean": tracked_worktree_clean,
+        "issue31_acceptance_claimed": False,
     }
 
 
@@ -1696,6 +2251,7 @@ def _run_live_north_bootstrap(
             expected_class_name=selected.class_name,
             expected_title=selected.title,
         )
+
         def require_same_clean_head_before_input(
             initial: CameraServoFrameEvidence,
             arm: CameraServoFrameEvidence,
@@ -1891,6 +2447,297 @@ def _main_north_bootstrap(command_args: list[str]) -> int:
         raise
 
 
+def _print_fixed_system_id_summary(
+    result: CameraSystemIdResult,
+    *,
+    report_path: Path,
+    report_sha256: str,
+    git_head_sha: str,
+) -> None:
+    print(f"Fixed system identification: {'CONCLUSIVE' if result.conclusive else 'INCONCLUSIVE'}")
+    print(
+        "Conclusion: "
+        + ("none" if result.conclusion is None else result.conclusion.value)
+    )
+    for axis in (result.horizontal, result.vertical):
+        if axis is None:
+            continue
+        comparison = axis.comparison
+        print(f"{axis.axis.value}: {'complete' if axis.complete else 'incomplete'}")
+        if comparison is not None:
+            print(
+                "  strict common landmarks: "
+                f"{sum(item.strictly_matched for item in comparison.landmarks)}; "
+                f"qualified: {len(comparison.qualified_landmark_ids)}; "
+                f"zones: {[zone.value for zone in comparison.qualified_zones]}"
+            )
+            for item in comparison.landmarks:
+                print(
+                    f"  {item.landmark_id} [{item.zone.value}] "
+                    f"jitter_bound={item.baseline_jitter_px:.3f}px "
+                    f"forward=({item.positive_delta_x:+d},{item.positive_delta_y:+d}) "
+                    f"return=({item.return_delta_x:+d},{item.return_delta_y:+d}) "
+                    f"residual=({item.return_residual_x:+d},{item.return_residual_y:+d}) "
+                    f"qualified={item.qualified}"
+                )
+    print(f"Git HEAD: {git_head_sha}")
+    print(f"Report: {report_path}")
+    print(f"Report SHA-256: {report_sha256}")
+
+
+def _run_live_fixed_system_id(
+    *,
+    output_root: Path,
+    report_path: Path,
+    digest_path: Path,
+    case_prefix: str,
+    git_head_before: str,
+    command_argv: tuple[str, ...],
+    publication_state: _ReportPublicationState,
+) -> int:
+    """Run the fixed A/B/A boundary while the caller owns the input lease."""
+
+    backend: WindowsCaptureBackend | None = None
+    source: CaptureSource | None = None
+    control: WindowsCameraControl | None = None
+    adapter_identity: str | None = None
+    result: CameraSystemIdResult | None = None
+    handled_error: Exception | None = None
+    unhandled_error: BaseException | None = None
+    cleanup_errors: list[str] = []
+    try:
+        git_head_inside, clean_inside = _git_state()
+        if git_head_inside != git_head_before or not clean_inside:
+            raise RuntimeError(
+                "Git HEAD/worktree changed before the leased system-ID boundary"
+            )
+        _reserve_case_namespace(
+            output_root,
+            case_prefix,
+            report_path,
+            digest_path,
+            git_head_sha=git_head_before,
+        )
+        backend = WindowsCaptureBackend(title_substring=DEFAULT_TITLE_SUBSTRING)
+        source = CaptureSource(backend, max_consecutive_failures=1)
+        source.open()
+        source.capture()
+        selected = backend.selected_window
+        if selected is None:
+            raise RuntimeError("capture succeeded without a selected RuneLite window")
+        recorder = _PrivateArtifactRecorder(
+            output_root,
+            case_prefix=case_prefix,
+            git_head_sha=git_head_before,
+            plan_id=CAMERA_SYSTEM_ID_ID,
+            plan_version=CAMERA_SYSTEM_ID_VERSION,
+        )
+        control = WindowsCameraControl(
+            selected.hwnd,
+            expected_class_name=selected.class_name,
+            expected_title=selected.title,
+        )
+        adapter_identity = f"{type(control).__module__}.{type(control).__qualname__}"
+        if adapter_identity != _EXPECTED_WINDOWS_CAMERA_ADAPTER:
+            raise RuntimeError("fixed-system-ID camera adapter identity mismatch")
+
+        def require_same_clean_head_before_input(
+            decision: CameraServoFrameEvidence,
+            arm: CameraServoFrameEvidence,
+            commit: CameraServoFrameEvidence,
+        ) -> None:
+            current_head, current_clean = _git_state()
+            if current_head != git_head_before or not current_clean:
+                raise RuntimeError(
+                    "Git HEAD/worktree changed before the physical input seam"
+                )
+            for stage, evidence in (
+                ("decision", decision),
+                ("arm", arm),
+                ("commit", commit),
+            ):
+                if evidence.production is None:
+                    raise RuntimeError(
+                        f"{stage} production evidence is missing at the input seam"
+                    )
+                _require_north_bootstrap_production_identity(
+                    stage,
+                    evidence.production,
+                )
+
+        result = run_fixed_camera_system_identification(
+            source,
+            control,
+            sleeper=time.sleep,
+            recorder=recorder,
+            pre_input_guard=require_same_clean_head_before_input,
+            final_input_guard=require_same_clean_head_before_input,
+        )
+    except (
+        CaptureError,
+        FileExistsError,
+        OSError,
+        RuntimeError,
+        ValueError,
+        WindowsCameraError,
+        subprocess.CalledProcessError,
+    ) as exc:
+        handled_error = exc
+    except BaseException as exc:
+        unhandled_error = exc
+    finally:
+        if control is not None:
+            try:
+                control.release_all_held_keys()
+            except (OSError, RuntimeError, WindowsCameraError) as exc:
+                cleanup_errors.append(f"camera input cleanup failed: {exc}")
+        if source is not None:
+            try:
+                source.close()
+            except (CaptureError, OSError, RuntimeError) as exc:
+                cleanup_errors.append(f"capture cleanup failed: {exc}")
+
+    if handled_error is not None:
+        print(f"Fixed system identification failed: {handled_error}", file=sys.stderr)
+        if cleanup_errors:
+            print("; ".join(cleanup_errors), file=sys.stderr)
+        return 2
+    if unhandled_error is not None:
+        if cleanup_errors:
+            print("; ".join(cleanup_errors), file=sys.stderr)
+        raise unhandled_error
+    if cleanup_errors:
+        print("; ".join(cleanup_errors), file=sys.stderr)
+        return 2
+    if result is None or adapter_identity is None:  # pragma: no cover
+        print("Fixed system identification produced no result.", file=sys.stderr)
+        return 2
+    try:
+        git_head_after, clean_after = _git_state()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"Cannot re-establish Git provenance: {exc}", file=sys.stderr)
+        return 2
+    if git_head_after != git_head_before or not clean_after:
+        print(
+            "Git HEAD/worktree changed during fixed system identification; "
+            "refusing report.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        _require_fixed_system_id_result_identities(result)
+        provenance = CameraReportProvenance(
+            git_head_sha=git_head_before,
+            detector_id=_EXPECTED_DETECTOR_ID,
+            detector_version=_EXPECTED_DETECTOR_VERSION,
+            profile_id=_EXPECTED_PROFILE_ID,
+            plan_id=CAMERA_SYSTEM_ID_ID,
+            plan_version=CAMERA_SYSTEM_ID_VERSION,
+            command_argv=command_argv,
+            tracked_worktree_clean=True,
+        )
+        written = write_camera_validation_report(
+            report_path,
+            _system_id_result_dict(
+                result,
+                tracked_worktree_clean=True,
+                adapter_identity=adapter_identity,
+            ),
+            provenance,
+        )
+        publication_state.published_by_this_invocation = True
+    except (FileExistsError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        print(f"Cannot write fixed-system-ID report: {exc}", file=sys.stderr)
+        return 2
+    _print_fixed_system_id_summary(
+        result,
+        report_path=written.report_path,
+        report_sha256=written.sha256,
+        git_head_sha=git_head_before,
+    )
+    return 0 if result.conclusive else 1
+
+
+def _main_fixed_system_id(command_args: list[str]) -> int:
+    """Validate and execute the isolated fixed A/B/A subcommand."""
+
+    args = _build_fixed_system_id_parser().parse_args(command_args[1:])
+    try:
+        case_prefix = _validate_case_prefix(args.case_prefix)
+        command_argv = _exact_command_argv(command_args)
+        _validate_command_argv(command_argv)
+        _require_fixed_system_id_runtime_identities()
+        output_root = _resolve_private_output_root(args.output)
+        report_path, digest_path = _report_paths(output_root, case_prefix)
+        _preflight_case_namespace(
+            output_root,
+            case_prefix,
+            report_path,
+            digest_path,
+        )
+        git_head_before, clean_before = _git_state()
+        if re.fullmatch(r"[0-9a-f]{40}", git_head_before) is None:
+            raise ValueError("Git HEAD must be a full lowercase 40-character SHA")
+    except (
+        FileExistsError,
+        OSError,
+        RuntimeError,
+        subprocess.CalledProcessError,
+        ValueError,
+    ) as exc:
+        print(f"Cannot establish fixed-system-ID provenance: {exc}", file=sys.stderr)
+        return 2
+    if not clean_before:
+        print(
+            "Refusing fixed-system-ID input unless the worktree is exactly clean.",
+            file=sys.stderr,
+        )
+        return 2
+
+    lease = WindowsCameraInputLease()
+    lease_entered = False
+    publication_state = _ReportPublicationState()
+    try:
+        with lease:
+            lease_entered = True
+            return _run_live_fixed_system_id(
+                output_root=output_root,
+                report_path=report_path,
+                digest_path=digest_path,
+                case_prefix=case_prefix,
+                git_head_before=git_head_before,
+                command_argv=command_argv,
+                publication_state=publication_state,
+            )
+    except CameraInputLeaseError as exc:
+        retraction_errors: tuple[str, ...] = ()
+        if (
+            lease_entered
+            and lease.acquired
+            and publication_state.published_by_this_invocation
+        ):
+            retraction_errors = _retract_report_targets_after_lease_failure(
+                report_path,
+                digest_path,
+            )
+        print(f"Fixed-system-ID input lease unavailable: {exc}", file=sys.stderr)
+        if retraction_errors:
+            print("; ".join(retraction_errors), file=sys.stderr)
+        return 2
+    except BaseException as exc:
+        if (
+            lease_entered
+            and lease.acquired
+            and publication_state.published_by_this_invocation
+        ):
+            for retraction_error in _retract_report_targets_after_lease_failure(
+                report_path,
+                digest_path,
+            ):
+                exc.add_note(retraction_error)
+        raise
+
+
 def _run_live_validation(
     args: argparse.Namespace,
     *,
@@ -2055,6 +2902,8 @@ def _run_live_validation(
 
 def main(argv: list[str] | None = None) -> int:
     command_args = list(sys.argv[1:] if argv is None else argv)
+    if command_args and command_args[0] == _FIXED_SYSTEM_ID_COMMAND:
+        return _main_fixed_system_id(command_args)
     if command_args and command_args[0] == _NORTH_BOOTSTRAP_COMMAND:
         return _main_north_bootstrap(command_args)
     args = build_parser().parse_args(command_args)
