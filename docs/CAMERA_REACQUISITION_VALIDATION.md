@@ -722,28 +722,43 @@ family endpoints and every reviewed supported anchor. Collecting that evidence
 requires a separate lead decision; this document does not authorize it.
 
 The development-only fixed Right `0.043 s` capture wrapper is retained as an
-inert reviewed design for a possible future qualified planner result. If later
-authorized, it must start from an authenticated fresh compass-north state and:
+inert reviewed design for a possible future qualified planner result. Its
+same-transaction evidence protocol is version `1.1.0`. If later authorized,
+it must start from an authenticated fresh compass-north state and:
 
 1. allow at most one input primitive between captures;
 2. obtain fresh decision, arm, no-input platform preflight, commit, and
    post-action observations, with exact-head provenance, input lease,
    focus/HWND, geometry, pointer ownership, and released-input checks intact;
-3. evaluate every observation with the unchanged production detector, which
-   remains the sole scene-acceptance and resource-exposure authority;
-4. release the Right key, record the exact receipt, settle, and capture the
-   post-action frame; and
-5. use robust registration before input only as a no-authority consistency
-   veto against the exact planner source, then run read-only post-capture
-   registration to evaluate the new edge's all-zone, cycle, and
-   negative-corpus evidence.
+3. evaluate decision, arm, and commit observations with the unchanged
+   production detector, which remains the sole scene-acceptance and
+   resource-exposure authority;
+4. release the Right key, record the exact receipt, settle, then capture and
+   hash the post-action pixels plus readiness without running post production
+   perception yet;
+5. release all owned input and close capture before performing the potentially
+   expensive exact commit-to-post robust-registration evaluation;
+6. run the sole unchanged production evaluation of the exact post frame only
+   after that registration attempt, even when registration rejects or raises;
+   and
+7. seal the physical receipt, registration outcome, production outcome, exact
+   frame hashes, objective binding, and report sidecar together.
 
 Registration may reject or characterize the saved edge, but it may not
 validate the scene, expose resources, authorize another primitive, or override
-production. The current canonical planner result cannot satisfy the wrapper's
-authorization loader, so it stops before the input lease and capture backend.
-No live input from this design is authorized, and this section makes no
-reacquisition-success claim.
+production. Reports explicitly separate
+`REGISTRATION_BRIDGE_OBSERVED`, `ACTION_BRIDGE_RECEIPT_PROVEN`,
+`PRODUCTION_SUPPORTED_ENDPOINT`, and `BRIDGE_REJECTED`. A visual relationship
+or exact receipt never implies production support.
+
+The live artifact is report-only: it never emits an `ActionTransition`, always
+marks transition-candidate eligibility false, and states that authenticated
+offline ingestion is still required. A future ingester must compute and verify
+the report/sidecar digest and rederive receipt, raw frame, registration, and
+production facts before constructing any graph edge. The current canonical
+planner result cannot satisfy the wrapper's authorization loader, so it stops
+before the input lease and capture backend. No live input from this design is
+authorized, and this section makes no reacquisition-success claim.
 
 ## Repeated trial protocol
 

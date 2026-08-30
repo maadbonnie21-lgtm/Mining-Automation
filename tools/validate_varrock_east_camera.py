@@ -60,6 +60,9 @@ from mining_automation.validation.camera_bridge_capture import (  # noqa: E402
     CAMERA_BRIDGE_CAPTURE_VERSION,
     CameraBridgeCaptureResult,
     CameraBridgeCaptureTerminalReason,
+    CameraBridgePostTransitionClosure,
+    CameraBridgePostTransitionStatus,
+    _finalize_camera_bridge_post_production,
     camera_bridge_capture_plan,
     run_fixed_camera_bridge_capture,
 )
@@ -126,6 +129,7 @@ from mining_automation.validation.camera_report import (  # noqa: E402
 )
 from mining_automation.validation.camera_servo import (  # noqa: E402
     CameraServoArmAgeEvidence,
+    CameraServoExceptionEvidence,
     CameraServoFrameEvidence,
 )
 from mining_automation.validation.camera_session import (  # noqa: E402
@@ -904,7 +908,7 @@ def _require_bridge_capture_runtime_identities() -> None:
     }
     expected: dict[str, object] = {
         "bridge_id": "issue31-fixed-camera-bridge-capture-r2",
-        "bridge_version": "1.0.0",
+        "bridge_version": "1.1.0",
         "detector_id": _EXPECTED_DETECTOR_ID,
         "detector_version": _EXPECTED_DETECTOR_VERSION,
         "detector_version_constant": _EXPECTED_DETECTOR_VERSION,
@@ -1154,6 +1158,16 @@ def _require_bridge_capture_result_identities(
         readiness = evaluate_client_input_readiness(frame)
         if readiness != evidence.readiness:
             raise RuntimeError(f"{stage} readiness does not bind its exact payload")
+        if not isinstance(evidence, CameraServoFrameEvidence):
+            if (
+                stage != "post"
+                or result.terminal_reason
+                is not CameraBridgeCaptureTerminalReason.POST_CAPTURE_PENDING_CLOSURE
+            ):
+                raise RuntimeError(
+                    f"{stage} retained pending evidence outside the closure seam"
+                )
+            continue
         production = (
             evaluate_varrock_east_camera(frame)
             if readiness.safe_to_attempt_camera_input
@@ -3572,6 +3586,304 @@ def _main_fixed_system_id(command_args: list[str]) -> int:
         raise
 
 
+def _bridge_closure_exception(error: BaseException) -> CameraServoExceptionEvidence:
+    detail = str(error).strip() or repr(error)
+    return CameraServoExceptionEvidence(type(error).__name__, detail)
+
+
+def _new_bridge_post_transition_closure(
+    status: CameraBridgePostTransitionStatus,
+    detail: str,
+    **kwargs: object,
+) -> CameraBridgePostTransitionClosure:
+    """Bind every closure outcome to the frozen planner objective."""
+
+    return CameraBridgePostTransitionClosure(
+        status=status,
+        detail=detail,
+        objective_id=_BRIDGE_OBJECTIVE_ID,
+        objective_source_sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def _evaluate_bridge_post_transition(
+    result: CameraBridgeCaptureResult,
+    *,
+    output_root: Path,
+    registration_engine: RobustRegistrationEngine,
+) -> tuple[
+    CameraBridgeCaptureResult,
+    CameraBridgePostTransitionClosure,
+    RobustWorldRegistration | None,
+    CameraEvaluation | None,
+]:
+    """Close exact post evidence before sealing, without granting authority."""
+
+    if not result.input_attempted:
+        return (
+            result,
+            _new_bridge_post_transition_closure(
+                CameraBridgePostTransitionStatus.NOT_REQUIRED,
+                "No physical bridge input was attempted; no transition exists.",
+            ),
+            None,
+            None,
+        )
+    receipt_proven = (
+        result.input_completed
+        and result.receipt is not None
+        and result.receipt.plan is camera_bridge_capture_plan()
+    )
+    if not receipt_proven or result.commit is None or result.post is None:
+        return (
+            result,
+            _new_bridge_post_transition_closure(
+                CameraBridgePostTransitionStatus.PHYSICAL_CAPTURE_INCOMPLETE,
+                (
+                    "Physical input state is retained, but no complete exact "
+                    "receipt/commit/post chain exists."
+                ),
+                action_bridge_receipt_proven=receipt_proven,
+                bridge_rejected=True,
+            ),
+            None,
+            None,
+        )
+
+    commit_sha256 = result.commit.artifact.raw_sha256
+    post_sha256 = result.post.artifact.raw_sha256
+    try:
+        commit_frame = _bridge_evidence_frame(output_root, result.commit)
+        post_frame = _bridge_evidence_frame(output_root, result.post)
+    except Exception as error:
+        return (
+            result,
+            _new_bridge_post_transition_closure(
+                CameraBridgePostTransitionStatus.ARTIFACT_ERROR,
+                "Exact commit/post artifact re-read failed closed.",
+                commit_sha256=commit_sha256,
+                post_sha256=post_sha256,
+                action_bridge_receipt_proven=True,
+                bridge_rejected=True,
+                artifact_exception=_bridge_closure_exception(error),
+            ),
+            None,
+            None,
+        )
+
+    registration: RobustWorldRegistration | None = None
+    registration_error: BaseException | None = None
+    registration_accepted = False
+    try:
+        registration = registration_engine.analyze(commit_frame, post_frame)
+        _require_bridge_starting_registration(
+            registration,
+            expected_source_sha256=commit_sha256,
+            expected_target_sha256=post_sha256,
+            context="exact live commit to immediate post-action frame",
+        )
+        registration_accepted = True
+    except Exception as error:
+        registration_error = error
+
+    # O3 ordering is deliberate: physical cleanup has already completed;
+    # production runs only after this registration attempt. Registration
+    # rejection/exception never suppresses production for a ready exact post.
+    production: CameraEvaluation | None = None
+    production_error: BaseException | None = None
+    post_readiness = evaluate_client_input_readiness(post_frame)
+    if post_readiness != result.post.readiness:
+        return (
+            result,
+            _new_bridge_post_transition_closure(
+                CameraBridgePostTransitionStatus.POST_READINESS_REJECTED,
+                "Exact post readiness changed during closure re-evaluation.",
+                commit_sha256=commit_sha256,
+                post_sha256=post_sha256,
+                action_bridge_receipt_proven=True,
+                registration_attempted=True,
+                registration_accepted=registration_accepted,
+                registration_bridge_observed=registration_accepted,
+                bridge_rejected=True,
+                registration_exception=(
+                    None
+                    if registration_error is None
+                    else _bridge_closure_exception(registration_error)
+                ),
+            ),
+            registration,
+            None,
+        )
+    if not post_readiness.safe_to_attempt_camera_input:
+        finalized, _ = _finalize_camera_bridge_post_production(result, post_frame)
+        return (
+            finalized,
+            _new_bridge_post_transition_closure(
+                CameraBridgePostTransitionStatus.POST_READINESS_REJECTED,
+                (
+                    "Exact post readiness vetoed production under the established "
+                    "production-evaluation policy."
+                ),
+                commit_sha256=commit_sha256,
+                post_sha256=post_sha256,
+                action_bridge_receipt_proven=True,
+                registration_attempted=True,
+                registration_accepted=registration_accepted,
+                registration_bridge_observed=registration_accepted,
+                bridge_rejected=True,
+                registration_exception=(
+                    None
+                    if registration_error is None
+                    else _bridge_closure_exception(registration_error)
+                ),
+            ),
+            registration,
+            None,
+        )
+    try:
+        finalized, production = _finalize_camera_bridge_post_production(
+            result,
+            post_frame,
+        )
+        if production is None:  # pragma: no cover - readiness handled above
+            raise RuntimeError("ready exact post produced no production evaluation")
+        _require_north_bootstrap_production_identity(
+            "post-transition-production-evaluation",
+            production,
+        )
+    except Exception as error:
+        production_error = error
+    if production_error is not None:
+        detail = (
+            "Post-transition production evaluation failed closed after registration."
+        )
+        if registration_error is not None:
+            detail += " Registration also rejected or raised."
+        return (
+            result,
+            _new_bridge_post_transition_closure(
+                CameraBridgePostTransitionStatus.PRODUCTION_EXCEPTION,
+                detail,
+                commit_sha256=commit_sha256,
+                post_sha256=post_sha256,
+                action_bridge_receipt_proven=True,
+                registration_attempted=True,
+                registration_accepted=registration_accepted,
+                registration_bridge_observed=registration_accepted,
+                bridge_rejected=True,
+                registration_exception=(
+                    None
+                    if registration_error is None
+                    else _bridge_closure_exception(registration_error)
+                ),
+                production_exception=_bridge_closure_exception(production_error),
+            ),
+            registration,
+            None,
+        )
+    assert production is not None
+    if registration_error is not None:
+        status = (
+            CameraBridgePostTransitionStatus.REGISTRATION_EXCEPTION
+            if registration is None
+            else CameraBridgePostTransitionStatus.REGISTRATION_REJECTED
+        )
+        return (
+            finalized,
+            _new_bridge_post_transition_closure(
+                status,
+                (
+                    "Post-transition production was re-evaluated exactly, but "
+                    "diagnostic registration rejected or raised."
+                ),
+                commit_sha256=commit_sha256,
+                post_sha256=post_sha256,
+                action_bridge_receipt_proven=True,
+                registration_attempted=True,
+                registration_accepted=False,
+                registration_bridge_observed=False,
+                production_re_evaluated=True,
+                production_matches_capture=True,
+                production_supported_endpoint=production.passed,
+                bridge_rejected=True,
+                registration_exception=_bridge_closure_exception(registration_error),
+            ),
+            registration,
+            production,
+        )
+    if commit_sha256 == post_sha256:
+        return (
+            finalized,
+            _new_bridge_post_transition_closure(
+                CameraBridgePostTransitionStatus.NO_DISTINCT_ENDPOINT,
+                (
+                    "The complete receipt produced no distinct post endpoint; "
+                    "registration and production evidence are retained, but the "
+                    "bridge is rejected."
+                ),
+                commit_sha256=commit_sha256,
+                post_sha256=post_sha256,
+                action_bridge_receipt_proven=True,
+                registration_attempted=True,
+                registration_accepted=True,
+                registration_bridge_observed=True,
+                production_re_evaluated=True,
+                production_matches_capture=True,
+                production_supported_endpoint=production.passed,
+                bridge_rejected=True,
+            ),
+            registration,
+            production,
+        )
+    if not finalized.protocol_completed:
+        return (
+            finalized,
+            _new_bridge_post_transition_closure(
+                CameraBridgePostTransitionStatus.PRODUCTION_REJECTED,
+                (
+                    "The sole post production evaluation did not reach an "
+                    "accepted fail-closed capture or supported endpoint; the "
+                    "physical receipt is retained and the bridge is rejected."
+                ),
+                commit_sha256=commit_sha256,
+                post_sha256=post_sha256,
+                action_bridge_receipt_proven=True,
+                registration_attempted=True,
+                registration_accepted=True,
+                registration_bridge_observed=True,
+                production_re_evaluated=True,
+                production_matches_capture=True,
+                production_supported_endpoint=False,
+                bridge_rejected=True,
+            ),
+            registration,
+            production,
+        )
+    return (
+        finalized,
+        _new_bridge_post_transition_closure(
+            CameraBridgePostTransitionStatus.COMPLETE,
+            (
+                "Exact commit/post registration and subsequent production "
+                "re-evaluation completed before report sealing."
+            ),
+            commit_sha256=commit_sha256,
+            post_sha256=post_sha256,
+            action_bridge_receipt_proven=True,
+            registration_attempted=True,
+            registration_accepted=True,
+            registration_bridge_observed=True,
+            production_re_evaluated=True,
+            production_matches_capture=True,
+            production_supported_endpoint=production.passed,
+            bridge_rejected=False,
+        ),
+        registration,
+        production,
+    )
+
+
 def _bridge_capture_evidence(
     result: CameraBridgeCaptureResult,
     *,
@@ -3580,11 +3892,30 @@ def _bridge_capture_evidence(
     north_handoff: _BridgeNorthHandoff,
     north_registration: RobustWorldRegistration | None,
     planner_source_registration: RobustWorldRegistration | None,
+    post_transition_closure: CameraBridgePostTransitionClosure,
+    post_transition_production: CameraEvaluation | None,
+    post_transition_registration: RobustWorldRegistration | None,
     pointer_evidence: _BridgePointerEvidence | None,
     selected_class_name: str,
     selected_title: str,
 ) -> dict[str, object]:
     evidence = result.as_dict()
+    evidence["transition_candidate_eligible"] = False
+    evidence["action_transition_emitted"] = False
+    evidence["authenticated_ingestion_required"] = True
+    evidence["same_transaction_closure_completed"] = (
+        post_transition_closure.completed
+    )
+    bridge_capture = _json_object(
+        evidence.get("bridge_capture"),
+        "R2 bridge capture evidence",
+    )
+    bridge_capture["physical_capture_protocol_completed"] = (
+        result.protocol_completed
+    )
+    bridge_capture["post_transition_closure_completed"] = (
+        post_transition_closure.completed
+    )
     evidence.update(
         {
             "bridge_objective": {
@@ -3615,6 +3946,17 @@ def _bridge_capture_evidence(
                 if planner_source_registration is None
                 else planner_source_registration.as_dict()
             ),
+            "post_transition_closure": post_transition_closure.as_dict(),
+            "post_transition_production_re_evaluation": (
+                None
+                if post_transition_production is None
+                else _evaluation_dict(post_transition_production)
+            ),
+            "post_transition_registration": (
+                None
+                if post_transition_registration is None
+                else post_transition_registration.as_dict()
+            ),
             "new_live_input_from_robust_registration": False,
             "pointer_mapping": {
                 "adapter_identity": adapter_identity,
@@ -3637,15 +3979,23 @@ def _bridge_capture_evidence(
                 "planner_source_to_north_precomputed_before_arm": (
                     planner_source_registration is not None
                 ),
-                "post_transition_registration_performed": False,
+                "post_transition_registration_performed": (
+                    post_transition_closure.registration_attempted
+                ),
                 "post_transition_registration_stage": (
-                    "required during later read-only graph ingestion"
+                    "same_transaction_before_production_re_evaluation_and_report_seal"
+                    if post_transition_closure.registration_attempted
+                    else "not_applicable_without_complete_physical_receipt"
+                ),
+                "production_re_evaluated_after_registration": (
+                    post_transition_closure.production_re_evaluated
                 ),
             },
             "production_detector_remains_sole_scene_authority": True,
             "registration_role": (
-                "reviewed compass-north precondition veto only; fixed reviewed "
-                "analysis artifact selects the experiment"
+                "reviewed precondition and post-transition evidence only; fixed "
+                "reviewed analysis artifact selects the experiment and unchanged "
+                "production remains sole scene authority"
             ),
             "robust_registration_executed_in_input_seam": (
                 north_registration is not None
@@ -3693,8 +4043,12 @@ def _run_live_bridge_capture(
     adapter_identity: str | None = None
     selected_class_name: str | None = None
     selected_title: str | None = None
+    registration_engine: RobustRegistrationEngine | None = None
     planner_source_registration: RobustWorldRegistration | None = None
     north_registration: RobustWorldRegistration | None = None
+    post_transition_closure: CameraBridgePostTransitionClosure | None = None
+    post_transition_production: CameraEvaluation | None = None
+    post_transition_registration: RobustWorldRegistration | None = None
     pointer_evidence: _BridgePointerEvidence | None = None
     handled_error: Exception | None = None
     unhandled_error: BaseException | None = None
@@ -3900,11 +4254,30 @@ def _run_live_bridge_capture(
     if cleanup_errors:
         print("; ".join(cleanup_errors), file=sys.stderr)
         return 2
+
+    if result is not None and registration_engine is not None:
+        try:
+            (
+                result,
+                post_transition_closure,
+                post_transition_registration,
+                post_transition_production,
+            ) = _evaluate_bridge_post_transition(
+                result,
+                output_root=output_root,
+                registration_engine=registration_engine,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            handled_error = exc
+    if handled_error is not None:
+        print(f"R2 bridge capture failed: {handled_error}", file=sys.stderr)
+        return 2
     if (
         result is None
         or adapter_identity is None
         or selected_class_name is None
         or selected_title is None
+        or post_transition_closure is None
     ):  # pragma: no cover - defensive composition guard
         print("R2 bridge capture produced no result.", file=sys.stderr)
         return 2
@@ -3921,10 +4294,68 @@ def _run_live_bridge_capture(
         )
         return 2
     try:
-        _require_bridge_capture_result_identities(
-            result,
-            output_root=output_root,
-        )
+        try:
+            _require_bridge_capture_result_identities(
+                result,
+                output_root=output_root,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as identity_error:
+            if not result.input_attempted:
+                raise
+            identity_exception = _bridge_closure_exception(identity_error)
+            if (
+                post_transition_closure.status
+                is CameraBridgePostTransitionStatus.ARTIFACT_ERROR
+            ):
+                post_transition_closure = _new_bridge_post_transition_closure(
+                    CameraBridgePostTransitionStatus.ARTIFACT_ERROR,
+                    (
+                        f"{post_transition_closure.detail} Final artifact seal "
+                        "revalidation also failed; the exact receipt is retained."
+                    ),
+                    commit_sha256=post_transition_closure.commit_sha256,
+                    post_sha256=post_transition_closure.post_sha256,
+                    action_bridge_receipt_proven=(
+                        post_transition_closure.action_bridge_receipt_proven
+                    ),
+                    bridge_rejected=True,
+                    artifact_exception=(
+                        post_transition_closure.artifact_exception
+                    ),
+                    seal_exception=identity_exception,
+                )
+            else:
+                post_transition_closure = _new_bridge_post_transition_closure(
+                    CameraBridgePostTransitionStatus.SEAL_REVALIDATION_ERROR,
+                    (
+                        "Final exact-artifact/production seal revalidation failed; "
+                        "the physical receipt is retained and the bridge is rejected."
+                    ),
+                    commit_sha256=post_transition_closure.commit_sha256,
+                    post_sha256=post_transition_closure.post_sha256,
+                    action_bridge_receipt_proven=(
+                        post_transition_closure.action_bridge_receipt_proven
+                    ),
+                    registration_attempted=(
+                        post_transition_closure.registration_attempted
+                    ),
+                    registration_accepted=(
+                        post_transition_closure.registration_accepted
+                    ),
+                    registration_bridge_observed=(
+                        post_transition_closure.registration_bridge_observed
+                    ),
+                    production_re_evaluated=(
+                        post_transition_closure.production_re_evaluated
+                    ),
+                    production_matches_capture=False,
+                    production_supported_endpoint=False,
+                    bridge_rejected=True,
+                    registration_exception=(
+                        post_transition_closure.registration_exception
+                    ),
+                    seal_exception=identity_exception,
+                )
         if result.input_attempted and (
             planner_source_registration is None
             or north_registration is None
@@ -3952,6 +4383,9 @@ def _run_live_bridge_capture(
                 north_handoff=north_handoff,
                 north_registration=north_registration,
                 planner_source_registration=planner_source_registration,
+                post_transition_closure=post_transition_closure,
+                post_transition_production=post_transition_production,
+                post_transition_registration=post_transition_registration,
                 pointer_evidence=pointer_evidence,
                 selected_class_name=selected_class_name,
                 selected_title=selected_title,
@@ -3985,8 +4419,14 @@ def _run_live_bridge_capture(
     )
     return (
         0
-        if result.protocol_completed
-        or result.terminal_reason is CameraBridgeCaptureTerminalReason.PRODUCTION_PASS
+        if (
+            post_transition_closure.completed
+            or (
+                not result.input_attempted
+                and result.terminal_reason
+                is CameraBridgeCaptureTerminalReason.PRODUCTION_PASS
+            )
+        )
         else 1
     )
 

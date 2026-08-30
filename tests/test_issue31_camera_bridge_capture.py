@@ -27,7 +27,6 @@ from mining_automation.validation.camera_bridge_capture import (
     CAMERA_BRIDGE_CAPTURE_VERSION,
     CameraBridgeCaptureInputState,
     CameraBridgeCaptureTerminalReason,
-    camera_bridge_action_transition,
     camera_bridge_capture_plan,
     run_fixed_camera_bridge_capture,
 )
@@ -299,7 +298,7 @@ def test_fixed_public_policy_has_no_controller_or_perception_injection() -> None
     )
 
     assert CAMERA_BRIDGE_CAPTURE_ID == "issue31-fixed-camera-bridge-capture-r2"
-    assert CAMERA_BRIDGE_CAPTURE_VERSION == "1.0.0"
+    assert CAMERA_BRIDGE_CAPTURE_VERSION == "1.1.0"
     assert CAMERA_BRIDGE_CAPTURE_HOLD_SECONDS == 0.043
     assert CAMERA_BRIDGE_CAPTURE_SETTLE_SECONDS == 1.0
     assert CAMERA_BRIDGE_CAPTURE_MAXIMUM_PHYSICAL_PRIMITIVES == 1
@@ -334,8 +333,11 @@ def test_exact_happy_path_records_one_receipted_primitive_and_stable_report(
 
     result = _run(source, control, sleeper=sleeps.append)
 
-    assert result.terminal_reason is CameraBridgeCaptureTerminalReason.CAPTURE_COMPLETE
-    assert result.protocol_completed
+    assert (
+        result.terminal_reason
+        is CameraBridgeCaptureTerminalReason.POST_CAPTURE_PENDING_CLOSURE
+    )
+    assert not result.protocol_completed
     assert result.input_state is CameraBridgeCaptureInputState.COMPLETE
     assert source.captures == [1, 2, 3, 4]
     assert control.calls == [
@@ -378,28 +380,119 @@ def test_exact_happy_path_records_one_receipted_primitive_and_stable_report(
     json.dumps(payload, allow_nan=False, sort_keys=True)
 
 
-def test_transition_is_exact_commit_to_post_and_has_no_authority(
+def test_physical_capture_is_report_only_until_authenticated_ingestion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_pipeline(monkeypatch)
     result = _run(SequenceSource(_happy_frames()), CompleteControl())
 
-    transition = camera_bridge_action_transition(
-        result,
-        evidence_report_sha256="f" * 64,
+    assert result.commit is not None and result.post is not None
+    assert result.as_dict()["transition_candidate_eligible"] is False
+    assert not hasattr(camera_bridge_capture, "camera_bridge_action_transition")
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_terminal"),
+    [
+        ("fail_closed", CameraBridgeCaptureTerminalReason.CAPTURE_COMPLETE),
+        ("supported", CameraBridgeCaptureTerminalReason.PRODUCTION_PASS),
+        (
+            "fail_open",
+            CameraBridgeCaptureTerminalReason.PRODUCTION_REJECTION_NOT_FAIL_CLOSED,
+        ),
+        ("not_ready", CameraBridgeCaptureTerminalReason.READINESS_LOST),
+    ],
+)
+def test_real_post_finalizer_binds_fixed_production_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    expected_terminal: CameraBridgeCaptureTerminalReason,
+) -> None:
+    readiness = {4: _not_ready()} if mode == "not_ready" else {}
+    production = {
+        "supported": _production(passed=True),
+        "fail_open": _production(fail_closed=False),
+    }
+    _patch_pipeline(
+        monkeypatch,
+        readiness=readiness,
+        production=({4: production[mode]} if mode in production else {}),
+    )
+    frames = _happy_frames()
+    pending = _run(SequenceSource(list(frames)), CompleteControl())
+
+    finalized, observed = (
+        camera_bridge_capture._finalize_camera_bridge_post_production(
+            pending,
+            frames[-1],
+        )
     )
 
-    assert transition is not None
-    assert result.commit is not None and result.post is not None
-    assert transition.source_sha256 == result.commit.artifact.raw_sha256
-    assert transition.target_sha256 == result.post.artifact.raw_sha256
-    assert transition.receipt_verified
-    assert transition.as_dict()["authority"] == {
-        "can_accept": False,
-        "can_authorize_camera_input": False,
-        "can_expose_resources": False,
-        "can_validate_scene": False,
-    }
+    assert finalized.terminal_reason is expected_terminal
+    assert finalized.as_dict()["transition_candidate_eligible"] is False
+    assert finalized.input_state is CameraBridgeCaptureInputState.COMPLETE
+    if mode == "not_ready":
+        assert observed is None
+    else:
+        assert observed is not None
+    assert finalized.protocol_completed is (mode in {"fail_closed", "supported"})
+
+
+@pytest.mark.parametrize("mismatch", ["payload", "frame_id", "geometry", "time"])
+def test_real_post_finalizer_rejects_every_exact_frame_binding_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    mismatch: str,
+) -> None:
+    _patch_pipeline(monkeypatch)
+    frames = _happy_frames()
+    pending = _run(SequenceSource(list(frames)), CompleteControl())
+    exact = frames[-1]
+    candidate = exact
+    if mismatch == "payload":
+        candidate = Frame.from_raw(
+            RawFrame(
+                _BLANK,
+                EXPECTED_CLIENT_WIDTH,
+                EXPECTED_CLIENT_HEIGHT,
+                PixelFormat.BGRA8888,
+            ),
+            frame_id=exact.frame_id,
+            captured_monotonic_s=exact.captured_monotonic_s,
+        )
+    elif mismatch == "frame_id":
+        candidate = Frame.from_raw(
+            RawFrame(
+                exact.payload,
+                exact.width,
+                exact.height,
+                exact.pixel_format,
+            ),
+            frame_id=exact.frame_id + 1,
+            captured_monotonic_s=exact.captured_monotonic_s,
+        )
+    elif mismatch == "geometry":
+        candidate = Frame.from_raw(
+            RawFrame(bytes((0, 0, 0, 255)), 1, 1, PixelFormat.BGRA8888),
+            frame_id=exact.frame_id,
+            captured_monotonic_s=exact.captured_monotonic_s,
+        )
+    elif mismatch == "time":
+        candidate = Frame.from_raw(
+            RawFrame(
+                exact.payload,
+                exact.width,
+                exact.height,
+                exact.pixel_format,
+            ),
+            frame_id=exact.frame_id,
+            captured_monotonic_s=exact.captured_monotonic_s + 1.0,
+        )
+
+    with pytest.raises(ValueError, match="exact pending post artifact"):
+        camera_bridge_capture._finalize_camera_bridge_post_production(
+            pending,
+            candidate,
+        )
 
 
 @pytest.mark.parametrize("frame_id", [1, 2, 3])
@@ -692,10 +785,7 @@ def test_post_failure_is_honest_complete_input_and_never_retries(
     assert not result.protocol_completed
     assert control.calls.count(("key_down", "right")) == 1
     assert control.calls.count(("key_up", "right")) == 1
-    assert camera_bridge_action_transition(
-        result,
-        evidence_report_sha256="e" * 64,
-    ) is None
+    assert result.as_dict()["transition_candidate_eligible"] is False
 
 
 def test_recorder_mismatch_and_preflight_exception_send_zero_input(
@@ -755,11 +845,8 @@ def test_identical_commit_and_post_pixels_never_form_transition(
         CompleteControl(),
     )
 
-    assert result.protocol_completed
-    assert camera_bridge_action_transition(
-        result,
-        evidence_report_sha256="d" * 64,
-    ) is None
+    assert not result.protocol_completed
+    assert result.as_dict()["transition_candidate_eligible"] is False
 
 
 def test_result_retains_exact_stage_labels_and_honest_freshness_terminal(

@@ -183,6 +183,32 @@ def _patch_reviewed_inputs(
         lambda *_args, **_kwargs: None,
     )
 
+    def close(result: object, **_kwargs: object) -> tuple[object, object, object, None]:
+        if not result.input_attempted:  # type: ignore[attr-defined]
+            closure = tool._new_bridge_post_transition_closure(
+                tool.CameraBridgePostTransitionStatus.NOT_REQUIRED,
+                "test zero-input closure",
+            )
+            return result, closure, None, None
+        closure = tool._new_bridge_post_transition_closure(
+            tool.CameraBridgePostTransitionStatus.COMPLETE,
+            "test closure",
+            commit_sha256="4" * 64,
+            post_sha256="5" * 64,
+            action_bridge_receipt_proven=True,
+            registration_attempted=True,
+            registration_accepted=True,
+            registration_bridge_observed=True,
+            production_re_evaluated=True,
+            production_matches_capture=True,
+            production_supported_endpoint=False,
+            bridge_rejected=False,
+        )
+        registration = SimpleNamespace(as_dict=lambda: {"accepted": True})
+        return result, closure, registration, None
+
+    monkeypatch.setattr(tool, "_evaluate_bridge_post_transition", close)
+
 
 def _capture_complete_result(*, input_attempted: bool = True) -> SimpleNamespace:
     return SimpleNamespace(
@@ -194,6 +220,12 @@ def _capture_complete_result(*, input_attempted: bool = True) -> SimpleNamespace
                 "can_validate_scene": False,
                 "diagnostic_registration_can_override_production": False,
             },
+            "bridge_capture": {
+                "id": "issue31-fixed-camera-bridge-capture-r2",
+                "version": "1.1.0",
+                "protocol_completed": True,
+                "post_production_passed": False,
+            },
             "fixed_policy": {
                 "caller_selectable_coordinate": False,
                 "caller_selectable_direction": False,
@@ -203,9 +235,15 @@ def _capture_complete_result(*, input_attempted: bool = True) -> SimpleNamespace
                 "maximum_physical_primitives": 1,
                 "settle_seconds": 1.0,
             },
+            "input": {
+                "attempted": input_attempted,
+                "completed": input_attempted,
+                "state": "complete" if input_attempted else "none",
+            },
         },
         input_state=CameraBridgeCaptureInputState.COMPLETE,
         input_attempted=input_attempted,
+        input_completed=input_attempted,
         protocol_completed=True,
         terminal_reason=CameraBridgeCaptureTerminalReason.CAPTURE_COMPLETE,
     )
@@ -305,6 +343,415 @@ def _unit_frame(tool: ModuleType) -> Frame:
         frame_id=1,
         captured_monotonic_s=0.0,
     )
+
+
+def _pending_closure_result(tool: ModuleType, *, identical: bool = False) -> object:
+    readiness = SimpleNamespace(safe_to_attempt_camera_input=True)
+    commit_sha = "4" * 64
+    post_sha = commit_sha if identical else "5" * 64
+    return SimpleNamespace(
+        input_attempted=True,
+        input_completed=True,
+        receipt=SimpleNamespace(plan=tool.camera_bridge_capture_plan()),
+        commit=SimpleNamespace(
+            artifact=SimpleNamespace(raw_sha256=commit_sha),
+        ),
+        post=SimpleNamespace(
+            artifact=SimpleNamespace(raw_sha256=post_sha),
+            readiness=readiness,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("registration_mode", "expected_status"),
+    [
+        ("accepted", "complete"),
+        ("rejected", "registration_rejected"),
+        ("exception", "registration_exception"),
+    ],
+)
+def test_post_transition_closure_orders_registration_before_production(
+    tool: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    registration_mode: str,
+    expected_status: str,
+) -> None:
+    result = _pending_closure_result(tool)
+    commit = _unit_frame(tool)
+    post = Frame.from_raw(
+        RawFrame(bytes((9, 8, 7, 255)), 1, 1, PixelFormat.BGRA8888),
+        frame_id=2,
+        captured_monotonic_s=2.0,
+    )
+    events: list[str] = []
+    registration = SimpleNamespace(as_dict=lambda: {"accepted": True})
+
+    class Engine:
+        def analyze(self, _source: Frame, _target: Frame) -> object:
+            events.append("registration")
+            if registration_mode == "exception":
+                raise RuntimeError("registration exploded")
+            return registration
+
+    monkeypatch.setattr(
+        tool,
+        "_bridge_evidence_frame",
+        lambda _root, evidence: (
+            commit if evidence is result.commit else post
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "evaluate_client_input_readiness",
+        lambda _frame: result.post.readiness,
+    )
+
+    def require_registration(*_args: object, **_kwargs: object) -> None:
+        if registration_mode == "rejected":
+            raise ValueError("registration rejected")
+
+    monkeypatch.setattr(tool, "_require_bridge_starting_registration", require_registration)
+    production = SimpleNamespace(passed=False)
+    finalized = SimpleNamespace(protocol_completed=True)
+
+    def finalize(_result: object, _post: Frame) -> tuple[object, object]:
+        events.append("production")
+        return finalized, production
+
+    monkeypatch.setattr(tool, "_finalize_camera_bridge_post_production", finalize)
+    monkeypatch.setattr(
+        tool,
+        "_require_north_bootstrap_production_identity",
+        lambda *_args, **_kwargs: None,
+    )
+
+    observed, closure, observed_registration, observed_production = (
+        tool._evaluate_bridge_post_transition(
+            result,
+            output_root=Path("unused"),
+            registration_engine=Engine(),
+        )
+    )
+
+    assert observed is finalized
+    assert events == ["registration", "production"]
+    assert closure.status.value == expected_status
+    assert closure.action_bridge_receipt_proven is True
+    assert closure.production_re_evaluated is True
+    assert closure.production_matches_capture is True
+    assert closure.bridge_rejected is (registration_mode != "accepted")
+    assert observed_registration is (registration if registration_mode != "exception" else None)
+    assert observed_production is production
+    semantics = closure.as_dict()["semantic_states"]
+    assert semantics["ACTION_BRIDGE_RECEIPT_PROVEN"] is True
+    assert semantics["BRIDGE_REJECTED"] is (registration_mode != "accepted")
+    assert closure.as_dict()["action_transition_emitted"] is False
+    assert closure.as_dict()["authenticated_ingestion_required"] is True
+
+
+def test_post_transition_identical_pixels_are_measured_then_rejected(
+    tool: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _pending_closure_result(tool, identical=True)
+    frame = _unit_frame(tool)
+    events: list[str] = []
+    monkeypatch.setattr(tool, "_bridge_evidence_frame", lambda *_args: frame)
+    monkeypatch.setattr(
+        tool,
+        "evaluate_client_input_readiness",
+        lambda _frame: result.post.readiness,
+    )
+    monkeypatch.setattr(
+        tool,
+        "_require_bridge_starting_registration",
+        lambda *_args, **_kwargs: None,
+    )
+
+    class Engine:
+        def analyze(self, _source: Frame, _target: Frame) -> object:
+            events.append("registration")
+            return SimpleNamespace(as_dict=dict)
+
+    production = SimpleNamespace(passed=False)
+    monkeypatch.setattr(
+        tool,
+        "_finalize_camera_bridge_post_production",
+        lambda *_args: (
+            events.append("production") or SimpleNamespace(protocol_completed=True),
+            production,
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "_require_north_bootstrap_production_identity",
+        lambda *_args, **_kwargs: None,
+    )
+
+    _finalized, closure, _registration, _production = (
+        tool._evaluate_bridge_post_transition(
+            result,
+            output_root=Path("unused"),
+            registration_engine=Engine(),
+        )
+    )
+
+    assert events == ["registration", "production"]
+    assert closure.status.value == "no_distinct_endpoint"
+    assert closure.registration_bridge_observed is True
+    assert closure.bridge_rejected is True
+    assert closure.completed is False
+
+
+def test_post_transition_zero_input_performs_no_registration_or_production(
+    tool: ModuleType,
+) -> None:
+    result = SimpleNamespace(input_attempted=False)
+
+    class Engine:
+        def analyze(self, *_args: object) -> object:
+            raise AssertionError("zero-input closure must not register")
+
+    observed, closure, registration, production = (
+        tool._evaluate_bridge_post_transition(
+            result,
+            output_root=Path("unused"),
+            registration_engine=Engine(),
+        )
+    )
+
+    assert observed is result
+    assert closure.status.value == "not_required"
+    assert closure.as_dict()["semantic_states"] == {
+        "ACTION_BRIDGE_RECEIPT_PROVEN": False,
+        "BRIDGE_REJECTED": False,
+        "PRODUCTION_SUPPORTED_ENDPOINT": False,
+        "REGISTRATION_BRIDGE_OBSERVED": False,
+    }
+    assert registration is None
+    assert production is None
+
+
+def test_post_missing_retains_complete_physical_receipt_semantic(
+    tool: ModuleType,
+) -> None:
+    result = SimpleNamespace(
+        input_attempted=True,
+        input_completed=True,
+        receipt=SimpleNamespace(plan=tool.camera_bridge_capture_plan()),
+        commit=SimpleNamespace(artifact=SimpleNamespace(raw_sha256="4" * 64)),
+        post=None,
+    )
+
+    class Engine:
+        def analyze(self, *_args: object) -> object:
+            raise AssertionError("missing post cannot register")
+
+    observed, closure, registration, production = (
+        tool._evaluate_bridge_post_transition(
+            result,
+            output_root=Path("unused"),
+            registration_engine=Engine(),
+        )
+    )
+
+    assert observed is result
+    assert closure.status.value == "physical_capture_incomplete"
+    assert closure.action_bridge_receipt_proven is True
+    assert closure.bridge_rejected is True
+    assert registration is None
+    assert production is None
+
+
+def test_post_transition_fail_open_production_rejects_the_bridge(
+    tool: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _pending_closure_result(tool)
+    commit = _unit_frame(tool)
+    post = Frame.from_raw(
+        RawFrame(bytes((9, 8, 7, 255)), 1, 1, PixelFormat.BGRA8888),
+        frame_id=2,
+        captured_monotonic_s=2.0,
+    )
+    monkeypatch.setattr(
+        tool,
+        "_bridge_evidence_frame",
+        lambda _root, evidence: commit if evidence is result.commit else post,
+    )
+    monkeypatch.setattr(
+        tool,
+        "evaluate_client_input_readiness",
+        lambda _frame: result.post.readiness,
+    )
+    monkeypatch.setattr(
+        tool,
+        "_require_bridge_starting_registration",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        tool,
+        "_require_north_bootstrap_production_identity",
+        lambda *_args, **_kwargs: None,
+    )
+    production = SimpleNamespace(passed=False)
+    monkeypatch.setattr(
+        tool,
+        "_finalize_camera_bridge_post_production",
+        lambda *_args: (SimpleNamespace(protocol_completed=False), production),
+    )
+
+    _finalized, closure, registration, observed_production = (
+        tool._evaluate_bridge_post_transition(
+            result,
+            output_root=Path("unused"),
+            registration_engine=SimpleNamespace(
+                analyze=lambda *_args: SimpleNamespace(as_dict=dict)
+            ),
+        )
+    )
+
+    assert closure.status.value == "production_rejected"
+    assert closure.action_bridge_receipt_proven is True
+    assert closure.registration_bridge_observed is True
+    assert closure.production_re_evaluated is True
+    assert closure.bridge_rejected is True
+    assert closure.completed is False
+    assert registration is not None
+    assert observed_production is production
+
+
+def test_post_transition_artifact_error_retains_exact_receipt(
+    tool: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _pending_closure_result(tool)
+    monkeypatch.setattr(
+        tool,
+        "_bridge_evidence_frame",
+        lambda *_args: (_ for _ in ()).throw(OSError("raw payload missing")),
+    )
+
+    _result, closure, registration, production = (
+        tool._evaluate_bridge_post_transition(
+            result,
+            output_root=Path("unused"),
+            registration_engine=SimpleNamespace(
+                analyze=lambda *_args: pytest.fail("registration must not run")
+            ),
+        )
+    )
+
+    assert closure.status.value == "artifact_error"
+    assert closure.action_bridge_receipt_proven is True
+    assert closure.artifact_exception is not None
+    assert closure.bridge_rejected is True
+    assert registration is None
+    assert production is None
+
+
+def test_post_transition_production_exception_retains_registration_and_receipt(
+    tool: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _pending_closure_result(tool)
+    commit = _unit_frame(tool)
+    post = Frame.from_raw(
+        RawFrame(bytes((9, 8, 7, 255)), 1, 1, PixelFormat.BGRA8888),
+        frame_id=2,
+        captured_monotonic_s=2.0,
+    )
+    registration = SimpleNamespace(as_dict=dict)
+    monkeypatch.setattr(
+        tool,
+        "_bridge_evidence_frame",
+        lambda _root, evidence: commit if evidence is result.commit else post,
+    )
+    monkeypatch.setattr(
+        tool,
+        "evaluate_client_input_readiness",
+        lambda _frame: result.post.readiness,
+    )
+    monkeypatch.setattr(
+        tool,
+        "_require_bridge_starting_registration",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        tool,
+        "_finalize_camera_bridge_post_production",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("detector failed")),
+    )
+
+    _result, closure, observed_registration, production = (
+        tool._evaluate_bridge_post_transition(
+            result,
+            output_root=Path("unused"),
+            registration_engine=SimpleNamespace(
+                analyze=lambda *_args: registration
+            ),
+        )
+    )
+
+    assert closure.status.value == "production_exception"
+    assert closure.action_bridge_receipt_proven is True
+    assert closure.registration_bridge_observed is True
+    assert closure.production_exception is not None
+    assert closure.bridge_rejected is True
+    assert observed_registration is registration
+    assert production is None
+
+
+def test_pending_post_identity_revalidation_does_not_run_production_early(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = bytes((1, 2, 3, 255))
+    raw = tmp_path / "r2-post.raw"
+    raw.write_bytes(payload)
+    readiness = SimpleNamespace(safe_to_attempt_camera_input=True)
+    post = SimpleNamespace(
+        artifact=SimpleNamespace(
+            files=(("raw", raw.name),),
+            frame_id=4,
+            height=1,
+            label="r2-post",
+            pixel_format=PixelFormat.BGRA8888.value,
+            raw_sha256=hashlib.sha256(payload).hexdigest(),
+            width=1,
+        ),
+        captured_monotonic_s=4.0,
+        readiness=readiness,
+    )
+    result = SimpleNamespace(
+        plan=tool.camera_bridge_capture_plan(),
+        can_accept=False,
+        can_authorize_camera_input=False,
+        can_expose_resources=False,
+        can_validate_scene=False,
+        diagnostic_registration_can_override_production=False,
+        decision=None,
+        arm=None,
+        commit=None,
+        post=post,
+        terminal_reason=(
+            tool.CameraBridgeCaptureTerminalReason.POST_CAPTURE_PENDING_CLOSURE
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "evaluate_client_input_readiness",
+        lambda _frame: readiness,
+    )
+    monkeypatch.setattr(
+        tool,
+        "evaluate_varrock_east_camera",
+        lambda _frame: pytest.fail("pending post production must remain deferred"),
+    )
+
+    tool._require_bridge_capture_result_identities(result, output_root=tmp_path)
 
 
 def test_live_bridge_objective_exactly_matches_frozen_planner_objective(
@@ -574,6 +1021,13 @@ def test_bridge_lease_spans_runner_cleanup_revalidation_and_publication(
     )
     monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
     _patch_reviewed_inputs(tool, monkeypatch, tmp_path)
+    close = tool._evaluate_bridge_post_transition
+
+    def ordered_close(*args: object, **kwargs: object) -> object:
+        _Lease.events.append("post_registration_then_production")
+        return close(*args, **kwargs)
+
+    monkeypatch.setattr(tool, "_evaluate_bridge_post_transition", ordered_close)
     registration_events: list[str] = []
 
     class RecordingRegistrationEngine:
@@ -636,6 +1090,7 @@ def test_bridge_lease_spans_runner_cleanup_revalidation_and_publication(
         "runner",
         "input_cleanup",
         "capture_cleanup",
+        "post_registration_then_production",
         "revalidate",
         "publish",
         "lease_released",
@@ -648,7 +1103,7 @@ def test_bridge_lease_spans_runner_cleanup_revalidation_and_publication(
     assert payload["provenance"]["plan_id"] == (
         "issue31-fixed-camera-bridge-capture-r2"
     )
-    assert payload["provenance"]["plan_version"] == "1.0.0"
+    assert payload["provenance"]["plan_version"] == "1.1.0"
     evidence = payload["evidence"]
     assert evidence["development_only"] is True
     assert evidence["production_detector_remains_sole_scene_authority"] is True
@@ -656,11 +1111,16 @@ def test_bridge_lease_spans_runner_cleanup_revalidation_and_publication(
     assert evidence["registration_execution"] == {
         "north_to_commit_executed_in_input_seam": True,
         "planner_source_to_north_precomputed_before_arm": True,
-        "post_transition_registration_performed": False,
+        "post_transition_registration_performed": True,
         "post_transition_registration_stage": (
-            "required during later read-only graph ingestion"
+            "same_transaction_before_production_re_evaluation_and_report_seal"
         ),
+        "production_re_evaluated_after_registration": True,
     }
+    assert evidence["transition_candidate_eligible"] is False
+    assert evidence["action_transition_emitted"] is False
+    assert evidence["authenticated_ingestion_required"] is True
+    assert evidence["same_transaction_closure_completed"] is True
     assert evidence["new_live_input_from_robust_registration"] is False
     assert evidence["bridge_objective"]["first_missing_primitive"] == {
         "duration_seconds": 0.043,
@@ -713,6 +1173,217 @@ def test_bridge_adapter_identity_mismatch_stops_before_runner(
         "capture_cleanup",
         "lease_released",
     ]
+
+
+def test_final_production_identity_mismatch_seals_rejected_receipt(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda _path: output)
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "CaptureSource", _Source)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _Control)
+    monkeypatch.setattr(
+        tool,
+        "_EXPECTED_WINDOWS_CAMERA_ADAPTER",
+        f"{_Control.__module__}.{_Control.__qualname__}",
+    )
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    _patch_reviewed_inputs(tool, monkeypatch, tmp_path)
+
+    def run(*_args: object, **kwargs: object) -> object:
+        evidence = SimpleNamespace(
+            artifact=SimpleNamespace(
+                raw_sha256=hashlib.sha256(bytes((1, 2, 3, 255))).hexdigest()
+            ),
+            production=object(),
+        )
+        kwargs["pre_input_guard"](evidence, evidence, evidence)
+        kwargs["final_input_guard"](evidence, evidence, evidence)
+        return _capture_complete_result()
+
+    monkeypatch.setattr(tool, "run_fixed_camera_bridge_capture", run)
+    monkeypatch.setattr(
+        tool,
+        "_require_bridge_capture_result_identities",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("production mismatch")
+        ),
+    )
+
+    result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(output),
+            "--case-prefix",
+            "production-mismatch",
+            *_review_args(),
+        ]
+    )
+
+    assert result == 1
+    report = output / "reports" / "production-mismatch.camera.json"
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    evidence = payload["evidence"]
+    assert evidence["input"]["attempted"] is True
+    closure = evidence["post_transition_closure"]
+    assert closure["status"] == "seal_revalidation_error"
+    assert closure["semantic_states"] == {
+        "ACTION_BRIDGE_RECEIPT_PROVEN": True,
+        "BRIDGE_REJECTED": True,
+        "PRODUCTION_SUPPORTED_ENDPOINT": False,
+        "REGISTRATION_BRIDGE_OBSERVED": True,
+    }
+    assert evidence["transition_candidate_eligible"] is False
+    assert evidence["action_transition_emitted"] is False
+
+
+def test_persistent_artifact_failure_keeps_artifact_status_and_receipt(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda _path: output)
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "CaptureSource", _Source)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _Control)
+    monkeypatch.setattr(
+        tool,
+        "_EXPECTED_WINDOWS_CAMERA_ADAPTER",
+        f"{_Control.__module__}.{_Control.__qualname__}",
+    )
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    _patch_reviewed_inputs(tool, monkeypatch, tmp_path)
+    def run(*_args: object, **kwargs: object) -> object:
+        evidence = SimpleNamespace(
+            artifact=SimpleNamespace(
+                raw_sha256=hashlib.sha256(bytes((1, 2, 3, 255))).hexdigest()
+            ),
+            production=object(),
+        )
+        kwargs["pre_input_guard"](evidence, evidence, evidence)
+        kwargs["final_input_guard"](evidence, evidence, evidence)
+        return _capture_complete_result()
+
+    monkeypatch.setattr(tool, "run_fixed_camera_bridge_capture", run)
+
+    def artifact_closure(result: object, **_kwargs: object) -> tuple[object, object, None, None]:
+        closure = tool._new_bridge_post_transition_closure(
+            tool.CameraBridgePostTransitionStatus.ARTIFACT_ERROR,
+            "raw artifact missing",
+            commit_sha256="4" * 64,
+            post_sha256="5" * 64,
+            action_bridge_receipt_proven=True,
+            bridge_rejected=True,
+            artifact_exception=tool._bridge_closure_exception(
+                OSError("raw artifact missing")
+            ),
+        )
+        return result, closure, None, None
+
+    monkeypatch.setattr(tool, "_evaluate_bridge_post_transition", artifact_closure)
+    monkeypatch.setattr(
+        tool,
+        "_require_bridge_capture_result_identities",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("raw artifact still missing")
+        ),
+    )
+
+    exit_code = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(output),
+            "--case-prefix",
+            "artifact-persistent",
+            *_review_args(),
+        ]
+    )
+
+    assert exit_code == 1
+    report = output / "reports" / "artifact-persistent.camera.json"
+    evidence = json.loads(report.read_text(encoding="utf-8"))["evidence"]
+    closure = evidence["post_transition_closure"]
+    assert evidence["input"]["completed"] is True
+    assert closure["status"] == "artifact_error"
+    assert closure["artifact_exception"]["type"] == "OSError"
+    assert closure["seal_exception"]["type"] == "OSError"
+    assert closure["semantic_states"]["ACTION_BRIDGE_RECEIPT_PROVEN"] is True
+    assert closure["semantic_states"]["BRIDGE_REJECTED"] is True
+    assert evidence["transition_candidate_eligible"] is False
+
+
+def test_cleanup_failure_vetoes_post_closure_and_publication(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+
+    class FailingCleanupControl(_Control):
+        def release_all_held_keys(self) -> None:
+            self.released = True
+            _Lease.events.append("input_cleanup_failed")
+            raise RuntimeError("release state unknown")
+
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda _path: output)
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "CaptureSource", _Source)
+    monkeypatch.setattr(tool, "WindowsCameraControl", FailingCleanupControl)
+    monkeypatch.setattr(
+        tool,
+        "_EXPECTED_WINDOWS_CAMERA_ADAPTER",
+        f"{FailingCleanupControl.__module__}.{FailingCleanupControl.__qualname__}",
+    )
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    _patch_reviewed_inputs(tool, monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        tool,
+        "run_fixed_camera_bridge_capture",
+        lambda *_args, **_kwargs: _capture_complete_result(),
+    )
+    monkeypatch.setattr(
+        tool,
+        "_evaluate_bridge_post_transition",
+        lambda *_args, **_kwargs: pytest.fail(
+            "cleanup failure must veto post registration and production"
+        ),
+    )
+
+    exit_code = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(output),
+            "--case-prefix",
+            "cleanup-veto",
+            *_review_args(),
+        ]
+    )
+
+    assert exit_code == 2
+    assert "input_cleanup_failed" in _Lease.events
+    assert "capture_cleanup" in _Lease.events
+    report = output / "reports" / "cleanup-veto.camera.json"
+    assert not report.exists()
+    assert not report.with_name(f"{report.name}.sha256").exists()
 
 
 def test_bridge_prearm_registration_failure_stops_before_runner_or_input(
@@ -856,6 +1527,10 @@ def test_bridge_report_truthfully_distinguishes_prearm_and_input_seam_checks(
         raw_path=tmp_path / "north.raw",
     )
     precomputed = SimpleNamespace(as_dict=lambda: {"accepted": True})
+    closure = tool._new_bridge_post_transition_closure(
+        tool.CameraBridgePostTransitionStatus.NOT_REQUIRED,
+        "zero-input test",
+    )
 
     evidence = tool._bridge_capture_evidence(
         _capture_complete_result(input_attempted=False),
@@ -864,6 +1539,9 @@ def test_bridge_report_truthfully_distinguishes_prearm_and_input_seam_checks(
         north_handoff=north,
         north_registration=None,
         planner_source_registration=precomputed,
+        post_transition_closure=closure,
+        post_transition_production=None,
+        post_transition_registration=None,
         pointer_evidence=None,
         selected_class_name="SunAwtFrame",
         selected_title="RuneLite",
@@ -875,8 +1553,9 @@ def test_bridge_report_truthfully_distinguishes_prearm_and_input_seam_checks(
         "planner_source_to_north_precomputed_before_arm": True,
         "post_transition_registration_performed": False,
         "post_transition_registration_stage": (
-            "required during later read-only graph ingestion"
+            "not_applicable_without_complete_physical_receipt"
         ),
+        "production_re_evaluated_after_registration": False,
     }
 
 
