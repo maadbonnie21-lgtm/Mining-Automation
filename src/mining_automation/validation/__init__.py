@@ -7,6 +7,9 @@ contracts remain importable on every supported development platform.
 
 from __future__ import annotations
 
+from importlib import import_module
+from typing import TYPE_CHECKING, Final
+
 from .camera_arm_guard import (
     CAMERA_ARM_GUARD_EXCLUDED_REGIONS,
     CAMERA_ARM_GUARD_ID,
@@ -67,13 +70,6 @@ from .camera_guidance_v2 import (
     build_camera_guidance_v2_plan,
     build_camera_guidance_v2_probe,
     select_camera_guidance_v2,
-)
-from .camera_input_lease import (
-    CAMERA_INPUT_LEASE_NAME,
-    CameraInputLeaseApi,
-    CameraInputLeaseError,
-    CameraInputLeaseHeldError,
-    WindowsCameraInputLease,
 )
 from .camera_plan import (
     EXPECTED_CLIENT_HEIGHT,
@@ -185,19 +181,76 @@ from .client_readiness import (
     ClientReadinessReason,
     evaluate_client_input_readiness,
 )
-from .windows_camera import (
-    CAMERA_DRAG_STEP_INTERVAL_SECONDS,
-    CAMERA_KEY_RELEASE_SETTLE_SECONDS,
-    CAMERA_MIDDLE_ARMING_SETTLE_SECONDS,
-    CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS,
-    CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
-    COMPASS_CLICK_DWELL_SECONDS,
-    RealWindowsCameraApi,
-    WindowsCameraApi,
-    WindowsCameraControl,
-    WindowsCameraError,
-    WindowsCameraPreInputError,
+
+if TYPE_CHECKING:
+    from .camera_input_lease import (
+        CAMERA_INPUT_LEASE_NAME,
+        CameraInputLeaseApi,
+        CameraInputLeaseError,
+        CameraInputLeaseHeldError,
+        WindowsCameraInputLease,
+    )
+    from .windows_camera import (
+        CAMERA_DRAG_STEP_INTERVAL_SECONDS,
+        CAMERA_KEY_RELEASE_SETTLE_SECONDS,
+        CAMERA_MIDDLE_ARMING_SETTLE_SECONDS,
+        CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS,
+        CAMERA_WHEEL_EVENT_INTERVAL_SECONDS,
+        COMPASS_CLICK_DWELL_SECONDS,
+        RealWindowsCameraApi,
+        WindowsCameraApi,
+        WindowsCameraControl,
+        WindowsCameraError,
+        WindowsCameraPreInputError,
+    )
+
+
+_LAZY_CAMERA_INPUT_LEASE_EXPORTS: Final[frozenset[str]] = frozenset(
+    {
+        "CAMERA_INPUT_LEASE_NAME",
+        "CameraInputLeaseApi",
+        "CameraInputLeaseError",
+        "CameraInputLeaseHeldError",
+        "WindowsCameraInputLease",
+    }
 )
+_LAZY_WINDOWS_CAMERA_EXPORTS: Final[frozenset[str]] = frozenset(
+    {
+        "CAMERA_DRAG_STEP_INTERVAL_SECONDS",
+        "CAMERA_KEY_RELEASE_SETTLE_SECONDS",
+        "CAMERA_MIDDLE_ARMING_SETTLE_SECONDS",
+        "CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS",
+        "CAMERA_WHEEL_EVENT_INTERVAL_SECONDS",
+        "COMPASS_CLICK_DWELL_SECONDS",
+        "RealWindowsCameraApi",
+        "WindowsCameraApi",
+        "WindowsCameraControl",
+        "WindowsCameraError",
+        "WindowsCameraPreInputError",
+    }
+)
+
+
+def __getattr__(name: str) -> object:
+    """Load platform-input exports only when a caller explicitly requests one."""
+
+    module_name: str
+    if name in _LAZY_CAMERA_INPUT_LEASE_EXPORTS:
+        module_name = "camera_input_lease"
+    elif name in _LAZY_WINDOWS_CAMERA_EXPORTS:
+        module_name = "windows_camera"
+    else:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(f".{module_name}", __name__)
+    value: object = getattr(module, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    """Include lazy public exports in module introspection."""
+
+    return sorted(set(globals()) | set(__all__))
 
 __all__ = [
     "ABSOLUTE_MAX_SERVO_ARM_ATTEMPTS",

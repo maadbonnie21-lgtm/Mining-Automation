@@ -596,6 +596,7 @@ class _FakeControl:
         assert hwnd == 3131
         assert expected_class_name == "SunAwtFrame"
         assert expected_title == "RuneLite - Chief Luma"
+        self.target_identity = SimpleNamespace(process_id=456, thread_id=789)
         self.released = False
         type(self).last = self
 

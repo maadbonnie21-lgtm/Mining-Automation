@@ -367,6 +367,12 @@ class WindowsCameraControl:
     def hwnd(self) -> int:
         return self._hwnd
 
+    @property
+    def target_identity(self) -> WindowsCameraTargetIdentity:
+        """Return the immutable process/thread/class/title identity bound at init."""
+
+        return self._target_identity
+
     def preflight(self) -> CameraPreflightReceipt:
         """Focus the exact window and report fresh physical client geometry."""
 

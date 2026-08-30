@@ -738,8 +738,10 @@ still the canonical evidence. The machine planner disposition is
 
 The development-only fixed Right `0.043 s` capture wrapper is retained as an
 inert reviewed design for a possible future qualified planner result. Its
-same-transaction evidence protocol is version `1.1.0`. If later authorized,
-it must start from an authenticated fresh compass-north state and:
+same-transaction evidence protocol remains version `1.1.0`; the separate
+source-owned one-shot authorization protocol is R2.2 version `2.2.0`. The
+physical gate is still `False`. If later authorized on a separately reviewed
+exact head, it must start from an authenticated fresh compass-north state and:
 
 1. allow at most one input primitive between captures;
 2. obtain fresh decision, arm, no-input platform preflight, commit, and
@@ -756,9 +758,62 @@ it must start from an authenticated fresh compass-north state and:
 6. run the sole unchanged production evaluation of the exact post frame only
    after that registration attempt, even when registration rejects or raises;
    and
-7. seal the physical receipt, registration outcome, production outcome, exact
-   frame hashes, objective binding, and report sidecar together without a
-   second production-detector invocation.
+7. serialize the physical receipt, registration outcome, production outcome,
+   exact frame hashes, objective binding, and report sidecar without a second
+   production-detector invocation; and
+8. create a separate source-owned completion seal only after that exact report
+   is durable, so a pre-input reservation alone can never become an offline
+   action transition.
+
+R2.2 gives the possible future capture exactly one source-owned campaign slot.
+The campaign ID, action family, Right key, `0.043 s` hold, one-primitive limit,
+`1005x1078` geometry, target-title policy, camera adapter, input lease, and
+reviewed pointer point are compile-time values. The sentinel path is a fixed
+child of the repository's physical **common Git directory**, so a different
+worktree, `--case-prefix`, `--output`, environment variable, report path, or
+caller-provided head cannot create another slot. The path is not a CLI value.
+
+After the fresh decision/arm/preflight/commit sequence and after the existing
+clean-head, exact-window, registration, geometry, pointer, freshness, and
+released-input checks, the final input guard uses exclusive file creation to
+consume the campaign. It writes canonical bytes, flushes, and `fsync`s before
+the plan runner can send Right-down. The sentinel is never removed. An empty,
+partial, tampered, interrupted, cleanup-failed, publication-failed, or
+partial/unknown attempt remains consumed and every later invocation sends zero
+input. Deleting or modifying it is evidence tampering, not a supported retry;
+a retry requires a new source campaign and a new lead-reviewed code head.
+
+The reservation sentinel records the actual clean head, exact authenticated
+R1/R2 and fresh north report digests, north post and final commit pixel hashes,
+and the exact selected HWND/process/thread/class/title hash. Those dynamic
+hashes are evidence only: they cannot select an action, change the frozen
+source/objective, enable the source gate, or create another campaign. A cheap
+precheck can reject an already consumed campaign before the lease/backend; the
+exclusive create at the final seam remains the authoritative race-safe
+operation.
+
+A different fixed file in the same common-Git namespace seals completion. It
+is created only after the exact capture report and sidecar exist, the
+machine-global input lease has released successfully, and the clean head has
+been rechecked. The canonical bytes are first written and `fsync`ed to a fixed,
+exclusive, never-removed pending witness; only then is an atomic hard link made
+at the final seal path. An interrupted write can therefore consume the campaign
+but can never leave an authentic final completion seal. Its canonical payload
+binds the reservation digest, capture-report digest, complete input receipt,
+every decision/arm/commit/post hash and monotonic timestamp, arm/guard/
+preflight/input chain, exact commit and post hashes, pointer/window evidence,
+all three registration records, and the complete closure. It is also never
+removed. Missing, partial, stale, interrupted, or tampered completion evidence
+cannot yield an offline `ActionTransition`, even when the pre-input reservation
+is authentic.
+
+The fresh north handoff is also exact. Its private report records the selected
+HWND, class, title hash, adapter identity, and source-owned title policy. The
+bridge loader authenticates its exact launcher arguments, fixed compass plan,
+single complete receipt, focused geometry, raw post pixels, readiness,
+unchanged production result, age, and selected-window binding. A substituted
+north report or a different live HWND/class/title stops before reservation or
+bridge input.
 
 Registration may reject or characterize the saved edge, but it may not
 validate the scene, expose resources, authorize another primitive, or override
@@ -769,16 +824,83 @@ or exact receipt never implies production support.
 
 The live artifact is report-only: it never emits an `ActionTransition`, always
 marks transition-candidate eligibility false, and states that authenticated
-offline ingestion is still required. A future ingester must compute and verify
-the report/sidecar digest and rederive receipt, raw frame, registration, and
-production facts before constructing any graph edge. The command has a
-source-literal, caller-inaccessible disabled gate and stops before loading a
-live handoff, acquiring the input lease, or constructing the capture backend.
-A planner report is evidence only and can never satisfy or toggle that gate.
-Enabling one future sample therefore requires a new exact code head and
-explicit lead review; no CLI flag, report field, environment variable, or
-caller-selected value can do so. No live input from this design is authorized,
-and this section makes no reacquisition-success claim.
+offline ingestion is still required. The read-only post verifier is the only
+supported ingestion path:
+
+```powershell
+.\.venv\Scripts\python.exe tools\verify_issue31_bridge_r2_post.py `
+  --expected-head <EXACT_HEAD> `
+  --r1-report diagnostics\issue31-robust-registration-r1\issue31-robust-registration-r1-<HEAD_PREFIX>.json `
+  --r1-sha256 <R1_REPORT_SHA256> `
+  --r2-report diagnostics\issue31-camera-bridge-r2\issue31-camera-bridge-r2-<HEAD_PREFIX>.json `
+  --r2-sha256 <R2_REPORT_SHA256> `
+  --capture-report diagnostics\issue31-camera-bridge-r2\reports\<CASE_PREFIX>.camera.json `
+  --capture-sha256 <CAPTURE_REPORT_SHA256> `
+  --completion-sha256 <COMPLETION_SEAL_SHA256> `
+  --report diagnostics\issue31-camera-bridge-r2\issue31-camera-bridge-r2-post-<HEAD_PREFIX>.json
+```
+
+The verifier accepts no capture root, action, axis, direction, duration, or
+input option. It derives the private capture root as the capture report's
+grandparent, constrains every artifact below that ignored diagnostics root,
+and resolves the four raw references as
+`frames/<CASE_PREFIX>-r2-{decision,arm,commit,post}.raw`. It authenticates the
+exact report bytes and adjacent sidecars, rejects duplicate keys and non-finite
+JSON numbers, binds both analysis reports and the capture report to the same
+clean exact head, and reloads the frozen R1/R2 corpus from its authenticated
+paths. The capture receipt must reconstruct as exactly one Right-key hold for
+`0.043 s`, with one complete `1/1` `key_down` receipt followed by one complete
+`1/1` `key_up` receipt at focused `1005x1078` geometry.
+
+All material facts are rederived rather than accepted as report booleans. The
+verifier reloads and hashes decision, arm, commit, and post pixels; recomputes
+all four readiness and unchanged-production results plus all three pre-input
+structural guards; authenticates the sealed source-to-fresh-north and
+fresh-north-to-commit execution fields; and checks the same-transaction closure
+and its four explicit semantic states. It pins the one-second arm maximum,
+requires the exact north/decision/arm/arm-origin/commit/input/receipt/post
+ordering, keeps north-to-input below 30 seconds, requires at least the frozen
+`0.043 s` delivery interval, and authenticates the one-second post settle. It
+also reopens the one fixed common-Git campaign sentinel, exact-compares its
+canonical bytes and digest, and requires the capture report's one-shot object
+to match the authenticated sentinel. Finally it reopens and exact-compares the
+separate completion seal described above. A missing, partial, stale, or
+tampered reservation or completion seal rejects ingestion. Importing this
+offline command does not load the Windows camera adapter or machine-global
+input-lease module. The verification core independently
+recomputes the exact frozen-source-to-commit visual prefix and the
+commit-to-post registration and graph evidence. A graph action transition may
+be constructed only after that authentication. Its source is the exact fresh
+**commit** payload at the input seam and its target is the exact immediate
+**post** payload. The frozen
+`c1cb6fe144600ce153b1ceb2e90d6e375d42babea1eda6a08120efbc7ed2a4cd`
+objective source remains a precondition binding and is never substituted for
+the physical commit pixels.
+
+The read-only result reports the receipt-backed commit-to-post action path and
+the cycle-verified post-to-supported visual path separately. Verification
+requires the new post endpoint to earn all-three-zone, cycle-verified edges to
+both prior frozen endpoints and to at least one common reviewed supported
+anchor, while the exact action edge is itself cycle verified. Both the commit
+and replication post must independently retain the unchanged production
+fail-closed result: scene rejected, every resource `UNCERTAIN`, and zero
+definitive targets. R1 negative roles remain quarantined, production remains
+the sole scene authority, and a verified diagnostic bridge still cannot expose
+resources or authorize input.
+Exit `0` means the exact saved post evidence satisfies that offline contract;
+exit `1` records a truthful insufficient-evidence/STOP result; and exit `2`
+means authentication, setup, provenance, or publication failed. Every outcome
+sends zero input and can never authorize a second sample.
+
+The live capture command itself still has a source-literal,
+caller-inaccessible disabled gate and stops before inspecting/reserving the
+campaign, loading a live handoff, acquiring the input lease, or constructing
+the capture backend. A planner or post-verifier report is evidence only and can
+never satisfy or toggle that gate. Enabling one future sample therefore
+requires a new exact code head and explicit lead review; no CLI flag, report
+field, environment variable, or caller-selected value can do so. No live input
+from this design is authorized, and this section makes no reacquisition-success
+claim.
 
 ## Repeated trial protocol
 

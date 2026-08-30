@@ -1917,6 +1917,13 @@ def test_real_api_materializes_stable_window_identity(
     )
 
 
+def test_control_exposes_immutable_target_identity_bound_at_construction() -> None:
+    api = FakeWindowsCameraApi()
+    control = WindowsCameraControl(123, api)
+
+    assert control.target_identity == api.identity
+
+
 @pytest.mark.parametrize("hwnd", [0, -1, True, 1.5])
 def test_control_requires_positive_integer_hwnd(hwnd: object) -> None:
     with pytest.raises(ValueError, match="positive integer"):

@@ -52,6 +52,19 @@ from mining_automation.validation.camera_bootstrap import (  # noqa: E402
     CameraNorthBootstrapResult,
     run_camera_north_bootstrap,
 )
+from mining_automation.validation.camera_bridge_authorization import (  # noqa: E402
+    CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID,
+    CAMERA_BRIDGE_AUTHORIZATION_ID,
+    CAMERA_BRIDGE_AUTHORIZATION_VERSION,
+    CameraBridgeAuthorizationEvidence,
+    CameraBridgeAuthorizationReservation,
+    CameraBridgeCompletionEvidence,
+    camera_bridge_authorization_consumed,
+    canonical_camera_bridge_component_sha256,
+    repository_worktree_git_dir,
+    reserve_camera_bridge_authorization,
+    seal_camera_bridge_completion,
+)
 from mining_automation.validation.camera_bridge_capture import (  # noqa: E402
     CAMERA_BRIDGE_CAPTURE_HOLD_SECONDS,
     CAMERA_BRIDGE_CAPTURE_ID,
@@ -194,6 +207,16 @@ def _drag_open_viewport_dict() -> dict[str, int]:
 @dataclass(slots=True)
 class _ReportPublicationState:
     published_by_this_invocation: bool = False
+    pending_bridge_completion: _PendingBridgeCompletion | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingBridgeCompletion:
+    """Completion evidence that cannot be sealed until the lease exits cleanly."""
+
+    git_head_sha: str
+    reservation: CameraBridgeAuthorizationReservation
+    evidence: CameraBridgeCompletionEvidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +252,11 @@ class _BridgeNorthHandoff:
     report_sha256: str
     frame: Frame
     raw_path: Path
+    window_hwnd: int
+    window_process_id: int
+    window_thread_id: int
+    window_class_name: str
+    window_title_sha256: str
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -238,6 +266,13 @@ class _BridgeNorthHandoff:
             "raw_sha256": hashlib.sha256(self.frame.payload).hexdigest(),
             "report_path": _display_repo_path(self.report_path),
             "report_sha256": self.report_sha256,
+            "window_binding": {
+                "class_name": self.window_class_name,
+                "hwnd": self.window_hwnd,
+                "process_id": self.window_process_id,
+                "thread_id": self.window_thread_id,
+                "title_sha256": self.window_title_sha256,
+            },
         }
 
 
@@ -797,20 +832,69 @@ def _build_perturbation_plans(args: argparse.Namespace) -> tuple[CameraPlan, ...
     )
 
 
+def _trusted_git_environment() -> dict[str, str]:
+    """Build a minimal environment with caller Git configuration disabled."""
+
+    environment = {
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+        "LANG": "C",
+        "LC_ALL": "C",
+    }
+    for name in ("COMSPEC", "SYSTEMROOT", "TEMP", "TMP", "WINDIR"):
+        value = os.environ.get(name)
+        if value:
+            environment[name] = value
+    return environment
+
+
+def _trusted_git_executable() -> str:
+    candidates = [Path("/usr/bin/git"), Path("/usr/local/bin/git")]
+    if os.name == "nt":
+        drive = Path(sys.executable).drive or "C:"
+        candidates.insert(0, Path(drive + "/Program Files/Git/cmd/git.exe"))
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate.resolve())
+    raise RuntimeError("cannot locate an approved absolute Git executable")
+
+
+def _trusted_git_command(*arguments: str) -> list[str]:
+    return [
+        _trusted_git_executable(),
+        f"--git-dir={repository_worktree_git_dir(_REPO_ROOT)}",
+        f"--work-tree={_REPO_ROOT.resolve()}",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.untrackedCache=false",
+        "-c",
+        "core.autocrlf=input",
+        "-c",
+        "core.excludesFile=",
+        *arguments,
+    ]
+
+
 def _git_state() -> tuple[str, bool]:
+    environment = _trusted_git_environment()
     head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
+        _trusted_git_command("rev-parse", "HEAD"),
         cwd=_REPO_ROOT,
         check=True,
         capture_output=True,
         text=True,
+        env=environment,
     ).stdout.strip()
     status = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=all"],
+        _trusted_git_command("status", "--porcelain", "--untracked-files=all"),
         cwd=_REPO_ROOT,
         check=True,
         capture_output=True,
         text=True,
+        env=environment,
     ).stdout
     return head, not status.strip()
 
@@ -889,6 +973,9 @@ def _require_bridge_capture_runtime_identities() -> None:
     detector = build_varrock_east_iron_detector()
     plan = camera_bridge_capture_plan()
     observed: dict[str, object] = {
+        "authorization_campaign_id": CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID,
+        "authorization_id": CAMERA_BRIDGE_AUTHORIZATION_ID,
+        "authorization_version": CAMERA_BRIDGE_AUTHORIZATION_VERSION,
         "bridge_id": CAMERA_BRIDGE_CAPTURE_ID,
         "bridge_version": CAMERA_BRIDGE_CAPTURE_VERSION,
         "detector_id": detector.metadata.detector_id,
@@ -916,6 +1003,11 @@ def _require_bridge_capture_runtime_identities() -> None:
         "settle_seconds": CAMERA_BRIDGE_CAPTURE_SETTLE_SECONDS,
     }
     expected: dict[str, object] = {
+        "authorization_campaign_id": (
+            "issue31-r2-north-up-p610-y043-reset-right-0043-v1"
+        ),
+        "authorization_id": "issue31-r2-one-shot-bridge-authorization",
+        "authorization_version": "2.2.0",
         "bridge_id": "issue31-fixed-camera-bridge-capture-r2",
         "bridge_version": "1.1.0",
         "detector_id": _EXPECTED_DETECTOR_ID,
@@ -1209,11 +1301,12 @@ def _resolve_private_output_root(output: Path) -> Path:
             "pixels remain private"
         )
     ignored = subprocess.run(
-        ["git", "check-ignore", "--quiet", "--", str(root)],
+        _trusted_git_command("check-ignore", "--quiet", "--", str(root)),
         cwd=_REPO_ROOT,
         check=False,
         capture_output=True,
         text=True,
+        env=_trusted_git_environment(),
     )
     if ignored.returncode != 0:
         raise ValueError("--output must be excluded by the repository ignore rules")
@@ -1241,11 +1334,12 @@ def _load_private_bound_report(
     if diagnostics_root not in resolved.parents or not resolved.is_file():
         raise ValueError("reviewed report must be an existing diagnostics/ file")
     ignored = subprocess.run(
-        ["git", "check-ignore", "--quiet", "--", str(resolved)],
+        _trusted_git_command("check-ignore", "--quiet", "--", str(resolved)),
         cwd=_REPO_ROOT,
         check=False,
         capture_output=True,
         text=True,
+        env=_trusted_git_environment(),
     )
     if ignored.returncode != 0:
         raise ValueError("reviewed report must remain private under ignore rules")
@@ -1263,6 +1357,108 @@ def _load_private_bound_report(
         parse_constant=_reject_nonstandard_json_number,
     )
     return resolved, _json_object(parsed, "reviewed report")
+
+
+def _require_north_handoff_command_argv(
+    value: object,
+    *,
+    report_path: Path,
+) -> None:
+    """Authenticate the exact fixed north command and its artifact namespace."""
+
+    argv = _json_list(value, "north provenance command_argv")
+    if (
+        len(argv) < 5
+        or any(not isinstance(argument, str) or not argument for argument in argv)
+        or argv[0] != str(Path(sys.executable).resolve())
+        or argv[1] != str(Path(__file__).resolve())
+        or argv[2] != _NORTH_BOOTSTRAP_COMMAND
+    ):
+        raise ValueError("north handoff command_argv is not the fixed launcher")
+    options: dict[str, str] = {}
+    index = 3
+    while index < len(argv):
+        token = argv[index]
+        assert isinstance(token, str)
+        if token in ("--case-prefix", "--output"):
+            if token in options or index + 1 >= len(argv):
+                raise ValueError("north handoff command_argv has invalid options")
+            option_value = argv[index + 1]
+            if not isinstance(option_value, str) or not option_value:
+                raise ValueError("north handoff command_argv has invalid options")
+            options[token] = option_value
+            index += 2
+            continue
+        matching = next(
+            (
+                option
+                for option in ("--case-prefix", "--output")
+                if token.startswith(f"{option}=")
+            ),
+            None,
+        )
+        if matching is None or matching in options:
+            raise ValueError("north handoff command_argv contains an override")
+        options[matching] = token.removeprefix(f"{matching}=")
+        if not options[matching]:
+            raise ValueError("north handoff command_argv has an empty option")
+        index += 1
+    expected_prefix = report_path.name.removesuffix(".camera.json")
+    if options.get("--case-prefix") != expected_prefix:
+        raise ValueError("north handoff command does not bind its report prefix")
+    output_value = options.get("--output")
+    output_root = (
+        (_REPO_ROOT / _NORTH_BOOTSTRAP_OUTPUT).resolve()
+        if output_value is None
+        else (
+            Path(output_value)
+            if Path(output_value).is_absolute()
+            else _REPO_ROOT / output_value
+        ).resolve()
+    )
+    if output_root != report_path.parent.parent.resolve():
+        raise ValueError("north handoff command does not bind its output root")
+
+
+def _bridge_north_window_binding(
+    evidence: dict[str, Any],
+) -> tuple[int, int, int, str, str]:
+    """Authenticate the exact selected-window identity recorded by north."""
+
+    window_binding = _json_object(
+        evidence.get("selected_window_binding"),
+        "north selected-window binding",
+    )
+    window_hwnd = window_binding.get("hwnd")
+    window_process_id = window_binding.get("process_id")
+    window_thread_id = window_binding.get("thread_id")
+    window_class_name = window_binding.get("class_name")
+    window_title_sha256 = window_binding.get("title_sha256")
+    if (
+        any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in (window_hwnd, window_process_id, window_thread_id)
+        )
+        or not isinstance(window_class_name, str)
+        or not window_class_name
+        or window_class_name != window_class_name.strip()
+        or not isinstance(window_title_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", window_title_sha256) is None
+        or window_binding.get("adapter_identity")
+        != _EXPECTED_WINDOWS_CAMERA_ADAPTER
+        or window_binding.get("title_substring") != DEFAULT_TITLE_SUBSTRING
+    ):
+        raise ValueError("north handoff lacks an exact selected-window binding")
+    assert isinstance(window_hwnd, int)
+    assert isinstance(window_process_id, int)
+    assert isinstance(window_thread_id, int)
+    return (
+        window_hwnd,
+        window_process_id,
+        window_thread_id,
+        window_class_name,
+        window_title_sha256,
+    )
 
 
 def _load_bridge_north_handoff(
@@ -1294,6 +1490,10 @@ def _load_bridge_north_handoff(
         for field, value in required_provenance.items()
     ):
         raise ValueError("north handoff provenance does not match reviewed head")
+    _require_north_handoff_command_argv(
+        provenance.get("command_argv"),
+        report_path=report_path,
+    )
     evidence = _json_object(payload.get("evidence"), "north evidence")
     if (
         evidence.get("command") != _NORTH_BOOTSTRAP_COMMAND
@@ -1391,11 +1591,23 @@ def _load_bridge_north_handoff(
     _require_north_bootstrap_production_identity("north-handoff", production)
     if readiness.safe_to_attempt_camera_input is not True or production.passed:
         raise ValueError("north handoff must be ready and production-rejected")
+    (
+        window_hwnd,
+        window_process_id,
+        window_thread_id,
+        window_class_name,
+        window_title_sha256,
+    ) = _bridge_north_window_binding(evidence)
     return _BridgeNorthHandoff(
         report_path=report_path,
         report_sha256=expected_sha256,
         frame=frame,
         raw_path=raw_path,
+        window_hwnd=window_hwnd,
+        window_process_id=window_process_id,
+        window_thread_id=window_thread_id,
+        window_class_name=window_class_name,
+        window_title_sha256=window_title_sha256,
     )
 
 
@@ -1668,11 +1880,12 @@ def _load_bridge_analysis_source(
     if diagnostics_root not in raw_path.parents or not raw_path.is_file():
         raise ValueError("R2 planner source raw path escaped or is missing")
     ignored = subprocess.run(
-        ["git", "check-ignore", "--quiet", "--", str(raw_path)],
+        _trusted_git_command("check-ignore", "--quiet", "--", str(raw_path)),
         cwd=_REPO_ROOT,
         check=False,
         capture_output=True,
         text=True,
+        env=_trusted_git_environment(),
     )
     if ignored.returncode != 0:
         raise ValueError("R2 planner source raw pixels must remain private")
@@ -3164,6 +3377,11 @@ def _run_live_north_bootstrap(
     source: CaptureSource | None = None
     control: WindowsCameraControl | None = None
     result: CameraNorthBootstrapResult | None = None
+    selected_hwnd: int | None = None
+    selected_process_id: int | None = None
+    selected_thread_id: int | None = None
+    selected_class_name: str | None = None
+    selected_title_sha256: str | None = None
     handled_error: Exception | None = None
     unhandled_error: BaseException | None = None
     cleanup_errors: list[str] = []
@@ -3189,6 +3407,11 @@ def _run_live_north_bootstrap(
         selected = backend.selected_window
         if selected is None:
             raise RuntimeError("capture succeeded without a selected RuneLite window")
+        selected_hwnd = selected.hwnd
+        selected_class_name = selected.class_name
+        selected_title_sha256 = hashlib.sha256(
+            selected.title.encode("utf-8")
+        ).hexdigest()
         recorder = _PrivateArtifactRecorder(
             output_root,
             case_prefix=case_prefix,
@@ -3201,6 +3424,8 @@ def _run_live_north_bootstrap(
             expected_class_name=selected.class_name,
             expected_title=selected.title,
         )
+        selected_process_id = control.target_identity.process_id
+        selected_thread_id = control.target_identity.thread_id
 
         def require_same_clean_head_before_input(
             initial: CameraServoFrameEvidence,
@@ -3271,7 +3496,14 @@ def _run_live_north_bootstrap(
     if cleanup_errors:
         print("; ".join(cleanup_errors), file=sys.stderr)
         return 2
-    if result is None:  # pragma: no cover - defensive composition guard
+    if (
+        result is None
+        or selected_hwnd is None
+        or selected_process_id is None
+        or selected_thread_id is None
+        or selected_class_name is None
+        or selected_title_sha256 is None
+    ):  # pragma: no cover - defensive composition guard
         print("North bootstrap produced no result.", file=sys.stderr)
         return 2
 
@@ -3298,9 +3530,22 @@ def _run_live_north_bootstrap(
             command_argv=command_argv,
             tracked_worktree_clean=True,
         )
+        bootstrap_evidence = _bootstrap_result_dict(
+            result,
+            tracked_worktree_clean=True,
+        )
+        bootstrap_evidence["selected_window_binding"] = {
+            "adapter_identity": _EXPECTED_WINDOWS_CAMERA_ADAPTER,
+            "class_name": selected_class_name,
+            "hwnd": selected_hwnd,
+            "process_id": selected_process_id,
+            "thread_id": selected_thread_id,
+            "title_sha256": selected_title_sha256,
+            "title_substring": DEFAULT_TITLE_SUBSTRING,
+        }
         written = write_camera_validation_report(
             report_path,
-            _bootstrap_result_dict(result, tracked_worktree_clean=True),
+            bootstrap_evidence,
             provenance,
         )
         publication_state.published_by_this_invocation = True
@@ -3990,6 +4235,7 @@ def _bridge_capture_evidence(
     result: CameraBridgeCaptureResult,
     *,
     analysis_evidence: _BridgeAnalysisEvidence,
+    authorization_reservation: CameraBridgeAuthorizationReservation | None,
     adapter_identity: str,
     north_handoff: _BridgeNorthHandoff,
     north_registration: RobustWorldRegistration | None,
@@ -4038,6 +4284,11 @@ def _bridge_capture_evidence(
             "command": _BRIDGE_CAPTURE_COMMAND,
             "development_only": True,
             "analysis_evidence": analysis_evidence.as_dict(),
+            "one_shot_authorization": (
+                None
+                if authorization_reservation is None
+                else authorization_reservation.as_dict()
+            ),
             "compass_north_handoff": north_handoff.as_dict(),
             "compass_north_registration": (
                 None
@@ -4110,6 +4361,72 @@ def _bridge_capture_evidence(
     return evidence
 
 
+def _bridge_completion_evidence(
+    capture_evidence: dict[str, object],
+    *,
+    capture_report_sha256: str,
+    authorization_reservation: CameraBridgeAuthorizationReservation,
+) -> CameraBridgeCompletionEvidence:
+    """Bind every completed stage used by offline ActionTransition ingestion."""
+
+    receipt = _json_object(capture_evidence.get("receipt"), "bridge receipt")
+    frames = _json_object(capture_evidence.get("frames"), "bridge frames")
+    closure = _json_object(
+        capture_evidence.get("post_transition_closure"),
+        "bridge post-transition closure",
+    )
+    pointer_mapping = _json_object(
+        capture_evidence.get("pointer_mapping"),
+        "bridge pointer mapping",
+    )
+    commit_sha256 = closure.get("commit_sha256")
+    post_sha256 = closure.get("post_sha256")
+    if (
+        closure.get("completed") is not True
+        or not isinstance(commit_sha256, str)
+        or not isinstance(post_sha256, str)
+    ):
+        raise RuntimeError(
+            "bridge completion seal requires a complete exact commit/post closure"
+        )
+    stage_chain = {
+        "arm_age": capture_evidence.get("arm_age"),
+        "frames": frames,
+        "guards": capture_evidence.get("guards"),
+        "input": capture_evidence.get("input"),
+        "preflight": capture_evidence.get("preflight"),
+    }
+    registrations = {
+        "compass_north_handoff": capture_evidence.get("compass_north_handoff"),
+        "compass_north_registration": capture_evidence.get(
+            "compass_north_registration"
+        ),
+        "planner_source_registration": capture_evidence.get(
+            "planner_source_registration"
+        ),
+        "post_transition_registration": capture_evidence.get(
+            "post_transition_registration"
+        ),
+    }
+    return CameraBridgeCompletionEvidence(
+        authorization_sentinel_sha256=(
+            authorization_reservation.sentinel_sha256
+        ),
+        capture_report_sha256=capture_report_sha256,
+        receipt_sha256=canonical_camera_bridge_component_sha256(receipt),
+        stage_chain_sha256=canonical_camera_bridge_component_sha256(stage_chain),
+        commit_sha256=commit_sha256,
+        post_sha256=post_sha256,
+        pointer_mapping_sha256=canonical_camera_bridge_component_sha256(
+            pointer_mapping
+        ),
+        registrations_sha256=canonical_camera_bridge_component_sha256(
+            registrations
+        ),
+        closure_sha256=canonical_camera_bridge_component_sha256(closure),
+    )
+
+
 def _print_bridge_capture_summary(
     result: CameraBridgeCaptureResult,
     *,
@@ -4153,6 +4470,7 @@ def _run_live_bridge_capture(
     post_transition_production: CameraEvaluation | None = None
     post_transition_registration: RobustWorldRegistration | None = None
     pointer_evidence: _BridgePointerEvidence | None = None
+    authorization_reservation: CameraBridgeAuthorizationReservation | None = None
     handled_error: Exception | None = None
     unhandled_error: BaseException | None = None
     cleanup_errors: list[str] = []
@@ -4185,6 +4503,18 @@ def _run_live_bridge_capture(
         selected = backend.selected_window
         if selected is None:
             raise RuntimeError("capture succeeded without a selected RuneLite window")
+        selected_title_sha256 = hashlib.sha256(
+            selected.title.encode("utf-8")
+        ).hexdigest()
+        if (
+            selected.hwnd != north_handoff.window_hwnd
+            or selected.class_name != north_handoff.window_class_name
+            or selected_title_sha256 != north_handoff.window_title_sha256
+        ):
+            raise RuntimeError(
+                "fresh compass-north handoff does not bind the selected RuneLite "
+                "window"
+            )
         selected_class_name = selected.class_name
         selected_title = selected.title
         recorder = _PrivateArtifactRecorder(
@@ -4199,6 +4529,18 @@ def _run_live_bridge_capture(
             expected_class_name=selected.class_name,
             expected_title=selected.title,
         )
+        control_identity = control.target_identity
+        if (
+            control_identity.process_id != north_handoff.window_process_id
+            or control_identity.thread_id != north_handoff.window_thread_id
+            or control_identity.class_name != north_handoff.window_class_name
+            or hashlib.sha256(control_identity.title.encode("utf-8")).hexdigest()
+            != north_handoff.window_title_sha256
+        ):
+            raise RuntimeError(
+                "fresh compass-north handoff does not bind the current RuneLite "
+                "process/thread/window identity"
+            )
         adapter_identity = f"{type(control).__module__}.{type(control).__qualname__}"
         if adapter_identity != _EXPECTED_WINDOWS_CAMERA_ADAPTER:
             raise RuntimeError("R2 camera adapter identity mismatch")
@@ -4313,13 +4655,46 @@ def _run_live_bridge_capture(
                 hwnd=selected.hwnd,
             )
 
+        def consume_one_shot_authorization_before_input(
+            decision: CameraServoFrameEvidence,
+            arm: CameraServoFrameEvidence,
+            commit: CameraServoFrameEvidence,
+        ) -> None:
+            """Revalidate the live seam, then atomically burn the campaign."""
+
+            nonlocal authorization_reservation
+            require_same_clean_head_before_input(decision, arm, commit)
+            if authorization_reservation is not None:  # pragma: no cover - defensive
+                raise RuntimeError(
+                    "one-shot bridge authorization was consumed more than once"
+                )
+            authorization_reservation = reserve_camera_bridge_authorization(
+                _REPO_ROOT,
+                git_head_sha=expected_head,
+                source_gate_enabled=_BRIDGE_LIVE_INPUT_ENABLED,
+                evidence=CameraBridgeAuthorizationEvidence(
+                    r1_report_sha256=analysis_evidence.r1_report_sha256,
+                    r2_report_sha256=analysis_evidence.report_sha256,
+                    north_report_sha256=north_handoff.report_sha256,
+                    north_post_sha256=hashlib.sha256(
+                        north_handoff.frame.payload
+                    ).hexdigest(),
+                    commit_sha256=commit.artifact.raw_sha256,
+                    target_hwnd=selected.hwnd,
+                    target_process_id=control_identity.process_id,
+                    target_thread_id=control_identity.thread_id,
+                    target_class_name=selected.class_name,
+                    target_title_sha256=selected_title_sha256,
+                ),
+            )
+
         result = run_fixed_camera_bridge_capture(
             source,
             control,
             sleeper=time.sleep,
             recorder=recorder,
             pre_input_guard=require_same_clean_head_before_input,
-            final_input_guard=require_same_clean_head_before_input,
+            final_input_guard=consume_one_shot_authorization_before_input,
         )
     except (
         CaptureError,
@@ -4469,7 +4844,8 @@ def _run_live_bridge_capture(
                     seal_exception=identity_exception,
                 )
         if result.input_attempted and (
-            planner_source_registration is None
+            authorization_reservation is None
+            or planner_source_registration is None
             or north_registration is None
             or pointer_evidence is None
         ):
@@ -4486,22 +4862,24 @@ def _run_live_bridge_capture(
             command_argv=command_argv,
             tracked_worktree_clean=True,
         )
+        capture_evidence = _bridge_capture_evidence(
+            result,
+            analysis_evidence=analysis_evidence,
+            authorization_reservation=authorization_reservation,
+            adapter_identity=adapter_identity,
+            north_handoff=north_handoff,
+            north_registration=north_registration,
+            planner_source_registration=planner_source_registration,
+            post_transition_closure=post_transition_closure,
+            post_transition_production=post_transition_production,
+            post_transition_registration=post_transition_registration,
+            pointer_evidence=pointer_evidence,
+            selected_class_name=selected_class_name,
+            selected_title=selected_title,
+        )
         written = write_camera_validation_report(
             report_path,
-            _bridge_capture_evidence(
-                result,
-                analysis_evidence=analysis_evidence,
-                adapter_identity=adapter_identity,
-                north_handoff=north_handoff,
-                north_registration=north_registration,
-                planner_source_registration=planner_source_registration,
-                post_transition_closure=post_transition_closure,
-                post_transition_production=post_transition_production,
-                post_transition_registration=post_transition_registration,
-                pointer_evidence=pointer_evidence,
-                selected_class_name=selected_class_name,
-                selected_title=selected_title,
-            ),
+            capture_evidence,
             provenance,
         )
         publication_state.published_by_this_invocation = True
@@ -4519,7 +4897,29 @@ def _run_live_bridge_capture(
             if retraction_errors:
                 detail += " " + "; ".join(retraction_errors)
             raise RuntimeError(detail)
+        if post_transition_closure.completed:
+            if authorization_reservation is None:
+                raise RuntimeError(
+                    "complete bridge transaction lacks one-shot authorization"
+                )
+            publication_state.pending_bridge_completion = _PendingBridgeCompletion(
+                git_head_sha=expected_head,
+                reservation=authorization_reservation,
+                evidence=_bridge_completion_evidence(
+                    capture_evidence,
+                    capture_report_sha256=written.sha256,
+                    authorization_reservation=authorization_reservation,
+                ),
+            )
     except (FileExistsError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        if publication_state.published_by_this_invocation:
+            retraction_errors = _retract_report_targets_after_lease_failure(
+                report_path,
+                digest_path,
+            )
+            publication_state.published_by_this_invocation = False
+            if retraction_errors:
+                exc.add_note("; ".join(retraction_errors))
         print(f"Cannot write R2 bridge report: {exc}", file=sys.stderr)
         return 2
 
@@ -4593,10 +4993,18 @@ def _main_bridge_capture(command_args: list[str]) -> int:
         return 2
     if not _BRIDGE_LIVE_INPUT_ENABLED:
         print(
-            "R2.1 bridge capture remains input-disabled pending a future "
+            "R2.2 bridge capture remains input-disabled pending a future "
             "exact-head LEAD authorization; no report can grant input authority.",
             file=sys.stderr,
         )
+        return 2
+    try:
+        if camera_bridge_authorization_consumed(_REPO_ROOT):
+            raise RuntimeError(
+                "the source-owned R2.2 one-shot campaign is already consumed"
+            )
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"Cannot establish R2.2 one-shot state: {exc}", file=sys.stderr)
         return 2
     try:
         analysis_evidence = _load_bridge_analysis_evidence(
@@ -4619,7 +5027,7 @@ def _main_bridge_capture(command_args: list[str]) -> int:
     try:
         with lease:
             lease_entered = True
-            return _run_live_bridge_capture(
+            outcome = _run_live_bridge_capture(
                 analysis_evidence=analysis_evidence,
                 output_root=output_root,
                 report_path=report_path,
@@ -4634,7 +5042,6 @@ def _main_bridge_capture(command_args: list[str]) -> int:
         retraction_errors: tuple[str, ...] = ()
         if (
             lease_entered
-            and lease.acquired
             and publication_state.published_by_this_invocation
         ):
             retraction_errors = _retract_report_targets_after_lease_failure(
@@ -4648,7 +5055,6 @@ def _main_bridge_capture(command_args: list[str]) -> int:
     except BaseException as exc:
         if (
             lease_entered
-            and lease.acquired
             and publication_state.published_by_this_invocation
         ):
             for retraction_error in _retract_report_targets_after_lease_failure(
@@ -4657,6 +5063,32 @@ def _main_bridge_capture(command_args: list[str]) -> int:
             ):
                 exc.add_note(retraction_error)
         raise
+    pending = publication_state.pending_bridge_completion
+    if pending is not None:
+        try:
+            postlease_head, postlease_clean = _git_state()
+            if postlease_head != pending.git_head_sha or not postlease_clean:
+                raise RuntimeError(
+                    "Git HEAD/worktree changed after the input lease released"
+                )
+            completion = seal_camera_bridge_completion(
+                _REPO_ROOT,
+                git_head_sha=pending.git_head_sha,
+                reservation=pending.reservation,
+                evidence=pending.evidence,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            retraction_errors = _retract_report_targets_after_lease_failure(
+                report_path,
+                digest_path,
+            )
+            publication_state.published_by_this_invocation = False
+            print(f"Cannot seal completed R2 bridge transaction: {exc}", file=sys.stderr)
+            if retraction_errors:
+                print("; ".join(retraction_errors), file=sys.stderr)
+            return 2
+        print(f"Completion seal SHA-256: {completion.seal_sha256}")
+    return outcome
 
 
 def _run_live_validation(

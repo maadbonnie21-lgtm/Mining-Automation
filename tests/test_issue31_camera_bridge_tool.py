@@ -4,13 +4,18 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
+from threading import Barrier, Lock
 from types import ModuleType, SimpleNamespace
 
 import pytest
 
 from mining_automation.capture import Frame, PixelFormat, RawFrame
+from mining_automation.validation import camera_bridge_authorization as authorization
 from mining_automation.validation.camera_bridge_capture import (
     CameraBridgeCaptureInputState,
     CameraBridgeCaptureTerminalReason,
@@ -68,6 +73,12 @@ class _Control:
     def __init__(self, *_args: object, **_kwargs: object) -> None:
         type(self).last = self
         self.released = False
+        self.target_identity = SimpleNamespace(
+            process_id=456,
+            thread_id=789,
+            class_name="SunAwtFrame",
+            title="RuneLite - Chief Luma",
+        )
 
     def release_all_held_keys(self) -> None:
         self.released = True
@@ -134,6 +145,13 @@ def _patch_reviewed_inputs(
         report_sha256="2" * 64,
         frame=frame,
         raw_path=tmp_path / "north.raw",
+        window_hwnd=123,
+        window_process_id=456,
+        window_thread_id=789,
+        window_class_name="SunAwtFrame",
+        window_title_sha256=hashlib.sha256(
+            b"RuneLite - Chief Luma"
+        ).hexdigest(),
     )
     monkeypatch.setattr(
         tool,
@@ -141,6 +159,41 @@ def _patch_reviewed_inputs(
         lambda *_args, **_kwargs: analysis,
     )
     monkeypatch.setattr(tool, "_BRIDGE_LIVE_INPUT_ENABLED", True)
+    monkeypatch.setattr(
+        tool,
+        "camera_bridge_authorization_consumed",
+        lambda _root: False,
+    )
+    authorization_evidence = tool.CameraBridgeAuthorizationEvidence(
+        r1_report_sha256="3" * 64,
+        r2_report_sha256="1" * 64,
+        north_report_sha256="2" * 64,
+        north_post_sha256=hashlib.sha256(frame.payload).hexdigest(),
+        commit_sha256="4" * 64,
+        target_hwnd=123,
+        target_process_id=456,
+        target_thread_id=789,
+        target_class_name="SunAwtFrame",
+        target_title_sha256=hashlib.sha256(
+            b"RuneLite - Chief Luma"
+        ).hexdigest(),
+    )
+    monkeypatch.setattr(
+        tool,
+        "reserve_camera_bridge_authorization",
+        lambda *_args, **_kwargs: tool.CameraBridgeAuthorizationReservation(
+            git_head_sha="a" * 40,
+            common_git_dir=tmp_path,
+            sentinel_path=tmp_path / "authorization.json",
+            sentinel_sha256="5" * 64,
+            evidence=authorization_evidence,
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "seal_camera_bridge_completion",
+        lambda *_args, **_kwargs: SimpleNamespace(seal_sha256="6" * 64),
+    )
     monkeypatch.setattr(
         tool,
         "_load_bridge_north_handoff",
@@ -241,6 +294,8 @@ def _capture_complete_result(*, input_attempted: bool = True) -> SimpleNamespace
                 "completed": input_attempted,
                 "state": "complete" if input_attempted else "none",
             },
+            "frames": {},
+            "receipt": {},
         },
         input_state=CameraBridgeCaptureInputState.COMPLETE,
         input_attempted=input_attempted,
@@ -895,6 +950,436 @@ def test_analysis_evidence_binds_exact_no_safe_replication_need(
     assert result.source_frame is frame
 
 
+def test_alternate_well_formed_analysis_digest_is_evidence_not_authority(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_path = tmp_path / "first-analysis.json"
+    alternate_path = tmp_path / "alternate-analysis.json"
+    first_payload = _analysis_payload(tool)
+    alternate_payload = copy.deepcopy(first_payload)
+    alternate_evidence = alternate_payload["evidence"]
+    assert isinstance(alternate_evidence, dict)
+    # Performance metadata legitimately changes canonical report bytes without
+    # changing any source, objective, action, policy, or authority semantic.
+    alternate_evidence["performance"] = {
+        "elapsed_seconds": 12.5,
+        "peak_traced_memory_bytes": 4096,
+    }
+
+    def report_sha256(payload: dict[str, object]) -> str:
+        canonical = (
+            json.dumps(payload, allow_nan=False, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        return hashlib.sha256(canonical).hexdigest()
+
+    first_sha256 = report_sha256(first_payload)
+    alternate_sha256 = report_sha256(alternate_payload)
+    assert first_sha256 != alternate_sha256
+    reports = {
+        first_path: (first_sha256, first_payload),
+        alternate_path: (alternate_sha256, alternate_payload),
+    }
+
+    def load_report(
+        report: Path,
+        *,
+        expected_sha256: str,
+    ) -> tuple[Path, dict[str, object]]:
+        reviewed_path = Path(report)
+        reviewed_sha256, payload = reports[reviewed_path]
+        assert expected_sha256 == reviewed_sha256
+        return reviewed_path, payload
+
+    frame = _unit_frame(tool)
+    monkeypatch.setattr(tool, "_load_private_bound_report", load_report)
+    monkeypatch.setattr(
+        tool,
+        "_load_bridge_analysis_source",
+        lambda *_args, **_kwargs: (frame, tmp_path / "north.raw"),
+    )
+
+    first = tool._load_bridge_analysis_evidence(
+        first_path,
+        expected_sha256=first_sha256,
+        expected_head="a" * 40,
+    )
+    alternate = tool._load_bridge_analysis_evidence(
+        alternate_path,
+        expected_sha256=alternate_sha256,
+        expected_head="a" * 40,
+    )
+
+    assert first.report_sha256 != alternate.report_sha256
+    assert first.source_sha256 == alternate.source_sha256
+    assert first.source_sha256 == tool.FROZEN_ENDPOINT_SOURCE_SHA256
+    assert first.objective_id == alternate.objective_id == tool._BRIDGE_OBJECTIVE_ID
+    assert tool.FROZEN_ENDPOINT_OBJECTIVE.action_id == tool.CAMERA_BRIDGE_CAPTURE_ID
+    assert tool.FROZEN_ENDPOINT_OBJECTIVE.key.value == "right"
+    assert tool.FROZEN_ENDPOINT_OBJECTIVE.duration_s == 0.043
+
+    _Backend.constructed = 0
+    _Control.last = None
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda path: Path(path))
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    monkeypatch.setattr(tool, "_BRIDGE_LIVE_INPUT_ENABLED", False)
+    monkeypatch.setattr(
+        tool,
+        "_load_bridge_analysis_evidence",
+        lambda *_args, **_kwargs: pytest.fail(
+            "an analysis digest cannot bypass the source-literal input gate"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "reserve_camera_bridge_authorization",
+        lambda *_args, **_kwargs: pytest.fail(
+            "an analysis digest cannot consume input authorization"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "run_fixed_camera_bridge_capture",
+        lambda *_args, **_kwargs: pytest.fail(
+            "an analysis digest cannot grant physical input"
+        ),
+    )
+
+    for ordinal, (report_path, report_sha256) in enumerate(
+        ((first_path, first_sha256), (alternate_path, alternate_sha256)),
+        start=1,
+    ):
+        result = tool.main(
+            [
+                "bridge-capture-r2",
+                "--expected-head",
+                "a" * 40,
+                "--analysis-report",
+                str(report_path),
+                "--analysis-sha256",
+                report_sha256,
+                "--north-report",
+                "north.json",
+                "--north-sha256",
+                "2" * 64,
+                "--output",
+                str(tmp_path / f"private-{ordinal}"),
+                "--case-prefix",
+                f"analysis-evidence-{ordinal}",
+            ]
+        )
+        assert result == 2
+
+    assert tool._BRIDGE_LIVE_INPUT_ENABLED is False
+    assert _Backend.constructed == 0
+    assert _Control.last is None
+    assert _Lease.events == []
+
+
+def test_north_handoff_command_and_window_identity_are_exact(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tool, "_REPO_ROOT", tmp_path)
+    output = tmp_path / "diagnostics" / "north"
+    report = output / "reports" / "fresh.camera.json"
+    command = [
+        str(Path(sys.executable).resolve()),
+        str(Path(tool.__file__).resolve()),
+        "north-bootstrap-v2",
+        "--output",
+        str(output),
+        "--case-prefix",
+        "fresh",
+    ]
+    tool._require_north_handoff_command_argv(command, report_path=report)
+    binding = {
+        "selected_window_binding": {
+            "adapter_identity": tool._EXPECTED_WINDOWS_CAMERA_ADAPTER,
+            "class_name": "SunAwtFrame",
+            "hwnd": 123,
+            "process_id": 456,
+            "thread_id": 789,
+            "title_sha256": "1" * 64,
+            "title_substring": "runelite",
+        }
+    }
+    assert tool._bridge_north_window_binding(binding) == (
+        123,
+        456,
+        789,
+        "SunAwtFrame",
+        "1" * 64,
+    )
+
+    command.extend(("--title", "forged"))
+    with pytest.raises(ValueError, match="override"):
+        tool._require_north_handoff_command_argv(command, report_path=report)
+    window = binding["selected_window_binding"]
+    assert isinstance(window, dict)
+    window["hwnd"] = 999
+    assert tool._bridge_north_window_binding(binding)[0] == 999
+    window["adapter_identity"] = "forged.adapter"
+    with pytest.raises(ValueError, match="selected-window binding"):
+        tool._bridge_north_window_binding(binding)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("wrong-plan", "frozen compass primitive"),
+        ("incomplete-receipt", "input receipt is incomplete"),
+        ("extra-action", "input receipt is incomplete"),
+        ("wrong-geometry", "reviewed geometry"),
+    ],
+)
+def test_live_north_loader_mutation_stops_launcher_before_input(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    message: str,
+) -> None:
+    north_root = tmp_path / "north-private"
+    report_path = north_root / "reports" / "fresh.camera.json"
+    raw_path = north_root / "frames" / "fresh-post.raw"
+    raw_path.parent.mkdir(parents=True)
+    raw_payload = bytes((1, 2, 3, 255)) * (
+        tool.EXPECTED_CLIENT_WIDTH * tool.EXPECTED_CLIENT_HEIGHT
+    )
+    raw_path.write_bytes(raw_payload)
+    raw_sha256 = hashlib.sha256(raw_payload).hexdigest()
+    plan = {
+        "actions": [
+            {
+                "kind": "compass_click",
+                "x": tool.REVIEWED_COMPASS_POINT[0],
+                "y": tool.REVIEWED_COMPASS_POINT[1],
+            }
+        ],
+        "name": "issue31-v2-01-heading-north",
+    }
+    action_receipt = {
+        "action": plan["actions"][0],
+        "action_index": 0,
+        "input_receipts": [
+            {
+                "complete": True,
+                "completed_events": 2,
+                "operation": "compass_click",
+                "requested_events": 2,
+            }
+        ],
+    }
+    baseline: dict[str, object] = {
+        "schema_version": 2,
+        "provenance": {
+            "command_argv": [
+                str(Path(sys.executable).resolve()),
+                str(Path(tool.__file__).resolve()),
+                "north-bootstrap-v2",
+                "--output",
+                str(north_root),
+                "--case-prefix",
+                "fresh",
+            ],
+            "detector_id": tool._EXPECTED_DETECTOR_ID,
+            "detector_version": tool._EXPECTED_DETECTOR_VERSION,
+            "git_head_sha": "a" * 40,
+            "plan_id": tool._EXPECTED_GUIDANCE_V2_ID,
+            "plan_version": tool._EXPECTED_GUIDANCE_V2_VERSION,
+            "profile_id": tool._EXPECTED_PROFILE_ID,
+            "tracked_worktree_clean": True,
+        },
+        "evidence": {
+            "command": "north-bootstrap-v2",
+            "development_only": True,
+            "terminal_reason": "bootstrap_executed",
+            "plan": plan,
+            "receipt": {
+                "actions": [action_receipt],
+                "plan": plan,
+                "preflight": {
+                    "client_height": tool.EXPECTED_CLIENT_HEIGHT,
+                    "client_width": tool.EXPECTED_CLIENT_WIDTH,
+                    "focused": True,
+                    "supported": True,
+                },
+            },
+            "frames": {
+                "post": {
+                    "artifact": {
+                        "captured_monotonic_s": tool.time.monotonic(),
+                        "files": {"raw": "frames/fresh-post.raw"},
+                        "frame_id": 1,
+                        "height": tool.EXPECTED_CLIENT_HEIGHT,
+                        "pixel_format": PixelFormat.BGRA8888.value,
+                        "raw_sha256": raw_sha256,
+                        "width": tool.EXPECTED_CLIENT_WIDTH,
+                    },
+                    "production": {"passed": False},
+                    "readiness": {"safe": True},
+                }
+            },
+            "selected_window_binding": {
+                "adapter_identity": tool._EXPECTED_WINDOWS_CAMERA_ADAPTER,
+                "class_name": "SunAwtFrame",
+                "hwnd": 123,
+                "process_id": 456,
+                "thread_id": 789,
+                "title_sha256": hashlib.sha256(
+                    b"RuneLite - Chief Luma"
+                ).hexdigest(),
+                "title_substring": "runelite",
+            },
+        },
+    }
+    active_payload = [baseline]
+
+    def load_report(
+        _report: Path,
+        *,
+        expected_sha256: str,
+    ) -> tuple[Path, dict[str, object]]:
+        assert expected_sha256 == "7" * 64
+        return report_path, active_payload[0]
+
+    readiness = SimpleNamespace(safe_to_attempt_camera_input=True)
+    production = SimpleNamespace(passed=False)
+    monkeypatch.setattr(tool, "_load_private_bound_report", load_report)
+    monkeypatch.setattr(
+        tool,
+        "evaluate_client_input_readiness",
+        lambda _frame: readiness,
+    )
+    monkeypatch.setattr(tool, "evaluate_varrock_east_camera", lambda _frame: production)
+    monkeypatch.setattr(tool, "_readiness_dict", lambda _value: {"safe": True})
+    monkeypatch.setattr(tool, "_evaluation_dict", lambda _value: {"passed": False})
+    monkeypatch.setattr(
+        tool,
+        "_require_north_bootstrap_production_identity",
+        lambda *_args, **_kwargs: None,
+    )
+
+    valid = tool._load_bridge_north_handoff(
+        report_path,
+        expected_sha256="7" * 64,
+        expected_head="a" * 40,
+    )
+    assert valid.frame.payload == raw_payload
+
+    mutated = copy.deepcopy(baseline)
+    mutated_evidence = mutated["evidence"]
+    assert isinstance(mutated_evidence, dict)
+    if mutation == "wrong-plan":
+        mutated_plan = mutated_evidence["plan"]
+        assert isinstance(mutated_plan, dict)
+        mutated_plan["name"] = "forged-plan"
+    else:
+        receipt = mutated_evidence["receipt"]
+        assert isinstance(receipt, dict)
+        actions = receipt["actions"]
+        assert isinstance(actions, list) and isinstance(actions[0], dict)
+        if mutation == "incomplete-receipt":
+            low_level = actions[0]["input_receipts"]
+            assert isinstance(low_level, list) and isinstance(low_level[0], dict)
+            low_level[0]["complete"] = False
+        elif mutation == "extra-action":
+            actions.append(copy.deepcopy(actions[0]))
+        else:
+            frames = mutated_evidence["frames"]
+            assert isinstance(frames, dict)
+            post = frames["post"]
+            assert isinstance(post, dict)
+            artifact = post["artifact"]
+            assert isinstance(artifact, dict)
+            artifact["width"] = tool.EXPECTED_CLIENT_WIDTH - 1
+    active_payload[0] = mutated
+
+    with pytest.raises(ValueError, match=message):
+        tool._load_bridge_north_handoff(
+            report_path,
+            expected_sha256="7" * 64,
+            expected_head="a" * 40,
+        )
+
+    analysis_frame = _unit_frame(tool)
+    analysis = tool._BridgeAnalysisEvidence(
+        report_path=tmp_path / "analysis.json",
+        report_sha256="1" * 64,
+        r1_report_sha256="3" * 64,
+        planner_id="issue31-read-only-camera-bridge-planner-r2",
+        planner_version="2.1.0",
+        objective_id=tool._BRIDGE_OBJECTIVE_ID,
+        source_frame=analysis_frame,
+        source_raw_path=tmp_path / "planner-source.raw",
+        source_sha256=tool.FROZEN_ENDPOINT_SOURCE_SHA256,
+    )
+    bridge_output = tmp_path / "bridge-private"
+    _Backend.constructed = 0
+    _Control.last = None
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_BRIDGE_LIVE_INPUT_ENABLED", True)
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(
+        tool,
+        "camera_bridge_authorization_consumed",
+        lambda _root: False,
+    )
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda _path: bridge_output)
+    monkeypatch.setattr(
+        tool,
+        "_load_bridge_analysis_evidence",
+        lambda *_args, **_kwargs: analysis,
+    )
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    monkeypatch.setattr(
+        tool,
+        "reserve_camera_bridge_authorization",
+        lambda *_args, **_kwargs: pytest.fail(
+            "invalid north evidence must fail before authorization reservation"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "run_fixed_camera_bridge_capture",
+        lambda *_args, **_kwargs: pytest.fail(
+            "invalid north evidence must fail before physical input"
+        ),
+    )
+
+    result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--analysis-report",
+            "analysis.json",
+            "--analysis-sha256",
+            "1" * 64,
+            "--north-report",
+            str(report_path),
+            "--north-sha256",
+            "7" * 64,
+            "--output",
+            str(bridge_output),
+            "--case-prefix",
+            f"north-{mutation}",
+        ]
+    )
+
+    assert result == 2
+    assert _Backend.constructed == 0
+    assert _Control.last is None
+    assert _Lease.events == []
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -979,6 +1464,111 @@ def test_analysis_evidence_rejects_forged_or_incomplete_planner_result(
         )
 
 
+def test_wrong_frozen_source_report_stops_launcher_before_reservation_or_input(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = copy.deepcopy(_analysis_payload(tool))
+    evidence = payload["evidence"]
+    assert isinstance(evidence, dict)
+    planner = evidence["bridge_planner"]
+    safe_graph = evidence["safe_view_graph"]
+    assert isinstance(planner, dict) and isinstance(safe_graph, dict)
+    inventory = planner["inventory"]
+    assert isinstance(inventory, dict)
+    experiments = inventory["experiments"]
+    assert isinstance(experiments, list) and isinstance(experiments[0], dict)
+    forged_source = "4" * 64
+    experiments[0]["required_source_sha256"] = forged_source
+    planner["current_sha256"] = forged_source
+    safe_graph["current_sha256"] = forged_source
+    report_sha256 = hashlib.sha256(
+        (json.dumps(payload, allow_nan=False, indent=2, sort_keys=True) + "\n").encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    report_path = tmp_path / "wrong-source-analysis.json"
+    output = tmp_path / "private"
+
+    def load_report(
+        report: Path,
+        *,
+        expected_sha256: str,
+    ) -> tuple[Path, dict[str, object]]:
+        assert Path(report) == report_path
+        assert expected_sha256 == report_sha256
+        return report_path, payload
+
+    _Backend.constructed = 0
+    _Control.last = None
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_load_private_bound_report", load_report)
+    monkeypatch.setattr(
+        tool,
+        "_load_bridge_analysis_source",
+        lambda *_args, **_kwargs: pytest.fail(
+            "wrong frozen source must fail before loading source pixels"
+        ),
+    )
+    monkeypatch.setattr(tool, "_BRIDGE_LIVE_INPUT_ENABLED", True)
+    monkeypatch.setattr(
+        tool,
+        "camera_bridge_authorization_consumed",
+        lambda _root: False,
+    )
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda _path: output)
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    monkeypatch.setattr(
+        tool,
+        "_load_bridge_north_handoff",
+        lambda *_args, **_kwargs: pytest.fail(
+            "wrong frozen source must fail before loading north evidence"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "reserve_camera_bridge_authorization",
+        lambda *_args, **_kwargs: pytest.fail(
+            "wrong frozen source must fail before authorization reservation"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "run_fixed_camera_bridge_capture",
+        lambda *_args, **_kwargs: pytest.fail(
+            "wrong frozen source must fail before physical input"
+        ),
+    )
+
+    result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--analysis-report",
+            str(report_path),
+            "--analysis-sha256",
+            report_sha256,
+            "--north-report",
+            "north.json",
+            "--north-sha256",
+            "2" * 64,
+            "--output",
+            str(output),
+            "--case-prefix",
+            "wrong-frozen-source",
+        ]
+    )
+
+    assert result == 2
+    assert _Backend.constructed == 0
+    assert _Control.last is None
+    assert _Lease.events == []
+
+
 @pytest.mark.parametrize(
     "override",
     [
@@ -994,6 +1584,10 @@ def test_analysis_evidence_rejects_forged_or_incomplete_planner_result(
         ["--detents", "1"],
         ["--x", "200"],
         ["--y", "600"],
+        ["--hwnd", "123"],
+        ["--campaign-id", "forged"],
+        ["--sentinel", "forged"],
+        ["--authorization-root", "forged"],
     ],
 )
 def test_bridge_parser_rejects_every_control_override(
@@ -1054,6 +1648,109 @@ def test_bridge_exact_head_and_cleanliness_stop_before_lease_or_capture(
     assert _Lease.events == []
 
 
+def test_hostile_git_environment_cannot_redirect_launcher_provenance(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "repository"
+    (repository / ".git").mkdir(parents=True)
+    output = tmp_path / "private"
+    hostile_git_values = {
+        "GIT_COMMON_DIR": str(tmp_path / "forged-common.git"),
+        "GIT_CONFIG_GLOBAL": str(tmp_path / "forged-global.gitconfig"),
+        "GIT_CONFIG_NOSYSTEM": "0",
+        "GIT_DIR": str(tmp_path / "forged.git"),
+        "GIT_INDEX_FILE": str(tmp_path / "forged.index"),
+        "GIT_OBJECT_DIRECTORY": str(tmp_path / "forged-objects"),
+        "GIT_OPTIONAL_LOCKS": "1",
+        "GIT_TERMINAL_PROMPT": "1",
+        "GIT_WORK_TREE": str(tmp_path / "forged-worktree"),
+        "HOME": str(tmp_path / "forged-home"),
+        "PATH": str(tmp_path / "forged-bin"),
+        "USERPROFILE": str(tmp_path / "forged-profile"),
+    }
+    for key, value in hostile_git_values.items():
+        monkeypatch.setenv(key, value)
+
+    calls: list[tuple[tuple[str, ...], dict[str, str]]] = []
+
+    def git_run(
+        command: list[str],
+        **kwargs: object,
+    ) -> SimpleNamespace:
+        environment = kwargs.get("env")
+        assert isinstance(environment, dict)
+        git_environment = {
+            str(key): str(value)
+            for key, value in environment.items()
+            if str(key).upper().startswith("GIT_")
+        }
+        assert git_environment == {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+        assert "HOME" not in environment
+        assert "PATH" not in environment
+        assert "USERPROFILE" not in environment
+        normalized = tuple(str(argument) for argument in command)
+        assert f"--git-dir={(repository / '.git').resolve()}" in normalized
+        assert f"--work-tree={repository.resolve()}" in normalized
+        assert "core.autocrlf=input" in normalized
+        calls.append((normalized, environment))
+        if "rev-parse" in normalized:
+            # The trusted repository is deliberately the wrong reviewed head.
+            return SimpleNamespace(stdout="b" * 40 + "\n", returncode=0)
+        assert "status" in normalized
+        return SimpleNamespace(stdout="", returncode=0)
+
+    _Backend.constructed = 0
+    _Control.last = None
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_REPO_ROOT", repository)
+    monkeypatch.setattr(tool, "_trusted_git_executable", lambda: "trusted-git")
+    monkeypatch.setattr(tool.subprocess, "run", git_run)
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda _path: output)
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    monkeypatch.setattr(
+        tool,
+        "reserve_camera_bridge_authorization",
+        lambda *_args, **_kwargs: pytest.fail(
+            "hostile Git environment must not reach authorization reservation"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "run_fixed_camera_bridge_capture",
+        lambda *_args, **_kwargs: pytest.fail(
+            "hostile Git environment must not reach physical input"
+        ),
+    )
+
+    result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(output),
+            "--case-prefix",
+            "hostile-git-environment",
+            *_review_args(),
+        ]
+    )
+
+    assert result == 2
+    assert len(calls) == 2
+    assert _Backend.constructed == 0
+    assert _Control.last is None
+    assert _Lease.events == []
+    assert all(os.environ[key] == value for key, value in hostile_git_values.items())
+
+
 @pytest.mark.parametrize("invalid_input", ["analysis", "north"])
 def test_invalid_reviewed_report_stops_before_lease_backend_or_input(
     tool: ModuleType,
@@ -1105,6 +1802,79 @@ def test_invalid_reviewed_report_stops_before_lease_backend_or_input(
     assert _Lease.events == []
 
 
+def test_stale_north_handoff_stops_before_reservation_backend_or_input(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _Backend.constructed = 0
+    _Control.last = None
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda _path: output)
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "CaptureSource", _Source)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _Control)
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    _patch_reviewed_inputs(tool, monkeypatch, tmp_path)
+    north = tool._load_bridge_north_handoff(
+        Path("north.json"),
+        expected_sha256="2" * 64,
+        expected_head="a" * 40,
+    )
+    stale_capture_time = (
+        tool.time.monotonic() - tool._BRIDGE_NORTH_MAXIMUM_AGE_SECONDS - 1.0
+    )
+    stale_frame = Frame.from_raw(
+        RawFrame(
+            payload=north.frame.payload,
+            width=north.frame.width,
+            height=north.frame.height,
+            pixel_format=north.frame.pixel_format,
+        ),
+        frame_id=north.frame.frame_id,
+        captured_monotonic_s=stale_capture_time,
+    )
+    monkeypatch.setattr(
+        tool,
+        "_load_bridge_north_handoff",
+        lambda *_args, **_kwargs: replace(north, frame=stale_frame),
+    )
+    monkeypatch.setattr(
+        tool,
+        "reserve_camera_bridge_authorization",
+        lambda *_args, **_kwargs: pytest.fail(
+            "stale north evidence must stop before authorization reservation"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "run_fixed_camera_bridge_capture",
+        lambda *_args, **_kwargs: pytest.fail(
+            "stale north evidence must stop before physical input"
+        ),
+    )
+
+    result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(output),
+            "--case-prefix",
+            "stale-north-handoff",
+            *_review_args(),
+        ]
+    )
+
+    assert result == 2
+    assert _Backend.constructed == 0
+    assert _Control.last is None
+    assert _Lease.events == ["lease_acquired", "lease_released"]
+
+
 def test_bridge_launcher_is_inert_without_exact_head_lead_enablement(
     tool: ModuleType,
     tmp_path: Path,
@@ -1129,6 +1899,13 @@ def test_bridge_launcher_is_inert_without_exact_head_lead_enablement(
         "_load_bridge_north_handoff",
         lambda *_args, **_kwargs: pytest.fail(
             "an input-disabled launcher must not load live handoff state"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "camera_bridge_authorization_consumed",
+        lambda _root: pytest.fail(
+            "an input-disabled launcher must not inspect or consume authorization"
         ),
     )
 
@@ -1173,6 +1950,36 @@ def test_bridge_lease_spans_runner_cleanup_revalidation_and_publication(
     )
     monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
     _patch_reviewed_inputs(tool, monkeypatch, tmp_path)
+    authorization_evidence = tool.CameraBridgeAuthorizationEvidence(
+        r1_report_sha256="3" * 64,
+        r2_report_sha256="1" * 64,
+        north_report_sha256="2" * 64,
+        north_post_sha256=hashlib.sha256(bytes((1, 2, 3, 255))).hexdigest(),
+        commit_sha256=hashlib.sha256(bytes((1, 2, 3, 255))).hexdigest(),
+        target_hwnd=123,
+        target_process_id=456,
+        target_thread_id=789,
+        target_class_name="SunAwtFrame",
+        target_title_sha256=hashlib.sha256(
+            b"RuneLite - Chief Luma"
+        ).hexdigest(),
+    )
+
+    def reserve_without_files(*_args: object, **_kwargs: object) -> object:
+        _Lease.events.append("authorization_consumed")
+        return tool.CameraBridgeAuthorizationReservation(
+            git_head_sha="a" * 40,
+            common_git_dir=tmp_path,
+            sentinel_path=tmp_path / "never-written-authorization.json",
+            sentinel_sha256="5" * 64,
+            evidence=authorization_evidence,
+        )
+
+    monkeypatch.setattr(
+        tool,
+        "reserve_camera_bridge_authorization",
+        reserve_without_files,
+    )
     close = tool._evaluate_bridge_post_transition
 
     def ordered_close(*args: object, **kwargs: object) -> object:
@@ -1210,6 +2017,7 @@ def test_bridge_lease_spans_runner_cleanup_revalidation_and_publication(
         assert registration_events == ["analyze", "analyze"]
         kwargs["final_input_guard"](evidence, evidence, evidence)
         assert registration_events == ["analyze", "analyze"]
+        _Lease.events.append("physical_action")
         return _capture_complete_result()
 
     def revalidate(
@@ -1230,9 +2038,18 @@ def test_bridge_lease_spans_runner_cleanup_revalidation_and_publication(
         _Lease.events.append("publish")
         return original_write(*args, **kwargs)
 
+    def seal(*_args: object, **kwargs: object) -> object:
+        assert _Lease.events[-1] == "lease_released"
+        completion_evidence = kwargs["evidence"]
+        assert isinstance(completion_evidence, tool.CameraBridgeCompletionEvidence)
+        assert completion_evidence.authorization_sentinel_sha256 == "5" * 64
+        _Lease.events.append("completion_seal")
+        return SimpleNamespace(seal_sha256="6" * 64)
+
     monkeypatch.setattr(tool, "run_fixed_camera_bridge_capture", run)
     monkeypatch.setattr(tool, "_require_bridge_capture_result_identities", revalidate)
     monkeypatch.setattr(tool, "write_camera_validation_report", write)
+    monkeypatch.setattr(tool, "seal_camera_bridge_completion", seal)
     command = [
         "bridge-capture-r2",
         "--expected-head",
@@ -1248,12 +2065,15 @@ def test_bridge_lease_spans_runner_cleanup_revalidation_and_publication(
     assert _Lease.events == [
         "lease_acquired",
         "runner",
+        "authorization_consumed",
+        "physical_action",
         "input_cleanup",
         "capture_cleanup",
         "post_registration_then_production",
         "revalidate",
         "publish",
         "lease_released",
+        "completion_seal",
     ]
     assert _Source.last is not None and _Source.last.closed
     assert _Control.last is not None and _Control.last.released
@@ -1290,6 +2110,521 @@ def test_bridge_lease_spans_runner_cleanup_revalidation_and_publication(
     assert evidence["pointer_mapping"]["pointer_primitive_required"] is False
     digest = report.with_name(f"{report.name}.sha256").read_text().strip()
     assert digest == hashlib.sha256(report.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("contents", [b"", b'{"tampered":true}\n'])
+def test_precreated_or_tampered_campaign_blocks_every_launcher_input(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    contents: bytes,
+) -> None:
+    repository = tmp_path / "repository"
+    (repository / ".git").mkdir(parents=True)
+    sentinel = authorization.camera_bridge_authorization_sentinel_path(repository)
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_bytes(contents)
+    _Backend.constructed = 0
+    _Control.last = None
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_REPO_ROOT", repository)
+    monkeypatch.setattr(tool, "_BRIDGE_LIVE_INPUT_ENABLED", True)
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda path: Path(path))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    monkeypatch.setattr(
+        tool,
+        "_load_bridge_analysis_evidence",
+        lambda *_args, **_kwargs: pytest.fail(
+            "consumed campaign must stop before analysis loading"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "reserve_camera_bridge_authorization",
+        lambda *_args, **_kwargs: pytest.fail(
+            "precreated campaign must stop before another reservation"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "run_fixed_camera_bridge_capture",
+        lambda *_args, **_kwargs: pytest.fail(
+            "precreated campaign must stop before physical input"
+        ),
+    )
+
+    for ordinal in (1, 2):
+        result = tool.main(
+            [
+                "bridge-capture-r2",
+                "--expected-head",
+                "a" * 40,
+                "--output",
+                str(tmp_path / f"private-{ordinal}"),
+                "--case-prefix",
+                f"precreated-campaign-{ordinal}",
+                *_review_args(),
+            ]
+        )
+        assert result == 2
+
+    assert sentinel.read_bytes() == contents
+    assert _Backend.constructed == 0
+    assert _Control.last is None
+    assert _Lease.events == []
+
+
+def test_interrupted_final_reservation_consumes_campaign_with_zero_retry_input(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "repository"
+    (repository / ".git").mkdir(parents=True)
+    first_output = tmp_path / "first-private"
+    second_output = tmp_path / "second-private"
+    real_consumed = tool.camera_bridge_authorization_consumed
+    real_reserve = tool.reserve_camera_bridge_authorization
+    _Backend.constructed = 0
+    _Control.last = None
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_REPO_ROOT", repository)
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda path: Path(path))
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "CaptureSource", _Source)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _Control)
+    monkeypatch.setattr(
+        tool,
+        "_EXPECTED_WINDOWS_CAMERA_ADAPTER",
+        f"{_Control.__module__}.{_Control.__qualname__}",
+    )
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    _patch_reviewed_inputs(tool, monkeypatch, tmp_path)
+    monkeypatch.setattr(tool, "camera_bridge_authorization_consumed", real_consumed)
+
+    original_fsync = authorization.os.fsync
+
+    def interrupted_reserve(*args: object, **kwargs: object) -> object:
+        def fail_fsync(_descriptor: int) -> None:
+            raise OSError("simulated final authorization interruption")
+
+        authorization.os.fsync = fail_fsync
+        try:
+            return real_reserve(*args, **kwargs)
+        finally:
+            authorization.os.fsync = original_fsync
+
+    runner_calls = 0
+    physical_inputs = 0
+    unit_digest = hashlib.sha256(bytes((1, 2, 3, 255))).hexdigest()
+
+    def run(*_args: object, **kwargs: object) -> SimpleNamespace:
+        nonlocal runner_calls, physical_inputs
+        runner_calls += 1
+        evidence = SimpleNamespace(
+            artifact=SimpleNamespace(raw_sha256=unit_digest),
+            production=object(),
+        )
+        kwargs["pre_input_guard"](evidence, evidence, evidence)
+        kwargs["final_input_guard"](evidence, evidence, evidence)
+        physical_inputs += 1
+        return _capture_complete_result()
+
+    monkeypatch.setattr(tool, "reserve_camera_bridge_authorization", interrupted_reserve)
+    monkeypatch.setattr(tool, "run_fixed_camera_bridge_capture", run)
+    monkeypatch.setattr(
+        tool,
+        "_require_bridge_capture_result_identities",
+        lambda *_args, **_kwargs: None,
+    )
+
+    first_result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(first_output),
+            "--case-prefix",
+            "interrupted-first",
+            *_review_args(),
+        ]
+    )
+    first_backend_count = _Backend.constructed
+    first_lease_events = tuple(_Lease.events)
+    second_result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(second_output),
+            "--case-prefix",
+            "interrupted-retry",
+            *_review_args(),
+        ]
+    )
+
+    assert first_result == 2
+    assert second_result == 2
+    assert runner_calls == 1
+    assert physical_inputs == 0
+    assert authorization.camera_bridge_authorization_consumed(repository)
+    assert _Backend.constructed == first_backend_count
+    assert tuple(_Lease.events) == first_lease_events
+    assert not (
+        second_output / "reports" / "interrupted-retry.camera.json"
+    ).exists()
+
+
+def test_interrupted_completion_seal_retracts_report_and_blocks_retry_input(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "repository"
+    (repository / ".git").mkdir(parents=True)
+    first_output = tmp_path / "first-private"
+    second_output = tmp_path / "second-private"
+    real_consumed = tool.camera_bridge_authorization_consumed
+    real_reserve = tool.reserve_camera_bridge_authorization
+    real_seal = tool.seal_camera_bridge_completion
+    _Backend.constructed = 0
+    _Control.last = None
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_REPO_ROOT", repository)
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda path: Path(path))
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "CaptureSource", _Source)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _Control)
+    monkeypatch.setattr(
+        tool,
+        "_EXPECTED_WINDOWS_CAMERA_ADAPTER",
+        f"{_Control.__module__}.{_Control.__qualname__}",
+    )
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    _patch_reviewed_inputs(tool, monkeypatch, tmp_path)
+    monkeypatch.setattr(tool, "camera_bridge_authorization_consumed", real_consumed)
+    monkeypatch.setattr(tool, "reserve_camera_bridge_authorization", real_reserve)
+
+    original_fsync = authorization.os.fsync
+
+    def interrupted_seal(*args: object, **kwargs: object) -> object:
+        def fail_fsync(_descriptor: int) -> None:
+            raise OSError("simulated completion-seal interruption")
+
+        authorization.os.fsync = fail_fsync
+        try:
+            return real_seal(*args, **kwargs)
+        finally:
+            authorization.os.fsync = original_fsync
+
+    runner_calls = 0
+    physical_inputs = 0
+    unit_digest = hashlib.sha256(bytes((1, 2, 3, 255))).hexdigest()
+
+    def run(*_args: object, **kwargs: object) -> SimpleNamespace:
+        nonlocal runner_calls, physical_inputs
+        runner_calls += 1
+        evidence = SimpleNamespace(
+            artifact=SimpleNamespace(raw_sha256=unit_digest),
+            production=object(),
+        )
+        kwargs["pre_input_guard"](evidence, evidence, evidence)
+        kwargs["final_input_guard"](evidence, evidence, evidence)
+        physical_inputs += 1
+        return _capture_complete_result()
+
+    monkeypatch.setattr(tool, "seal_camera_bridge_completion", interrupted_seal)
+    monkeypatch.setattr(tool, "run_fixed_camera_bridge_capture", run)
+    monkeypatch.setattr(
+        tool,
+        "_require_bridge_capture_result_identities",
+        lambda *_args, **_kwargs: None,
+    )
+
+    first_result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(first_output),
+            "--case-prefix",
+            "completion-interrupted",
+            *_review_args(),
+        ]
+    )
+    first_backend_count = _Backend.constructed
+    first_lease_events = tuple(_Lease.events)
+    first_report = (
+        first_output / "reports" / "completion-interrupted.camera.json"
+    )
+    second_result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(second_output),
+            "--case-prefix",
+            "completion-retry",
+            *_review_args(),
+        ]
+    )
+
+    assert first_result == 2
+    assert second_result == 2
+    assert runner_calls == 1
+    assert physical_inputs == 1
+    assert authorization.camera_bridge_authorization_consumed(repository)
+    assert not authorization.camera_bridge_completion_seal_path(repository).exists()
+    pending_path = authorization._completion_pending_from_common_git_dir(
+        authorization.repository_common_git_dir(repository)
+    )
+    assert pending_path.exists()
+    assert not first_report.exists()
+    assert not first_report.with_name(f"{first_report.name}.sha256").exists()
+    assert _Backend.constructed == first_backend_count
+    assert tuple(_Lease.events) == first_lease_events
+    assert not (
+        second_output / "reports" / "completion-retry.camera.json"
+    ).exists()
+
+
+def test_concurrent_launchers_can_cross_final_guard_only_once(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "repository"
+    (repository / ".git").mkdir(parents=True)
+    real_consumed = tool.camera_bridge_authorization_consumed
+    real_reserve = tool.reserve_camera_bridge_authorization
+    _Backend.constructed = 0
+    _Control.last = None
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_REPO_ROOT", repository)
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda path: Path(path))
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "CaptureSource", _Source)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _Control)
+    monkeypatch.setattr(
+        tool,
+        "_EXPECTED_WINDOWS_CAMERA_ADAPTER",
+        f"{_Control.__module__}.{_Control.__qualname__}",
+    )
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    _patch_reviewed_inputs(tool, monkeypatch, tmp_path)
+    monkeypatch.setattr(tool, "reserve_camera_bridge_authorization", real_reserve)
+
+    initial_precheck = Barrier(2)
+
+    def synchronized_consumed(root: Path) -> bool:
+        observed = real_consumed(root)
+        initial_precheck.wait(timeout=5.0)
+        return observed
+
+    monkeypatch.setattr(
+        tool,
+        "camera_bridge_authorization_consumed",
+        synchronized_consumed,
+    )
+    input_seam = Barrier(2)
+    counter_lock = Lock()
+    runner_calls = 0
+    physical_inputs = 0
+    unit_digest = hashlib.sha256(bytes((1, 2, 3, 255))).hexdigest()
+
+    def run(*_args: object, **kwargs: object) -> SimpleNamespace:
+        nonlocal runner_calls, physical_inputs
+        with counter_lock:
+            runner_calls += 1
+        evidence = SimpleNamespace(
+            artifact=SimpleNamespace(raw_sha256=unit_digest),
+            production=object(),
+        )
+        kwargs["pre_input_guard"](evidence, evidence, evidence)
+        input_seam.wait(timeout=5.0)
+        kwargs["final_input_guard"](evidence, evidence, evidence)
+        with counter_lock:
+            physical_inputs += 1
+        return _capture_complete_result()
+
+    monkeypatch.setattr(tool, "run_fixed_camera_bridge_capture", run)
+    monkeypatch.setattr(
+        tool,
+        "_require_bridge_capture_result_identities",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def invoke(ordinal: int) -> int:
+        return int(
+            tool.main(
+                [
+                    "bridge-capture-r2",
+                    "--expected-head",
+                    "a" * 40,
+                    "--output",
+                    str(tmp_path / f"concurrent-private-{ordinal}"),
+                    "--case-prefix",
+                    f"concurrent-{ordinal}",
+                    *_review_args(),
+                ]
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(invoke, (1, 2)))
+
+    assert sorted(results) == [0, 2]
+    assert runner_calls == 2
+    assert physical_inputs == 1
+    assert authorization.camera_bridge_authorization_consumed(repository)
+
+    monkeypatch.setattr(tool, "camera_bridge_authorization_consumed", real_consumed)
+    backend_count = _Backend.constructed
+    runner_count = runner_calls
+    third_result = invoke(3)
+    assert third_result == 2
+    assert runner_calls == runner_count
+    assert physical_inputs == 1
+    assert _Backend.constructed == backend_count
+
+
+@pytest.mark.parametrize("fail_after_reservation", [False, True])
+@pytest.mark.parametrize(
+    ("second_prefix", "reuse_first_output"),
+    [
+        ("alternate-prefix", True),
+        ("first-prefix", False),
+        ("alternate-prefix", False),
+    ],
+    ids=["alternate-prefix", "alternate-output", "alternate-prefix-and-output"],
+)
+def test_one_shot_consumption_blocks_alternate_prefix_and_output_invocation(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_after_reservation: bool,
+    second_prefix: str,
+    reuse_first_output: bool,
+) -> None:
+    first_output = tmp_path / "first-private"
+    second_output = (
+        first_output if reuse_first_output else tmp_path / "second-private"
+    )
+    _Backend.constructed = 0
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda path: Path(path))
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "CaptureSource", _Source)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _Control)
+    monkeypatch.setattr(
+        tool,
+        "_EXPECTED_WINDOWS_CAMERA_ADAPTER",
+        f"{_Control.__module__}.{_Control.__qualname__}",
+    )
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    _patch_reviewed_inputs(tool, monkeypatch, tmp_path)
+    consumed = False
+    runner_calls = 0
+    unit_digest = hashlib.sha256(bytes((1, 2, 3, 255))).hexdigest()
+    authorization_evidence = tool.CameraBridgeAuthorizationEvidence(
+        r1_report_sha256="3" * 64,
+        r2_report_sha256="1" * 64,
+        north_report_sha256="2" * 64,
+        north_post_sha256=unit_digest,
+        commit_sha256=unit_digest,
+        target_hwnd=123,
+        target_process_id=456,
+        target_thread_id=789,
+        target_class_name="SunAwtFrame",
+        target_title_sha256=hashlib.sha256(
+            b"RuneLite - Chief Luma"
+        ).hexdigest(),
+    )
+
+    def is_consumed(_root: Path) -> bool:
+        return consumed
+
+    def reserve(*_args: object, **_kwargs: object) -> object:
+        nonlocal consumed
+        if consumed:
+            raise RuntimeError("already consumed")
+        consumed = True
+        return tool.CameraBridgeAuthorizationReservation(
+            git_head_sha="a" * 40,
+            common_git_dir=tmp_path,
+            sentinel_path=tmp_path / "fixed-campaign.consumed.json",
+            sentinel_sha256="5" * 64,
+            evidence=authorization_evidence,
+        )
+
+    def run(*_args: object, **kwargs: object) -> SimpleNamespace:
+        nonlocal runner_calls
+        evidence = SimpleNamespace(
+            artifact=SimpleNamespace(raw_sha256=unit_digest),
+            production=object(),
+        )
+        kwargs["pre_input_guard"](evidence, evidence, evidence)
+        kwargs["final_input_guard"](evidence, evidence, evidence)
+        runner_calls += 1
+        if fail_after_reservation:
+            raise RuntimeError("simulated partial-or-unknown physical boundary")
+        return _capture_complete_result()
+
+    monkeypatch.setattr(tool, "camera_bridge_authorization_consumed", is_consumed)
+    monkeypatch.setattr(tool, "reserve_camera_bridge_authorization", reserve)
+    monkeypatch.setattr(tool, "run_fixed_camera_bridge_capture", run)
+    monkeypatch.setattr(
+        tool,
+        "_require_bridge_capture_result_identities",
+        lambda *_args, **_kwargs: None,
+    )
+
+    first_result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(first_output),
+            "--case-prefix",
+            "first-prefix",
+            *_review_args(),
+        ]
+    )
+    first_backend_count = _Backend.constructed
+    first_lease_events = tuple(_Lease.events)
+    second_result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(second_output),
+            "--case-prefix",
+            second_prefix,
+            *_review_args(),
+        ]
+    )
+
+    assert first_result == (2 if fail_after_reservation else 0)
+    assert second_result == 2
+    assert consumed is True
+    assert runner_calls == 1
+    assert _Backend.constructed == first_backend_count
+    assert tuple(_Lease.events) == first_lease_events
+    assert not (
+        second_output / "reports" / f"{second_prefix}.camera.json"
+    ).exists()
 
 
 def test_bridge_adapter_identity_mismatch_stops_before_runner(
@@ -1331,6 +2666,85 @@ def test_bridge_adapter_identity_mismatch_stops_before_runner(
         "lease_acquired",
         "input_cleanup",
         "capture_cleanup",
+        "lease_released",
+    ]
+
+
+@pytest.mark.parametrize(
+    "identity_change",
+    [
+        {"window_hwnd": 999},
+        {"window_process_id": 999},
+        {"window_thread_id": 999},
+    ],
+)
+def test_substituted_north_window_stops_before_reservation_or_input(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    identity_change: dict[str, int],
+) -> None:
+    output = tmp_path / "private"
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda _path: output)
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "CaptureSource", _Source)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _Control)
+    monkeypatch.setattr(
+        tool,
+        "_EXPECTED_WINDOWS_CAMERA_ADAPTER",
+        f"{_Control.__module__}.{_Control.__qualname__}",
+    )
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    _patch_reviewed_inputs(tool, monkeypatch, tmp_path)
+    valid_north = tool._load_bridge_north_handoff(
+        Path("north.json"),
+        expected_sha256="2" * 64,
+        expected_head="a" * 40,
+    )
+    monkeypatch.setattr(
+        tool,
+        "_load_bridge_north_handoff",
+        lambda *_args, **_kwargs: replace(valid_north, **identity_change),
+    )
+    monkeypatch.setattr(
+        tool,
+        "reserve_camera_bridge_authorization",
+        lambda *_args, **_kwargs: pytest.fail(
+            "a substituted north window must stop before reservation"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "run_fixed_camera_bridge_capture",
+        lambda *_args, **_kwargs: pytest.fail(
+            "a substituted north window must stop before the runner"
+        ),
+    )
+
+    result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(output),
+            "--case-prefix",
+            "substituted-window",
+            *_review_args(),
+        ]
+    )
+
+    assert result == 2
+    expected_cleanup = (
+        ["capture_cleanup"]
+        if "window_hwnd" in identity_change
+        else ["input_cleanup", "capture_cleanup"]
+    )
+    assert _Lease.events == [
+        "lease_acquired",
+        *expected_cleanup,
         "lease_released",
     ]
 
@@ -1685,6 +3099,13 @@ def test_bridge_report_truthfully_distinguishes_prearm_and_input_seam_checks(
         report_sha256="2" * 64,
         frame=frame,
         raw_path=tmp_path / "north.raw",
+        window_hwnd=123,
+        window_process_id=456,
+        window_thread_id=789,
+        window_class_name="SunAwtFrame",
+        window_title_sha256=hashlib.sha256(
+            b"RuneLite - Chief Luma"
+        ).hexdigest(),
     )
     precomputed = SimpleNamespace(as_dict=lambda: {"accepted": True})
     closure = tool._new_bridge_post_transition_closure(
@@ -1695,6 +3116,7 @@ def test_bridge_report_truthfully_distinguishes_prearm_and_input_seam_checks(
     evidence = tool._bridge_capture_evidence(
         _capture_complete_result(input_attempted=False),
         analysis_evidence=analysis,
+        authorization_reservation=None,
         adapter_identity="adapter",
         north_handoff=north,
         north_registration=None,
@@ -1708,6 +3130,7 @@ def test_bridge_report_truthfully_distinguishes_prearm_and_input_seam_checks(
     )
 
     assert evidence["robust_registration_executed_in_input_seam"] is False
+    assert evidence["one_shot_authorization"] is None
     assert evidence["registration_execution"] == {
         "north_to_commit_executed_in_input_seam": False,
         "planner_source_to_north_precomputed_before_arm": True,
@@ -1776,6 +3199,86 @@ def test_bridge_release_failure_retracts_only_this_invocations_report(
     assert not report.exists()
     assert not report.with_name(f"{report.name}.sha256").exists()
     assert unrelated.read_text(encoding="utf-8") == "keep"
+
+
+def test_complete_bridge_release_failure_never_seals_even_if_retraction_fails(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "repository"
+    (repository / ".git").mkdir(parents=True)
+    output = tmp_path / "private"
+    real_reserve = tool.reserve_camera_bridge_authorization
+
+    class FailingReleaseLease(_Lease):
+        def __exit__(self, *_args: object) -> None:
+            type(self).events.append("lease_release_failed")
+            raise tool.CameraInputLeaseError("release failed")
+
+    FailingReleaseLease.events = []
+    monkeypatch.setattr(tool, "_REPO_ROOT", repository)
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda _path: output)
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "CaptureSource", _Source)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _Control)
+    monkeypatch.setattr(
+        tool,
+        "_EXPECTED_WINDOWS_CAMERA_ADAPTER",
+        f"{_Control.__module__}.{_Control.__qualname__}",
+    )
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", FailingReleaseLease)
+    _patch_reviewed_inputs(tool, monkeypatch, tmp_path)
+    monkeypatch.setattr(tool, "reserve_camera_bridge_authorization", real_reserve)
+    unit_digest = hashlib.sha256(bytes((1, 2, 3, 255))).hexdigest()
+
+    def run(*_args: object, **kwargs: object) -> SimpleNamespace:
+        stage = SimpleNamespace(
+            artifact=SimpleNamespace(raw_sha256=unit_digest),
+            production=object(),
+        )
+        kwargs["pre_input_guard"](stage, stage, stage)
+        kwargs["final_input_guard"](stage, stage, stage)
+        return _capture_complete_result()
+
+    monkeypatch.setattr(tool, "run_fixed_camera_bridge_capture", run)
+    monkeypatch.setattr(
+        tool,
+        "_require_bridge_capture_result_identities",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        tool,
+        "seal_camera_bridge_completion",
+        lambda *_args, **_kwargs: pytest.fail(
+            "completion must not seal before a successful lease exit"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "_retract_report_targets_after_lease_failure",
+        lambda *_args, **_kwargs: ("simulated report retraction failure",),
+    )
+
+    result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(output),
+            "--case-prefix",
+            "release-failure-complete",
+            *_review_args(),
+        ]
+    )
+
+    report = output / "reports" / "release-failure-complete.camera.json"
+    assert result == 2
+    assert report.exists()
+    assert authorization.camera_bridge_authorization_consumed(repository)
+    assert not authorization.camera_bridge_completion_seal_path(repository).exists()
 
 
 def test_bridge_postwrite_git_change_retracts_only_new_report(
