@@ -35,7 +35,7 @@ _WINDOW_HANDLE = 91
 _LAYOUT = InventoryGridLayout(
     profile_id="session-test-profile",
     column_stride=32,
-    row_stride=32,
+    row_stride=36,
 )
 _REGION = Region(2, 2, _LAYOUT.width, _LAYOUT.height)
 _FRAME_WIDTH = _REGION.x + _REGION.width + 2
@@ -308,6 +308,61 @@ def test_reviewed_detector_keeps_identity_and_wrong_geometry_fails_closed(
     assert unknown.detector_confidence == 0.0
     assert unknown.detector_reason is not None
     assert "inventory_region_not_localized" in unknown.detector_reason
+
+
+def test_no_row_gutter_reviewed_detector_remains_fail_closed_unknown(
+    tmp_path: Path,
+    provenance: InventoryValidationProvenance,
+) -> None:
+    layout = InventoryGridLayout(
+        profile_id="session-test-no-row-gutter",
+        column_stride=32,
+        row_stride=32,
+    )
+    region = Region(2, 2, layout.width, layout.height)
+    frame_width = region.x + region.width + 2
+    frame_height = region.y + region.height + 2
+    payload = _PIXEL * (frame_width * frame_height)
+    profile = InventoryFrameProfile(
+        profile_id=layout.profile_id,
+        frame_width=frame_width,
+        frame_height=frame_height,
+        region=region,
+        layout=layout,
+    )
+    reference = Frame.from_raw(
+        RawFrame(
+            payload=payload,
+            width=frame_width,
+            height=frame_height,
+            pixel_format=PixelFormat.BGRA8888,
+        ),
+        frame_id=401,
+        captured_monotonic_s=401.0,
+    )
+    detector = inventory_detector_from_profile(profile, reference)
+
+    record = run_inventory_validation_session(
+        backend_factory=_BackendFactory(
+            (payload,),
+            geometries=((frame_width, frame_height),),
+        ),
+        output_root=tmp_path / "no-row-gutter",
+        provenance=provenance,
+        cases=(InventoryValidationCase.EMPTY_VALIDATION,),
+        detector=detector,
+        utc_clock=_fixed_utc,
+    ).records[0]
+
+    assert record.detector_mode == "detector-run"
+    assert record.detector_occupied_slots is None
+    assert record.detector_confidence == 0.0
+    assert record.detector_reason == (
+        "obstruction_guard_unavailable: localized layout has no horizontal "
+        "row-gutter obstruction guard"
+    )
+    assert record.detector_profile_id == layout.profile_id
+    assert record.detector_configuration_id == detector.configuration_id
 
 
 def test_invalid_plan_and_partial_orphan_never_overwrite_evidence(

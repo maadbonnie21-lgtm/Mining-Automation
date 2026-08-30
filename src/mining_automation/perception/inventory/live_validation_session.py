@@ -248,6 +248,29 @@ class InventoryValidationSessionReport:
             raise ValueError("session record order must be contiguous and start at 1")
         if len({item.case for item in self.records}) != len(self.records):
             raise ValueError("session cases must be unique")
+        statuses = tuple(item.status for item in self.records)
+        first_incomplete = next(
+            (
+                index
+                for index, status in enumerate(statuses)
+                if status is not InventoryValidationSessionStatus.CAPTURED
+            ),
+            len(statuses),
+        )
+        incomplete_tail = statuses[first_incomplete:]
+        if (
+            incomplete_tail
+            and incomplete_tail[0] is InventoryValidationSessionStatus.CAPTURING
+        ):
+            incomplete_tail = incomplete_tail[1:]
+        if any(
+            status is not InventoryValidationSessionStatus.PENDING
+            for status in incomplete_tail
+        ):
+            raise ValueError(
+                "session status order must be captured prefix, optional one "
+                "capturing case, then pending cases"
+            )
 
     @property
     def report_path(self) -> Path:
@@ -481,6 +504,7 @@ def run_inventory_validation_session(
                 capture.report_path,
                 session_directory=report.session_directory,
                 expected_case=record.case,
+                expected_provenance=report.provenance,
             )
             report = _replace_record(
                 report,
@@ -554,10 +578,16 @@ def _reconcile_session(
         for item in report.captured_records
         if item.capture_id is not None
     }
-    captured_cases = {item.case for item in report.captured_records}
-    summaries_by_case: dict[InventoryValidationCase, list[_CaptureSummary]] = {}
+    active_record = next(
+        (
+            item
+            for item in report.records
+            if item.status is not InventoryValidationSessionStatus.CAPTURED
+        ),
+        None,
+    )
+    unassigned_complete: list[tuple[_CaptureSummary, InventoryValidationCase]] = []
     partial_directories: list[Path] = []
-    unexpected_complete: list[str] = []
     for child in sorted(capture_root.iterdir()):
         if not child.is_dir() or child.name in referenced:
             continue
@@ -568,21 +598,36 @@ def _reconcile_session(
         summary, case = _load_unassigned_capture_summary(
             candidate_report,
             session_directory=report.session_directory,
+            expected_provenance=report.provenance,
         )
-        if case in captured_cases:
-            unexpected_complete.append(child.name)
-        else:
-            summaries_by_case.setdefault(case, []).append(summary)
+        unassigned_complete.append((summary, case))
     if partial_directories:
         names = ", ".join(path.name for path in partial_directories)
         raise InventoryValidationSessionError(
             "partial/uncommitted capture evidence requires manual preservation "
             f"review: {names}"
         )
-    if unexpected_complete:
+    if unassigned_complete and (
+        active_record is None
+        or active_record.status is not InventoryValidationSessionStatus.CAPTURING
+    ):
         raise InventoryValidationSessionError(
-            "unreferenced completed capture evidence exists for an already-captured "
-            f"case: {', '.join(unexpected_complete)}"
+            "unreferenced completed capture evidence exists without one durably "
+            "CAPTURING current case; refusing to adopt, overwrite, or recapture it"
+        )
+    if active_record is not None and any(
+        case is not active_record.case for _, case in unassigned_complete
+    ):
+        labels = ", ".join(case.value for _, case in unassigned_complete)
+        raise InventoryValidationSessionError(
+            "unreferenced completed capture evidence does not match the current "
+            f"CAPTURING case {active_record.case.value!r}: {labels}"
+        )
+    if len(unassigned_complete) > 1:
+        assert active_record is not None
+        raise InventoryValidationSessionError(
+            f"multiple unassigned captures exist for {active_record.case.value!r}; "
+            "refusing to choose or overwrite evidence"
         )
 
     updated = report
@@ -593,19 +638,21 @@ def _reconcile_session(
                 report.session_directory / record.report_path,
                 session_directory=report.session_directory,
                 expected_case=record.case,
+                expected_provenance=report.provenance,
             )
             _validate_record_summary(record, summary)
             continue
-        candidates = summaries_by_case.get(record.case, [])
-        if len(candidates) > 1:
-            raise InventoryValidationSessionError(
-                f"multiple unassigned captures exist for {record.case.value!r}; "
-                "refusing to choose or overwrite evidence"
-            )
-        if len(candidates) == 1:
+        if (
+            active_record is not None
+            and record.order == active_record.order
+            and unassigned_complete
+        ):
             updated = _replace_record(
                 updated,
-                InventoryValidationSessionRecord.from_summary(record, candidates[0]),
+                InventoryValidationSessionRecord.from_summary(
+                    record,
+                    unassigned_complete[0][0],
+                ),
                 utc_clock,
             )
         elif record.status is InventoryValidationSessionStatus.CAPTURING:
@@ -648,6 +695,7 @@ def _load_unassigned_capture_summary(
     report_path: Path,
     *,
     session_directory: Path,
+    expected_provenance: InventoryValidationProvenance,
 ) -> tuple[_CaptureSummary, InventoryValidationCase]:
     raw = _read_json_object(report_path, "capture report")
     operator_case = _required_object(raw, "operator_case")
@@ -664,6 +712,7 @@ def _load_unassigned_capture_summary(
             report_path=report_path,
             session_directory=session_directory,
             expected_case=case,
+            expected_provenance=expected_provenance,
         ),
         case,
     )
@@ -674,12 +723,14 @@ def _load_capture_summary(
     *,
     session_directory: Path,
     expected_case: InventoryValidationCase,
+    expected_provenance: InventoryValidationProvenance,
 ) -> _CaptureSummary:
     return _capture_summary_from_raw(
         _read_json_object(report_path, "capture report"),
         report_path=report_path,
         session_directory=session_directory,
         expected_case=expected_case,
+        expected_provenance=expected_provenance,
     )
 
 
@@ -689,6 +740,7 @@ def _capture_summary_from_raw(
     report_path: Path,
     session_directory: Path,
     expected_case: InventoryValidationCase,
+    expected_provenance: InventoryValidationProvenance,
 ) -> _CaptureSummary:
     if (
         raw.get("report_kind") != "inventory-live-validation"
@@ -698,6 +750,10 @@ def _capture_summary_from_raw(
     if raw.get("review_status") != "unreviewed":
         raise InventoryValidationSessionError(
             "session may only adopt unreviewed owned captures"
+        )
+    if _required_object(raw, "provenance") != expected_provenance.as_dict():
+        raise InventoryValidationSessionError(
+            "capture provenance differs from the durable session provenance"
         )
     operator_case = _required_object(raw, "operator_case")
     if operator_case != {

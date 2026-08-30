@@ -49,9 +49,11 @@ python tools/validate_inventory_session.py --resume "<SESSION_DIRECTORY>"
 ```
 
 The durable manifest is reconciled before continuing. A complete capture that
-was written immediately before interruption is adopted after its hashes and
-case identity are checked. Partial or ambiguous orphan evidence is preserved
-and blocks resume instead of being overwritten or silently selected.
+was written immediately before interruption is adopted only when it belongs to
+the one current case durably marked `capturing` and its provenance exactly
+matches the durable session. Complete evidence for a pending or later case,
+foreign-provenance evidence, and partial or ambiguous orphan evidence are
+preserved and block resume without overwrite or recapture.
 
 The case plan and provenance are immutable after session creation. A
 capture-only session cannot switch to a reviewed detector halfway through;
