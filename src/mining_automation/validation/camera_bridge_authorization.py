@@ -1,4 +1,4 @@
-"""Source-owned one-shot authorization for the Issue #31 R2 bridge sample.
+"""Source-owned one-shot authorization for the complete Issue #31 R2.3 campaign.
 
 This module owns only durable authorization accounting.  It has no capture or
 input dependency and cannot grant camera authority by itself.  The live
@@ -23,7 +23,6 @@ from typing import Any, Final, cast
 from mining_automation.validation.camera_bridge_capture import (
     CAMERA_BRIDGE_CAPTURE_HOLD_SECONDS,
     CAMERA_BRIDGE_CAPTURE_ID,
-    CAMERA_BRIDGE_CAPTURE_MAXIMUM_PHYSICAL_PRIMITIVES,
 )
 from mining_automation.validation.camera_bridge_planner import (
     FROZEN_ENDPOINT_OBJECTIVE_ID,
@@ -33,23 +32,30 @@ from mining_automation.validation.camera_plan import (
     EXPECTED_CLIENT_HEIGHT,
     EXPECTED_CLIENT_WIDTH,
     REVIEWED_CAMERA_WHEEL_POINT,
+    REVIEWED_COMPASS_POINT,
 )
 
 CAMERA_BRIDGE_AUTHORIZATION_ID: Final[str] = (
-    "issue31-r2-one-shot-bridge-authorization"
+    "issue31-r2-3-full-campaign-authorization"
 )
-CAMERA_BRIDGE_AUTHORIZATION_VERSION: Final[str] = "2.2.1"
+CAMERA_BRIDGE_AUTHORIZATION_VERSION: Final[str] = "2.3.0"
 CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID: Final[str] = (
-    "issue31-r2-north-up-p610-y043-reset-right-0043-v1"
+    "issue31-r2-3-full-campaign-north-right-0043-v1"
 )
 CAMERA_BRIDGE_AUTHORIZATION_REPOSITORY_ID: Final[str] = (
     "maadbonnie21-lgtm/Mining-Automation"
 )
 
-_AUTHORIZATION_SCHEMA_VERSION: Final[int] = 2
-_AUTHORIZATION_STATE: Final[str] = "consumed_at_final_pre_input_seam"
-_AUTHORIZATION_ACTION_FAMILY: Final[str] = "north-up-p610-y043-reset"
+_AUTHORIZATION_SCHEMA_VERSION: Final[int] = 3
+_AUTHORIZATION_STATE: Final[str] = (
+    "consumed_before_first_possible_physical_primitive"
+)
+_AUTHORIZATION_ACTION_FAMILY: Final[str] = "north-then-right-bridge-campaign"
 _AUTHORIZATION_KEY: Final[str] = "right"
+_AUTHORIZATION_MAXIMUM_PHYSICAL_PRIMITIVES: Final[int] = 2
+_AUTHORIZATION_PRECURSOR_MODES: Final[frozenset[str]] = frozenset(
+    ("compass_click", "zero_click")
+)
 _AUTHORIZATION_TARGET_TITLE_SUBSTRING: Final[str] = "runelite"
 _AUTHORIZATION_CAMERA_ADAPTER: Final[str] = (
     "mining_automation.validation.windows_camera.WindowsCameraControl"
@@ -124,13 +130,12 @@ class _HostAuthorizationStore:
 
 @dataclass(frozen=True, slots=True)
 class CameraBridgeAuthorizationEvidence:
-    """Authenticated dynamic evidence recorded by, but not authorizing, R2.2."""
+    """Facts available before the first possible R2.3 physical primitive."""
 
     r1_report_sha256: str
     r2_report_sha256: str
-    north_report_sha256: str
-    north_post_sha256: str
-    commit_sha256: str
+    precursor_mode: str
+    precursor_commit_sha256: str
     target_hwnd: int
     target_process_id: int
     target_thread_id: int
@@ -141,15 +146,17 @@ class CameraBridgeAuthorizationEvidence:
         for field_name in (
             "r1_report_sha256",
             "r2_report_sha256",
-            "north_report_sha256",
-            "north_post_sha256",
-            "commit_sha256",
+            "precursor_commit_sha256",
             "target_title_sha256",
         ):
             if _SHA256_PATTERN.fullmatch(getattr(self, field_name)) is None:
                 raise CameraBridgeAuthorizationError(
                     f"{field_name} must be a lowercase SHA-256"
                 )
+        if self.precursor_mode not in _AUTHORIZATION_PRECURSOR_MODES:
+            raise CameraBridgeAuthorizationError(
+                "precursor_mode must be compass_click or zero_click"
+            )
         for field_name in ("target_hwnd", "target_process_id", "target_thread_id"):
             value = getattr(self, field_name)
             if isinstance(value, bool) or value <= 0:
@@ -167,9 +174,8 @@ class CameraBridgeAuthorizationEvidence:
         return {
             "r1_report_sha256": self.r1_report_sha256,
             "r2_report_sha256": self.r2_report_sha256,
-            "north_report_sha256": self.north_report_sha256,
-            "north_post_sha256": self.north_post_sha256,
-            "commit_sha256": self.commit_sha256,
+            "precursor_mode": self.precursor_mode,
+            "precursor_commit_sha256": self.precursor_commit_sha256,
             "target_hwnd": self.target_hwnd,
             "target_process_id": self.target_process_id,
             "target_thread_id": self.target_thread_id,
@@ -195,13 +201,19 @@ class CameraBridgeAuthorizationReservation:
         relative_path = self.sentinel_path.relative_to(self.host_authority_root)
         return {
             **_authorization_payload(self.git_head_sha, self.evidence),
+            "campaign_reservation_id": self.sentinel_sha256,
             "sentinel_relative_to_host_authority_root": relative_path.as_posix(),
             "sentinel_sha256": self.sentinel_sha256,
             "source_owned_namespace": True,
             "persistent_per_user_host_global_authority": True,
             "independent_repository_clone_can_bypass": False,
             "caller_can_select_campaign": False,
+            "caller_can_select_primitive_order": False,
+            "caller_can_select_compass_coordinate": False,
+            "caller_can_select_key_or_duration": False,
             "caller_can_select_action_or_target": False,
+            "caller_can_select_physical_budget": False,
+            "caller_can_select_source_gate": False,
             "alternate_output_or_case_prefix_can_bypass": False,
             "second_invocation_can_send_input": False,
         }
@@ -213,7 +225,7 @@ class CameraBridgeCompletionEvidence:
 
     authorization_sentinel_sha256: str
     capture_report_sha256: str
-    receipt_sha256: str
+    ordered_campaign_receipt_sha256: str
     stage_chain_sha256: str
     commit_sha256: str
     post_sha256: str
@@ -225,7 +237,7 @@ class CameraBridgeCompletionEvidence:
         for field_name in (
             "authorization_sentinel_sha256",
             "capture_report_sha256",
-            "receipt_sha256",
+            "ordered_campaign_receipt_sha256",
             "stage_chain_sha256",
             "commit_sha256",
             "post_sha256",
@@ -242,7 +254,9 @@ class CameraBridgeCompletionEvidence:
         return {
             "authorization_sentinel_sha256": self.authorization_sentinel_sha256,
             "capture_report_sha256": self.capture_report_sha256,
-            "receipt_sha256": self.receipt_sha256,
+            "ordered_campaign_receipt_sha256": (
+                self.ordered_campaign_receipt_sha256
+            ),
             "stage_chain_sha256": self.stage_chain_sha256,
             "commit_sha256": self.commit_sha256,
             "post_sha256": self.post_sha256,
@@ -642,7 +656,7 @@ def _completion_pending_path(repository_root: Path) -> Path:
 
 
 def camera_bridge_authorization_consumed(repository_root: Path) -> bool:
-    """Return whether any host-global artifact consumes the R2.2 campaign."""
+    """Return whether any host-global artifact consumes the R2.3 campaign."""
 
     store = _host_authorization_store(
         repository_root,
@@ -732,11 +746,23 @@ def _authorization_payload(
         "required_source_sha256": FROZEN_ENDPOINT_SOURCE_SHA256,
         "action_id": CAMERA_BRIDGE_CAPTURE_ID,
         "action_family": _AUTHORIZATION_ACTION_FAMILY,
-        "key": _AUTHORIZATION_KEY,
-        "hold_seconds": CAMERA_BRIDGE_CAPTURE_HOLD_SECONDS,
-        "maximum_physical_primitives": (
-            CAMERA_BRIDGE_CAPTURE_MAXIMUM_PHYSICAL_PRIMITIVES
-        ),
+        "maximum_physical_primitives": _AUTHORIZATION_MAXIMUM_PHYSICAL_PRIMITIVES,
+        "ordered_primitive_policy": [
+            {
+                "ordinal": 0,
+                "stage": "north_precursor",
+                "kind": "compass_click",
+                "logical_client_point": list(REVIEWED_COMPASS_POINT),
+                "zero_click_requires_exact_frozen_north_pixels": True,
+            },
+            {
+                "ordinal": 1,
+                "stage": "bridge",
+                "kind": "key_hold",
+                "key": _AUTHORIZATION_KEY,
+                "hold_seconds": CAMERA_BRIDGE_CAPTURE_HOLD_SECONDS,
+            },
+        ],
         "target_policy": {
             "camera_adapter": _AUTHORIZATION_CAMERA_ADAPTER,
             "client_height": EXPECTED_CLIENT_HEIGHT,
@@ -745,10 +771,11 @@ def _authorization_payload(
             "reviewed_pointer_logical_client": list(
                 REVIEWED_CAMERA_WHEEL_POINT
             ),
+            "reviewed_compass_logical_client": list(REVIEWED_COMPASS_POINT),
             "title_substring": _AUTHORIZATION_TARGET_TITLE_SUBSTRING,
         },
         "authenticated_evidence_not_authority": evidence.as_dict(),
-        "owner": "Mining-Automation Issue #31 R2 bridge launcher",
+        "owner": "Mining-Automation Issue #31 R2.3 campaign launcher",
     }
 
 
@@ -806,14 +833,26 @@ def _completion_payload(
         "required_source_sha256": FROZEN_ENDPOINT_SOURCE_SHA256,
         "action_id": CAMERA_BRIDGE_CAPTURE_ID,
         "action_family": _AUTHORIZATION_ACTION_FAMILY,
-        "key": _AUTHORIZATION_KEY,
-        "hold_seconds": CAMERA_BRIDGE_CAPTURE_HOLD_SECONDS,
-        "maximum_physical_primitives": (
-            CAMERA_BRIDGE_CAPTURE_MAXIMUM_PHYSICAL_PRIMITIVES
-        ),
+        "maximum_physical_primitives": _AUTHORIZATION_MAXIMUM_PHYSICAL_PRIMITIVES,
+        "ordered_primitive_policy": [
+            {
+                "ordinal": 0,
+                "stage": "north_precursor",
+                "kind": "compass_click",
+                "logical_client_point": list(REVIEWED_COMPASS_POINT),
+                "zero_click_requires_exact_frozen_north_pixels": True,
+            },
+            {
+                "ordinal": 1,
+                "stage": "bridge",
+                "kind": "key_hold",
+                "key": _AUTHORIZATION_KEY,
+                "hold_seconds": CAMERA_BRIDGE_CAPTURE_HOLD_SECONDS,
+            },
+        ],
         "completion_evidence": evidence.as_dict(),
         "reservation_without_this_seal_is_not_an_action_transition": True,
-        "owner": "Mining-Automation Issue #31 R2 bridge launcher",
+        "owner": "Mining-Automation Issue #31 R2.3 campaign launcher",
     }
 
 
@@ -839,7 +878,7 @@ def reserve_camera_bridge_authorization(
     source_gate_enabled: bool,
     evidence: CameraBridgeAuthorizationEvidence,
 ) -> CameraBridgeAuthorizationReservation:
-    """Atomically and permanently consume the fixed campaign before live setup.
+    """Consume the campaign before its first possible physical primitive.
 
     The sentinel is never removed here.  A partial write, process interruption,
     capture failure, or unknown physical outcome therefore consumes this code
@@ -867,7 +906,7 @@ def reserve_camera_bridge_authorization(
         label="host-global bridge completion pending witness",
     ):
         raise CameraBridgeAuthorizationConsumedError(
-            "the source-owned R2 bridge campaign completion already exists"
+            "the source-owned R2.3 campaign completion already exists"
         )
     try:
         with store.sentinel_path.open("xb") as sentinel:
@@ -877,7 +916,7 @@ def reserve_camera_bridge_authorization(
             os.fsync(sentinel.fileno())
     except FileExistsError as exc:
         raise CameraBridgeAuthorizationConsumedError(
-            "the source-owned R2 bridge campaign has already been consumed"
+            "the source-owned R2.3 campaign has already been consumed"
         ) from exc
     if _namespace_identity(store.namespace) != store.namespace_identity:
         raise CameraBridgeAuthorizationError(

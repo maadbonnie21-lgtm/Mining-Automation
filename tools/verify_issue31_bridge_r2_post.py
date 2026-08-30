@@ -28,6 +28,7 @@ from mining_automation.validation.camera_arm_guard import (
     evaluate_camera_arm_guard,
 )
 from mining_automation.validation.camera_bridge_authorization import (
+    CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID,
     CameraBridgeAuthorizationEvidence,
     CameraBridgeAuthorizationReservation,
     CameraBridgeCompletionEvidence,
@@ -43,6 +44,9 @@ from mining_automation.validation.camera_bridge_capture import (
     CAMERA_BRIDGE_CAPTURE_SETTLE_SECONDS,
     CAMERA_BRIDGE_CAPTURE_VERSION,
     camera_bridge_capture_plan,
+)
+from mining_automation.validation.camera_bridge_north_state import (
+    qualify_exact_frozen_north_registration,
 )
 from mining_automation.validation.camera_bridge_planner import (
     CAMERA_BRIDGE_PLANNER_ID,
@@ -84,7 +88,10 @@ from mining_automation.validation.client_readiness import (
     ClientInputReadiness,
     evaluate_client_input_readiness,
 )
-from mining_automation.validation.robust_registration import RobustRegistrationEngine
+from mining_automation.validation.robust_registration import (
+    RobustRegistrationEngine,
+    RobustWorldRegistration,
+)
 from mining_automation.validation.robust_view_graph import (
     ROBUST_VIEW_GRAPH_ID,
     ROBUST_VIEW_GRAPH_VERSION,
@@ -135,13 +142,12 @@ _EXPECTED_WINDOWS_CAMERA_ADAPTER: Final[str] = (
     "mining_automation.validation.windows_camera.WindowsCameraControl"
 )
 _DEFAULT_BRIDGE_OUTPUT: Final[Path] = Path("diagnostics/issue31-camera-bridge-r2")
-_DEFAULT_NORTH_OUTPUT: Final[Path] = Path(
-    "diagnostics/issue31-camera-reacquisition-v2"
-)
 # Frozen report-contract mirror of the live composition root's private limit.
 # Keeping it local avoids importing the Windows/input-bearing CLI into this
 # read-only verifier.
 _BRIDGE_NORTH_MAXIMUM_AGE_SECONDS: Final[float] = 30.0
+# Input-free report-contract mirror of the reviewed Windows compass dwell.
+_COMPASS_CLICK_DWELL_SECONDS: Final[float] = 0.100
 _STAGES: Final[tuple[str, ...]] = ("decision", "arm", "commit", "post")
 
 
@@ -184,13 +190,21 @@ class FrozenInputs:
 
 
 @dataclass(frozen=True, slots=True)
-class _AuthenticatedNorthHandoff:
-    """Exact fresh compass-north report and its independently loaded post pixels."""
+class _AuthenticatedCampaignPrecursor:
+    """Authenticated embedded precursor for the single R2.3 campaign."""
 
-    report_path: Path
-    report_sha256: str
-    raw_path: Path
+    mode: str
+    commit: Frame
+    post: Frame
     frame: Frame
+    input_state: str
+    receipt: dict[str, Any] | None
+    input_start_clock_s: float | None
+    input_receipt_clock_s: float | None
+    source_registration: dict[str, Any]
+    zero_click_north_qualification: dict[str, Any] | None
+    campaign_reservation_id: str
+    reservation_completed_clock_s: float
     window_hwnd: int
     window_process_id: int
     window_thread_id: int
@@ -474,12 +488,14 @@ def _load_authenticated_capture(
         expected_command=_CAPTURE_COMMAND,
     )
     evidence = _object(payload.get("evidence"), "capture evidence")
+    _require_r23_campaign_schema(evidence)
     input_start, input_receipt, arm_origin = _validate_capture_envelope(
         evidence,
         expected_r1_sha256=expected_r1_sha256,
         expected_r2_sha256=expected_r2_sha256,
     )
-    receipt = _typed_receipt(_object(evidence.get("receipt"), "capture receipt"))
+    receipt_value = _object(evidence.get("receipt"), "capture receipt")
+    receipt = _typed_receipt(receipt_value)
     frames = _object(evidence.get("frames"), "capture frames")
     loaded: dict[str, tuple[Frame, CameraEvaluation]] = {}
     for stage in _STAGES:
@@ -493,7 +509,7 @@ def _load_authenticated_capture(
         following.frame_id != preceding.frame_id + 1
         or following.captured_monotonic_s <= preceding.captured_monotonic_s
         for preceding, following in zip(
-            ordered_frames, ordered_frames[1:], strict=True
+            ordered_frames, ordered_frames[1:], strict=False
         )
     ):
         raise ValueError("capture frame IDs/times are not strict and contiguous")
@@ -527,26 +543,16 @@ def _load_authenticated_capture(
         or analysis.get("source_sha256") != source_sha
     ):
         raise ValueError("capture analysis does not bind the frozen source pixels")
-    north = _load_authenticated_north_handoff(
-        _object(evidence.get("compass_north_handoff"), "compass north handoff"),
-        expected_head=expected_head,
-    )
-    _validate_capture_input_chronology(
-        north=north.frame,
-        decision=loaded["decision"][0],
-        arm=loaded["arm"][0],
-        arm_origin=arm_origin,
-        commit=commit,
-        input_start=input_start,
-        input_receipt=input_receipt,
-        post=post,
+    precursor = _load_authenticated_campaign_precursor(
+        _object(evidence.get("campaign_precursor"), "campaign precursor"),
+        report_path=report_path,
+        planner_source_frame=planner_source_frame,
     )
     _validate_capture_command_argv(
         provenance,
         expected_head=expected_head,
         expected_r2_sha256=expected_r2_sha256,
         expected_r2_report_path=expected_r2_report_path,
-        expected_north=north,
         capture_report_path=report_path,
     )
     planner_source_registration = _object(
@@ -555,19 +561,21 @@ def _load_authenticated_capture(
     )
     _require_exact_registration(
         planner_source_frame,
-        north.frame,
+        precursor.frame,
         planner_source_registration,
-        context="planner source to fresh north",
+        context="planner source to campaign precursor",
     )
-    north_registration = _object(
-        evidence.get("compass_north_registration"),
-        "fresh north to commit registration",
+    if planner_source_registration != precursor.source_registration:
+        raise ValueError("campaign precursor retained two source registrations")
+    precursor_registration = _object(
+        evidence.get("precursor_to_commit_registration"),
+        "campaign precursor to commit registration",
     )
     _require_exact_registration(
-        north.frame,
+        precursor.frame,
         commit,
-        north_registration,
-        context="fresh north to commit",
+        precursor_registration,
+        context="campaign precursor to commit",
     )
     pointer_mapping = _object(
         evidence.get("pointer_mapping"), "capture pointer mapping"
@@ -575,18 +583,41 @@ def _load_authenticated_capture(
     _validate_capture_pointer_mapping(pointer_mapping)
     if (
         pointer_mapping.get("selected_window_class_name")
-        != north.window_class_name
+        != precursor.window_class_name
         or pointer_mapping.get("selected_window_title_sha256")
-        != north.window_title_sha256
+        != precursor.window_title_sha256
     ):
-        raise ValueError("capture target does not match the fresh north window")
-    authorization = _authenticate_capture_one_shot_authorization(
-        evidence.get("one_shot_authorization"),
+        raise ValueError("capture target does not match the campaign window")
+    authorization = _authenticate_capture_campaign_authorization(
+        evidence.get("campaign_authorization"),
         expected_head=expected_head,
         expected_r1_sha256=expected_r1_sha256,
         expected_r2_sha256=expected_r2_sha256,
-        north=north,
-        commit_sha256=commit_sha,
+        precursor=precursor,
+    )
+    reservation_completed = _validate_ordered_campaign_receipt(
+        _object(
+            evidence.get("ordered_campaign_receipt"),
+            "ordered campaign receipt",
+        ),
+        precursor=precursor,
+        authorization=authorization,
+        bridge_receipt=receipt_value,
+        bridge_commit=commit,
+        bridge_post=post,
+        bridge_input_start=input_start,
+        bridge_input_receipt=input_receipt,
+    )
+    _validate_capture_campaign_chronology(
+        precursor=precursor,
+        reservation_completed_clock_s=reservation_completed,
+        decision=loaded["decision"][0],
+        arm=loaded["arm"][0],
+        arm_origin=arm_origin,
+        commit=commit,
+        input_start=input_start,
+        input_receipt=input_receipt,
+        post=post,
     )
     _validate_closure(closure, commit_sha=commit_sha, post_sha=post_sha)
     reported_post = _object(
@@ -630,32 +661,53 @@ def _load_authenticated_capture(
     )
 
 
-def _authenticate_capture_one_shot_authorization(
+def _require_r23_campaign_schema(evidence: dict[str, Any]) -> None:
+    """Reject every pre-R2.3 external-north authorization envelope."""
+
+    legacy_fields = {
+        "compass_north_handoff",
+        "one_shot_authorization",
+    }
+    retained_legacy = sorted(legacy_fields.intersection(evidence))
+    if retained_legacy:
+        raise ValueError(
+            "capture report retained legacy generic north authority: "
+            + ", ".join(retained_legacy)
+        )
+    for field_name in (
+        "campaign_precursor",
+        "campaign_authorization",
+        "ordered_campaign_receipt",
+    ):
+        _object(evidence.get(field_name), f"capture {field_name}")
+
+
+def _authenticate_capture_campaign_authorization(
     value: object,
     *,
     expected_head: str,
     expected_r1_sha256: str,
     expected_r2_sha256: str,
-    north: _AuthenticatedNorthHandoff,
-    commit_sha256: str,
+    precursor: _AuthenticatedCampaignPrecursor,
 ) -> CameraBridgeAuthorizationReservation:
-    """Re-read the fixed host-global sentinel and bind its exact report object."""
+    """Re-read the fixed host-global campaign sentinel and bind it exactly."""
 
-    authorization_value = _object(value, "capture one-shot authorization")
+    authorization_value = _object(value, "capture campaign authorization")
     authorization_sha256 = authorization_value.get("sentinel_sha256")
     if not isinstance(authorization_sha256, str):
-        raise ValueError("capture one-shot sentinel SHA-256 is missing")
+        raise ValueError("capture campaign sentinel SHA-256 is missing")
+    if authorization_value.get("campaign_reservation_id") != authorization_sha256:
+        raise ValueError("capture campaign reservation ID is inconsistent")
     authorization_evidence = CameraBridgeAuthorizationEvidence(
         r1_report_sha256=expected_r1_sha256,
         r2_report_sha256=expected_r2_sha256,
-        north_report_sha256=north.report_sha256,
-        north_post_sha256=hashlib.sha256(north.frame.payload).hexdigest(),
-        commit_sha256=commit_sha256,
-        target_hwnd=north.window_hwnd,
-        target_process_id=north.window_process_id,
-        target_thread_id=north.window_thread_id,
-        target_class_name=north.window_class_name,
-        target_title_sha256=north.window_title_sha256,
+        precursor_mode=precursor.mode,
+        precursor_commit_sha256=hashlib.sha256(precursor.commit.payload).hexdigest(),
+        target_hwnd=precursor.window_hwnd,
+        target_process_id=precursor.window_process_id,
+        target_thread_id=precursor.window_thread_id,
+        target_class_name=precursor.window_class_name,
+        target_title_sha256=precursor.window_title_sha256,
     )
     authorization = authenticate_camera_bridge_authorization(
         _REPO_ROOT,
@@ -663,9 +715,11 @@ def _authenticate_capture_one_shot_authorization(
         expected_sentinel_sha256=authorization_sha256,
         evidence=authorization_evidence,
     )
+    if precursor.campaign_reservation_id != authorization.sentinel_sha256:
+        raise ValueError("campaign precursor reservation ID is inconsistent")
     if authorization_value != authorization.as_dict():
         raise ValueError(
-            "capture one-shot authorization does not bind the fixed sentinel"
+            "capture campaign authorization does not bind the fixed sentinel"
         )
     return authorization
 
@@ -683,7 +737,10 @@ def _authenticate_capture_completion_seal(
     """Require the source-owned seal of the complete serialized transaction."""
 
     _required_digest(expected_seal_sha256, "completion seal SHA-256")
-    receipt = _object(evidence.get("receipt"), "capture receipt")
+    ordered_campaign_receipt = _object(
+        evidence.get("ordered_campaign_receipt"),
+        "ordered campaign receipt",
+    )
     frames = _object(evidence.get("frames"), "capture frames")
     closure = _object(
         evidence.get("post_transition_closure"), "post-transition closure"
@@ -694,7 +751,9 @@ def _authenticate_capture_completion_seal(
     completion_evidence = CameraBridgeCompletionEvidence(
         authorization_sentinel_sha256=authorization.sentinel_sha256,
         capture_report_sha256=capture_report_sha256,
-        receipt_sha256=canonical_camera_bridge_component_sha256(receipt),
+        ordered_campaign_receipt_sha256=(
+            canonical_camera_bridge_component_sha256(ordered_campaign_receipt)
+        ),
         stage_chain_sha256=canonical_camera_bridge_component_sha256(
             {
                 "arm_age": evidence.get("arm_age"),
@@ -711,9 +770,9 @@ def _authenticate_capture_completion_seal(
         ),
         registrations_sha256=canonical_camera_bridge_component_sha256(
             {
-                "compass_north_handoff": evidence.get("compass_north_handoff"),
-                "compass_north_registration": evidence.get(
-                    "compass_north_registration"
+                "campaign_precursor": evidence.get("campaign_precursor"),
+                "precursor_to_commit_registration": evidence.get(
+                    "precursor_to_commit_registration"
                 ),
                 "planner_source_registration": evidence.get(
                     "planner_source_registration"
@@ -935,94 +994,26 @@ def _bridge_plan_dict() -> dict[str, object]:
     }
 
 
-def _load_authenticated_north_handoff(
+def _load_embedded_bootstrap_frame(
+    report_path: Path,
     value: dict[str, Any],
     *,
-    expected_head: str,
-) -> _AuthenticatedNorthHandoff:
-    report_reference = value.get("report_path")
-    report_sha256 = value.get("report_sha256")
-    if not isinstance(report_reference, str) or not report_reference.strip():
-        raise ValueError("compass north handoff report path is invalid")
-    if not isinstance(report_sha256, str):
-        raise ValueError("compass north handoff report SHA-256 is invalid")
-    _required_digest(report_sha256, "compass north report SHA-256")
-    report_path, payload = _load_report(
-        Path(report_reference),
-        report_sha256,
-        diagnostics_only=True,
-    )
-    if payload.get("schema_version") != 2:
-        raise ValueError("compass north report schema must be version 2")
-    provenance = _object(payload.get("provenance"), "compass north provenance")
-    _require_provenance(
-        provenance,
-        expected_head=expected_head,
-        plan_id=_NORTH_GUIDANCE_ID,
-        plan_version=_NORTH_GUIDANCE_VERSION,
-        expected_command=_NORTH_COMMAND,
-    )
-    evidence = _object(payload.get("evidence"), "compass north evidence")
-    north_plan = {
-        "actions": [
-            {
-                "kind": "compass_click",
-                "x": REVIEWED_COMPASS_POINT[0],
-                "y": REVIEWED_COMPASS_POINT[1],
-            }
-        ],
-        "name": _NORTH_PLAN_ID,
-    }
-    expected_preflight = {
-        "client_height": EXPECTED_CLIENT_HEIGHT,
-        "client_width": EXPECTED_CLIENT_WIDTH,
-        "focused": True,
-        "supported": True,
-    }
-    expected_north_action = {
-        "action": north_plan["actions"][0],
-        "action_index": 0,
-        "input_receipts": [
-            {
-                "complete": True,
-                "completed_events": 2,
-                "operation": "compass_click",
-                "requested_events": 2,
-            }
-        ],
-    }
-    receipt = _object(evidence.get("receipt"), "compass north receipt")
-    if (
-        evidence.get("command") != _NORTH_COMMAND
-        or evidence.get("development_only") is not True
-        or evidence.get("terminal_reason") != "bootstrap_executed"
-        or evidence.get("exception") is not None
-        or evidence.get("tracked_worktree_clean") is not True
-        or evidence.get("plan") != north_plan
-        or evidence.get("preflight") != expected_preflight
-        or receipt.get("plan") != north_plan
-        or receipt.get("preflight") != expected_preflight
-        or _array(receipt.get("actions"), "compass north receipt actions")
-        != [expected_north_action]
-    ):
-        raise ValueError("compass north report is not the fixed completed bootstrap")
-    _validate_north_command_argv(provenance, report_path=report_path)
-    _validate_north_pointer_mapping(
-        _object(evidence.get("pointer_mapping"), "compass north pointer mapping")
-    )
-    frames = _object(evidence.get("frames"), "compass north frames")
-    post = _object(frames.get("post"), "compass north post")
-    artifact = _object(post.get("artifact"), "compass north post artifact")
-    files = _object(artifact.get("files"), "compass north post files")
+    expected_label: str,
+    context: str,
+) -> tuple[Frame, CameraEvaluation]:
+    """Load one embedded canonical bootstrap frame from exact private pixels."""
+
+    artifact = _object(value.get("artifact"), f"{context} artifact")
+    files = _object(artifact.get("files"), f"{context} artifact files")
     frame_id = artifact.get("frame_id")
     captured = artifact.get("captured_monotonic_s")
     raw_sha256 = artifact.get("raw_sha256")
     raw_reference = files.get("raw")
     case_prefix = report_path.name.removesuffix(".camera.json")
-    expected_raw_reference = f"frames/{case_prefix}-v2-post.raw"
+    expected_raw_reference = f"frames/{case_prefix}-{expected_label}.raw"
     if (
         not report_path.name.endswith(".camera.json")
-        or artifact.get("label") != "v2-post"
+        or artifact.get("label") != expected_label
         or artifact.get("width") != EXPECTED_CLIENT_WIDTH
         or artifact.get("height") != EXPECTED_CLIENT_HEIGHT
         or artifact.get("pixel_format") != PixelFormat.BGRA8888.value
@@ -1037,15 +1028,18 @@ def _load_authenticated_north_handoff(
         or not isinstance(raw_reference, str)
         or raw_reference != expected_raw_reference
     ):
-        raise ValueError("compass north post artifact identity is invalid")
-    _required_digest(raw_sha256, "compass north raw SHA-256")
+        raise ValueError(f"{context} artifact identity is invalid")
+    _required_digest(raw_sha256, f"{context} raw SHA-256")
     root = report_path.parent.parent.resolve()
+    diagnostics_root = (_REPO_ROOT / "diagnostics").resolve()
+    if root != diagnostics_root and diagnostics_root not in root.parents:
+        raise ValueError(f"{context} artifact root is outside diagnostics")
     raw_path = (root / raw_reference).resolve()
     if root not in raw_path.parents or not raw_path.is_file():
-        raise ValueError("compass north raw path escaped or is missing")
+        raise ValueError(f"{context} raw path escaped or is missing")
     raw_payload = raw_path.read_bytes()
     if hashlib.sha256(raw_payload).hexdigest() != raw_sha256:
-        raise ValueError("compass north raw SHA-256 mismatch")
+        raise ValueError(f"{context} raw SHA-256 mismatch")
     frame = Frame.from_raw(
         RawFrame(
             raw_payload,
@@ -1059,71 +1053,412 @@ def _load_authenticated_north_handoff(
     readiness = evaluate_client_input_readiness(frame)
     production = evaluate_varrock_east_camera(frame)
     if _north_readiness_dict(readiness) != _object(
-        post.get("readiness"), "compass north readiness"
+        value.get("readiness"), f"{context} readiness"
     ):
-        raise ValueError("compass north readiness does not bind exact pixels")
+        raise ValueError(f"{context} readiness does not bind exact pixels")
     if _evaluation_dict(production) != _object(
-        post.get("production"), "compass north production"
+        value.get("production"), f"{context} production"
     ):
-        raise ValueError("compass north production does not bind exact pixels")
+        raise ValueError(f"{context} production does not bind exact pixels")
     if not readiness.safe_to_attempt_camera_input or not _is_fail_closed(production):
-        raise ValueError("compass north post is not gameplay-ready and fail closed")
-    window_binding = _object(
-        evidence.get("selected_window_binding"),
-        "compass north selected-window binding",
-    )
-    window_hwnd = window_binding.get("hwnd")
-    window_process_id = window_binding.get("process_id")
-    window_thread_id = window_binding.get("thread_id")
-    window_class_name = window_binding.get("class_name")
-    window_title_sha256 = window_binding.get("title_sha256")
-    if isinstance(window_title_sha256, str):
-        _required_digest(window_title_sha256, "compass north window title SHA-256")
+        raise ValueError(f"{context} is not gameplay-ready and fail closed")
+    return frame, production
+
+
+def _campaign_window_binding(
+    value: dict[str, Any],
+) -> tuple[int, int, int, str, str]:
+    expected_fields = {"class_name", "hwnd", "process_id", "thread_id", "title_sha256"}
+    title_sha256 = value.get("title_sha256")
+    if isinstance(title_sha256, str):
+        _required_digest(title_sha256, "campaign window title SHA-256")
+    integers = (value.get("hwnd"), value.get("process_id"), value.get("thread_id"))
+    class_name = value.get("class_name")
     if (
-        any(
+        set(value) != expected_fields
+        or any(
             isinstance(item, bool) or not isinstance(item, int) or item <= 0
-            for item in (window_hwnd, window_process_id, window_thread_id)
+            for item in integers
         )
-        or not isinstance(window_class_name, str)
-        or not window_class_name.strip()
-        or not isinstance(window_title_sha256, str)
-        or window_binding.get("adapter_identity") != _EXPECTED_WINDOWS_CAMERA_ADAPTER
-        or window_binding.get("title_substring") != "runelite"
+        or not isinstance(class_name, str)
+        or not class_name.strip()
+        or not isinstance(title_sha256, str)
     ):
-        raise ValueError("compass north selected-window binding is invalid")
-    expected_handoff = {
-        "captured_monotonic_s": float(captured),
-        "frame_id": frame_id,
-        "raw_path": _display_repo_path(raw_path),
-        "raw_sha256": raw_sha256,
-        "report_path": _display_repo_path(report_path),
-        "report_sha256": report_sha256,
-        "window_binding": {
-            "class_name": window_class_name,
-            "hwnd": window_hwnd,
-            "process_id": window_process_id,
-            "thread_id": window_thread_id,
-            "title_sha256": window_title_sha256,
-        },
+        raise ValueError("campaign precursor window binding is invalid")
+    hwnd, process_id, thread_id = integers
+    assert isinstance(hwnd, int)
+    assert isinstance(process_id, int)
+    assert isinstance(thread_id, int)
+    return hwnd, process_id, thread_id, class_name, title_sha256
+
+
+def _north_plan_dict() -> dict[str, object]:
+    return {
+        "actions": [
+            {
+                "kind": "compass_click",
+                "x": REVIEWED_COMPASS_POINT[0],
+                "y": REVIEWED_COMPASS_POINT[1],
+            }
+        ],
+        "name": _NORTH_PLAN_ID,
     }
-    if value != expected_handoff:
-        raise ValueError("capture handoff does not bind the authenticated north report")
-    return _AuthenticatedNorthHandoff(
-        report_path=report_path,
-        report_sha256=report_sha256,
-        raw_path=raw_path,
+
+
+def _validate_compass_bootstrap(
+    report_path: Path,
+    value: dict[str, Any],
+) -> tuple[Frame, Frame, dict[str, Any], float, float]:
+    """Authenticate the embedded, fixed one-click compass precursor."""
+
+    plan = _north_plan_dict()
+    preflight = {
+        "client_height": EXPECTED_CLIENT_HEIGHT,
+        "client_width": EXPECTED_CLIENT_WIDTH,
+        "focused": True,
+        "supported": True,
+    }
+    expected_action = {
+        "action": plan["actions"][0],
+        "action_index": 0,
+        "input_receipts": [
+            {
+                "complete": True,
+                "completed_events": 2,
+                "operation": "compass_click",
+                "requested_events": 2,
+            }
+        ],
+    }
+    receipt = _object(value.get("receipt"), "campaign compass receipt")
+    identity = _object(value.get("identity_policy"), "campaign compass identity")
+    assumptions = _object(
+        value.get("camera_assumptions"), "campaign compass assumptions"
+    )
+    acceptance = _object(value.get("acceptance"), "campaign compass acceptance")
+    combined = _object(
+        value.get("combined_issue31_acceptance"),
+        "campaign compass combined acceptance",
+    )
+    if (
+        value.get("command") != _NORTH_COMMAND
+        or value.get("development_only") is not True
+        or value.get("terminal_reason") != "bootstrap_executed"
+        or value.get("exception") is not None
+        or value.get("tracked_worktree_clean") is not True
+        or value.get("camera_evidence_eligible") is not False
+        or not isinstance(value.get("detail"), str)
+        or not str(value.get("detail")).strip()
+        or value.get("plan") != plan
+        or value.get("preflight") != preflight
+        or receipt.get("plan") != plan
+        or receipt.get("preflight") != preflight
+        or _array(receipt.get("actions"), "campaign compass receipt actions")
+        != [expected_action]
+        or identity
+        != {
+            "detector_id": _EXPECTED_DETECTOR_ID,
+            "detector_version": _EXPECTED_DETECTOR_VERSION,
+            "profile_id": _EXPECTED_PROFILE_ID,
+            "profile_schema_version": 3,
+            "guidance_v2_id": _NORTH_GUIDANCE_ID,
+            "guidance_v2_version": _NORTH_GUIDANCE_VERSION,
+        }
+        or assumptions.get("compass_point") != list(REVIEWED_COMPASS_POINT)
+        or assumptions.get("post_action_settle_s")
+        != CAMERA_BRIDGE_CAPTURE_SETTLE_SECONDS
+        or assumptions.get("maximum_semantic_actions") != 1
+        or assumptions.get("permitted_action") != "compass_click"
+        or assumptions.get("diagnostics_can_override_production") is not False
+        or isinstance(assumptions.get("compass_click_dwell_s"), bool)
+        or not isinstance(assumptions.get("compass_click_dwell_s"), (int, float))
+        or not math.isfinite(float(assumptions.get("compass_click_dwell_s")))
+        or float(assumptions.get("compass_click_dwell_s"))
+        != _COMPASS_CLICK_DWELL_SECONDS
+        or acceptance
+        != {
+            "authority": "unchanged_production_evaluator_only",
+            "passed": False,
+            "input_receipt_is_acceptance": False,
+            "capture_is_acceptance": False,
+        }
+        or combined
+        != {
+            "complete": False,
+            "reviewed_live_resource_states_included": False,
+            "same_head_drift_proof_included": False,
+        }
+    ):
+        raise ValueError("campaign compass bootstrap is not fixed and complete")
+    _validate_north_pointer_mapping(
+        _object(value.get("pointer_mapping"), "campaign compass pointer mapping")
+    )
+    frames = _object(value.get("frames"), "campaign compass frames")
+    loaded: dict[str, Frame] = {}
+    for stage in ("initial", "arm", "commit", "post"):
+        loaded[stage] = _load_embedded_bootstrap_frame(
+            report_path,
+            _object(frames.get(stage), f"campaign compass {stage}"),
+            expected_label=f"v2-{stage}",
+            context=f"campaign compass {stage}",
+        )[0]
+    ordered = [loaded[stage] for stage in ("initial", "arm", "commit", "post")]
+    if any(
+        following.frame_id <= preceding.frame_id
+        or following.captured_monotonic_s <= preceding.captured_monotonic_s
+        for preceding, following in zip(ordered, ordered[1:], strict=False)
+    ):
+        raise ValueError("campaign compass frame chronology is not strict")
+    guards = _object(value.get("guards"), "campaign compass guards")
+    expected_guards = {
+        "decision_to_arm": _arm_guard_dict(
+            evaluate_camera_arm_guard(loaded["initial"], loaded["arm"])
+        ),
+        "arm_to_commit": _arm_guard_dict(
+            evaluate_camera_arm_guard(loaded["arm"], loaded["commit"])
+        ),
+        "decision_to_commit": _arm_guard_dict(
+            evaluate_camera_arm_guard(loaded["initial"], loaded["commit"])
+        ),
+    }
+    if guards != expected_guards:
+        raise ValueError("campaign compass guards do not bind exact pixels")
+    input_evidence = _object(value.get("input"), "campaign compass input")
+    start = input_evidence.get("start_clock_s")
+    received = input_evidence.get("receipt_clock_s")
+    duration = input_evidence.get("delivery_duration_s")
+    if (
+        input_evidence.get("state") != "complete"
+        or input_evidence.get("attempted") is not True
+        or input_evidence.get("completed") is not True
+        or any(
+            isinstance(item, bool)
+            or not isinstance(item, (int, float))
+            or not math.isfinite(float(item))
+            for item in (start, received, duration)
+        )
+    ):
+        raise ValueError("campaign compass input timing is incomplete")
+    assert isinstance(start, (int, float))
+    assert isinstance(received, (int, float))
+    assert isinstance(duration, (int, float))
+    compass_dwell = assumptions.get("compass_click_dwell_s")
+    assert isinstance(compass_dwell, (int, float))
+    if (
+        received < start
+        or float(duration) != float(received) - float(start)
+        or float(duration) < float(compass_dwell)
+    ):
+        raise ValueError("campaign compass input timing is inconsistent")
+    arm_age = _object(value.get("arm_age"), "campaign compass arm age")
+    origin = arm_age.get("origin_clock_s")
+    final = arm_age.get("final_clock_s")
+    age = arm_age.get("age_s")
+    maximum = arm_age.get("maximum_age_s")
+    if (
+        arm_age.get("status") != "within_limit"
+        or any(
+            isinstance(item, bool)
+            or not isinstance(item, (int, float))
+            or not math.isfinite(float(item))
+            for item in (origin, final, age, maximum)
+        )
+        or final != start
+        or float(maximum) != MAXIMUM_ARM_TO_INPUT_AGE_SECONDS
+        or float(age) != float(final) - float(origin)
+        or not 0.0 <= float(age) < MAXIMUM_ARM_TO_INPUT_AGE_SECONDS
+    ):
+        raise ValueError("campaign compass arm age is not exact")
+    assert isinstance(origin, (int, float))
+    if not (
+        loaded["initial"].captured_monotonic_s
+        < loaded["arm"].captured_monotonic_s
+        <= float(origin)
+        <= loaded["commit"].captured_monotonic_s
+        <= float(start)
+        <= float(received)
+    ):
+        raise ValueError("campaign compass pre-input chronology is invalid")
+    if (
+        loaded["post"].captured_monotonic_s
+        < float(received) + CAMERA_BRIDGE_CAPTURE_SETTLE_SECONDS
+    ):
+        raise ValueError("campaign compass post predates its fixed settle interval")
+    for field_name, frame, normalized in (
+        ("guidance", loaded["initial"], False),
+        ("post_guidance", loaded["post"], True),
+    ):
+        guidance = _object(value.get(field_name), f"campaign compass {field_name}")
+        decision = _object(
+            guidance.get("decision_frame"), f"campaign compass {field_name} frame"
+        )
+        if (
+            guidance.get("heading_was_normalized") is not normalized
+            or decision
+            != {
+                "frame_id": frame.frame_id,
+                "captured_monotonic_s": frame.captured_monotonic_s,
+                "raw_sha256": hashlib.sha256(frame.payload).hexdigest(),
+            }
+        ):
+            raise ValueError(f"campaign compass {field_name} is not frame-bound")
+    return loaded["commit"], loaded["post"], receipt, float(start), float(received)
+
+
+def _load_authenticated_campaign_precursor(
+    value: dict[str, Any],
+    *,
+    report_path: Path,
+    planner_source_frame: Frame,
+) -> _AuthenticatedCampaignPrecursor:
+    """Authenticate the report-embedded zero/click precursor and exact pixels."""
+
+    expected_fields = {
+        "mode",
+        "physical_primitive_count",
+        "captured_monotonic_s",
+        "frame_id",
+        "raw_sha256",
+        "frame",
+        "bootstrap",
+        "source_to_precursor_registration",
+        "zero_click_north_qualification",
+        "campaign_reservation_id",
+        "reservation_completed_clock_s",
+        "registration_can_authorize_input_alone",
+        "production_remains_sole_scene_authority",
+        "embedded_same_process_and_input_lease",
+        "external_north_report_accepted",
+        "window_binding",
+    }
+    mode = value.get("mode")
+    if mode not in ("compass_click", "zero_click") or set(value) != expected_fields:
+        raise ValueError("campaign precursor schema/mode is invalid")
+    reservation_id = value.get("campaign_reservation_id")
+    reservation_completed = value.get("reservation_completed_clock_s")
+    if not isinstance(reservation_id, str):
+        raise ValueError("campaign precursor reservation ID is missing")
+    _required_digest(reservation_id, "campaign precursor reservation ID")
+    if (
+        isinstance(reservation_completed, bool)
+        or not isinstance(reservation_completed, (int, float))
+        or not math.isfinite(float(reservation_completed))
+        or float(reservation_completed) < 0.0
+    ):
+        raise ValueError("campaign precursor reservation clock is invalid")
+    expected_count = 1 if mode == "compass_click" else 0
+    if (
+        value.get("physical_primitive_count") != expected_count
+        or value.get("registration_can_authorize_input_alone") is not False
+        or value.get("production_remains_sole_scene_authority") is not True
+        or value.get("embedded_same_process_and_input_lease") is not True
+        or value.get("external_north_report_accepted") is not False
+    ):
+        raise ValueError("campaign precursor retained invalid authority or count")
+    frame_value = _object(value.get("frame"), "campaign precursor frame")
+    expected_label = "v2-post" if mode == "compass_click" else "r2-campaign-precursor"
+    frame = _load_embedded_bootstrap_frame(
+        report_path,
+        frame_value,
+        expected_label=expected_label,
+        context="campaign precursor",
+    )[0]
+    frame_sha256 = hashlib.sha256(frame.payload).hexdigest()
+    if (
+        value.get("frame_id") != frame.frame_id
+        or value.get("captured_monotonic_s") != frame.captured_monotonic_s
+        or value.get("raw_sha256") != frame_sha256
+    ):
+        raise ValueError("campaign precursor summary does not bind exact pixels")
+    source_registration = _object(
+        value.get("source_to_precursor_registration"),
+        "source-to-precursor registration",
+    )
+    recomputed_source_registration = _require_exact_registration(
+        planner_source_frame,
+        frame,
+        source_registration,
+        context="planner source to campaign precursor",
+    )
+    window = _campaign_window_binding(
+        _object(value.get("window_binding"), "campaign precursor window binding")
+    )
+    bootstrap_value = value.get("bootstrap")
+    north_qualification_value = value.get("zero_click_north_qualification")
+    if mode == "zero_click":
+        if bootstrap_value is not None:
+            raise ValueError("zero-click precursor cannot contain a bootstrap")
+        north_qualification = _object(
+            north_qualification_value,
+            "zero-click exact frozen-north qualification",
+        )
+        recomputed_north_qualification = (
+            qualify_exact_frozen_north_registration(
+                recomputed_source_registration
+            ).as_dict()
+        )
+        if north_qualification != recomputed_north_qualification:
+            raise ValueError(
+                "zero-click precursor does not prove exact frozen north pixels"
+            )
+        commit = frame
+        post = frame
+        receipt = {
+            "kind": "zero_click_observation",
+            "physical_input_attempted": False,
+            "physical_input_completed": False,
+            "frame_sha256": frame_sha256,
+            "source_registration_sha256": (
+                canonical_camera_bridge_component_sha256(source_registration)
+            ),
+            "north_qualification_sha256": (
+                canonical_camera_bridge_component_sha256(north_qualification)
+            ),
+        }
+        input_state = "none"
+        input_start = None
+        input_received = None
+    else:
+        if north_qualification_value is not None:
+            raise ValueError(
+                "compass precursor cannot contain zero-click qualification"
+            )
+        north_qualification = None
+        bootstrap = _object(bootstrap_value, "campaign compass bootstrap")
+        commit, post, receipt, input_start, input_received = (
+            _validate_compass_bootstrap(report_path, bootstrap)
+        )
+        frames = _object(bootstrap.get("frames"), "campaign compass frames")
+        if frame_value != _object(frames.get("post"), "campaign compass post"):
+            raise ValueError("campaign precursor is not the embedded compass post")
+        if post != frame:
+            raise ValueError("campaign precursor compass post pixels are inconsistent")
+        input_state = "complete"
+    return _AuthenticatedCampaignPrecursor(
+        mode=mode,
+        commit=commit,
+        post=post,
         frame=frame,
-        window_hwnd=window_hwnd,
-        window_process_id=window_process_id,
-        window_thread_id=window_thread_id,
-        window_class_name=window_class_name,
-        window_title_sha256=window_title_sha256,
+        input_state=input_state,
+        receipt=receipt,
+        input_start_clock_s=input_start,
+        input_receipt_clock_s=input_received,
+        source_registration=source_registration,
+        zero_click_north_qualification=north_qualification,
+        campaign_reservation_id=reservation_id,
+        reservation_completed_clock_s=float(reservation_completed),
+        window_hwnd=window[0],
+        window_process_id=window[1],
+        window_thread_id=window[2],
+        window_class_name=window[3],
+        window_title_sha256=window[4],
     )
 
 
-def _validate_capture_input_chronology(
+def _validate_capture_campaign_chronology(
     *,
-    north: Frame,
+    precursor: _AuthenticatedCampaignPrecursor,
+    reservation_completed_clock_s: float,
     decision: Frame,
     arm: Frame,
     arm_origin: float,
@@ -1133,7 +1468,7 @@ def _validate_capture_input_chronology(
     post: Frame,
 ) -> None:
     if not (
-        north.captured_monotonic_s
+        precursor.frame.captured_monotonic_s
         <= decision.captured_monotonic_s
         < arm.captured_monotonic_s
         <= arm_origin
@@ -1142,17 +1477,130 @@ def _validate_capture_input_chronology(
         <= input_receipt
     ):
         raise ValueError(
-            "capture chronology must be north <= decision < arm <= arm origin "
+            "capture chronology must be precursor <= decision < arm <= arm origin "
             "<= commit <= input start <= receipt"
         )
-    north_age = input_start - north.captured_monotonic_s
-    if not 0.0 <= north_age < _BRIDGE_NORTH_MAXIMUM_AGE_SECONDS:
-        raise ValueError("capture north handoff reached its exclusive age limit")
+    if (
+        isinstance(reservation_completed_clock_s, bool)
+        or not isinstance(reservation_completed_clock_s, (int, float))
+        or not math.isfinite(float(reservation_completed_clock_s))
+        or reservation_completed_clock_s < 0.0
+    ):
+        raise ValueError("campaign reservation completion clock is invalid")
+    if precursor.mode == "compass_click":
+        start = precursor.input_start_clock_s
+        received = precursor.input_receipt_clock_s
+        if start is None or received is None or not (
+            precursor.commit.captured_monotonic_s
+            <= reservation_completed_clock_s
+            <= start
+            <= received
+            <= precursor.post.captured_monotonic_s
+            <= decision.captured_monotonic_s
+        ):
+            raise ValueError(
+                "campaign reservation/compass chronology is not authenticated"
+            )
+    elif not (
+        commit.captured_monotonic_s
+        <= reservation_completed_clock_s
+        <= input_start
+    ):
+        raise ValueError("zero-click reservation chronology is not authenticated")
+    precursor_age = input_start - precursor.frame.captured_monotonic_s
+    if not 0.0 <= precursor_age < _BRIDGE_NORTH_MAXIMUM_AGE_SECONDS:
+        raise ValueError("campaign precursor reached its exclusive age limit")
     if (
         post.captured_monotonic_s
         < input_receipt + CAMERA_BRIDGE_CAPTURE_SETTLE_SECONDS
     ):
         raise ValueError("capture post frame predates the fixed settle interval")
+
+
+def _validate_ordered_campaign_receipt(
+    value: dict[str, Any],
+    *,
+    precursor: _AuthenticatedCampaignPrecursor,
+    authorization: CameraBridgeAuthorizationReservation,
+    bridge_receipt: dict[str, Any],
+    bridge_commit: Frame,
+    bridge_post: Frame,
+    bridge_input_start: float,
+    bridge_input_receipt: float,
+) -> float:
+    """Require the exact optional-compass then fixed-Right campaign receipt."""
+
+    reservation_completed = value.get("reservation_completed_clock_s")
+    if (
+        isinstance(reservation_completed, bool)
+        or not isinstance(reservation_completed, (int, float))
+        or not math.isfinite(float(reservation_completed))
+        or float(reservation_completed) < 0.0
+    ):
+        raise ValueError("ordered campaign reservation clock is invalid")
+    if (
+        value.get("reservation_id") != precursor.campaign_reservation_id
+        or float(reservation_completed)
+        != precursor.reservation_completed_clock_s
+    ):
+        raise ValueError("ordered campaign reservation binding is inconsistent")
+    allowed_order = [
+        {
+            "ordinal": 0,
+            "stage": "north_precursor",
+            "kind": "compass_click",
+            "logical_client_point": list(REVIEWED_COMPASS_POINT),
+                "zero_click_requires_exact_frozen_north_pixels": True,
+        },
+        {
+            "ordinal": 1,
+            "stage": "bridge",
+            "kind": "key_hold",
+            "key": "right",
+            "hold_seconds": CAMERA_BRIDGE_CAPTURE_HOLD_SECONDS,
+        },
+    ]
+    precursor_commit_sha256 = hashlib.sha256(precursor.commit.payload).hexdigest()
+    precursor_post_sha256 = hashlib.sha256(precursor.post.payload).hexdigest()
+    expected_stages = [
+        {
+            "ordinal": 0,
+            "stage": "north_precursor",
+            "mode": precursor.mode,
+            "commit_sha256": precursor_commit_sha256,
+            "post_sha256": precursor_post_sha256,
+            "input_state": precursor.input_state,
+            "receipt": precursor.receipt,
+            "start_clock_s": precursor.input_start_clock_s,
+            "receipt_clock_s": precursor.input_receipt_clock_s,
+        },
+        {
+            "ordinal": 1,
+            "stage": "bridge",
+            "mode": "fixed_right_hold",
+            "commit_sha256": hashlib.sha256(bridge_commit.payload).hexdigest(),
+            "post_sha256": hashlib.sha256(bridge_post.payload).hexdigest(),
+            "input_state": "complete",
+            "receipt": bridge_receipt,
+            "start_clock_s": bridge_input_start,
+            "receipt_clock_s": bridge_input_receipt,
+        },
+    ]
+    expected = {
+        "schema_version": 1,
+        "campaign_id": CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID,
+        "reservation_id": authorization.sentinel_sha256,
+        "reservation_completed_clock_s": reservation_completed,
+        "maximum_physical_primitives": 2,
+        "actual_physical_primitives": (
+            2 if precursor.mode == "compass_click" else 1
+        ),
+        "allowed_order": allowed_order,
+        "stages": expected_stages,
+    }
+    if value != expected:
+        raise ValueError("ordered campaign receipt is not exact")
+    return float(reservation_completed)
 
 
 def _validate_capture_pointer_mapping(value: dict[str, Any]) -> None:
@@ -1366,7 +1814,7 @@ def _require_exact_registration(
     reported: dict[str, Any],
     *,
     context: str,
-) -> None:
+) -> RobustWorldRegistration:
     source_sha256 = hashlib.sha256(source.payload).hexdigest()
     target_sha256 = hashlib.sha256(target.payload).hexdigest()
     try:
@@ -1380,6 +1828,7 @@ def _require_exact_registration(
             raise ValueError("registration payload differs from recomputation")
     except (TypeError, ValueError) as error:
         raise ValueError(f"{context} registration is not exact: {error}") from error
+    return recomputed
 
 
 def _validate_capture_command_argv(
@@ -1388,7 +1837,6 @@ def _validate_capture_command_argv(
     expected_head: str,
     expected_r2_sha256: str,
     expected_r2_report_path: Path,
-    expected_north: _AuthenticatedNorthHandoff,
     capture_report_path: Path,
 ) -> None:
     options = _command_options(provenance, _CAPTURE_COMMAND)
@@ -1397,8 +1845,6 @@ def _validate_capture_command_argv(
         "--analysis-sha256",
         "--case-prefix",
         "--expected-head",
-        "--north-report",
-        "--north-sha256",
     }
     if set(options) not in (required, {*required, "--output"}):
         raise ValueError("capture command argv does not use only the fixed options")
@@ -1410,34 +1856,12 @@ def _validate_capture_command_argv(
         not capture_report_path.name.endswith(".camera.json")
         or options["--expected-head"] != expected_head
         or options["--analysis-sha256"] != expected_r2_sha256
-        or options["--north-sha256"] != expected_north.report_sha256
         or options["--case-prefix"] != case_prefix
         or _resolve_command_path(options["--analysis-report"])
         != expected_r2_report_path.resolve()
-        or _resolve_command_path(options["--north-report"])
-        != expected_north.report_path
         or output_path != capture_report_path.parent.parent.resolve()
     ):
         raise ValueError("capture command argv does not bind the exact live inputs")
-
-
-def _validate_north_command_argv(
-    provenance: dict[str, Any], *, report_path: Path
-) -> None:
-    options = _command_options(provenance, _NORTH_COMMAND)
-    required = {"--case-prefix"}
-    if set(options) not in (required, {*required, "--output"}):
-        raise ValueError("compass north command argv retained unexpected options")
-    case_prefix = report_path.name.removesuffix(".camera.json")
-    output_path = _resolve_command_path(
-        options.get("--output", str(_DEFAULT_NORTH_OUTPUT))
-    )
-    if (
-        not report_path.name.endswith(".camera.json")
-        or options["--case-prefix"] != case_prefix
-        or output_path != report_path.parent.parent.resolve()
-    ):
-        raise ValueError("compass north command argv does not bind its report")
 
 
 def _command_options(

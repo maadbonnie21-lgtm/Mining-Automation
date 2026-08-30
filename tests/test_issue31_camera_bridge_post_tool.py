@@ -8,6 +8,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -222,6 +223,277 @@ def _timeline_frame(marker: int, frame_id: int, captured: float) -> Frame:
     )
 
 
+def _campaign_precursor(
+    tool: ModuleType,
+    *,
+    mode: str = "zero_click",
+    commit_captured: float = 0.0,
+    post_captured: float = 0.0,
+    input_start: float | None = None,
+    input_receipt: float | None = None,
+    reservation_completed: float = 0.475,
+) -> object:
+    commit = _timeline_frame(
+        1,
+        1,
+        post_captured if mode == "zero_click" else commit_captured,
+    )
+    post = _timeline_frame(2, 2, post_captured) if mode == "compass_click" else commit
+    source_registration = {"accepted": True}
+    north_qualification = (
+        {
+            "accepted": True,
+            "exact_frozen_pixel_identity": True,
+        }
+        if mode == "zero_click"
+        else None
+    )
+    receipt = (
+        {"fixed": mode}
+        if mode == "compass_click"
+        else {
+            "kind": "zero_click_observation",
+            "physical_input_attempted": False,
+            "physical_input_completed": False,
+            "frame_sha256": hashlib.sha256(post.payload).hexdigest(),
+            "source_registration_sha256": (
+                tool.canonical_camera_bridge_component_sha256(source_registration)
+            ),
+            "north_qualification_sha256": (
+                tool.canonical_camera_bridge_component_sha256(north_qualification)
+            ),
+        }
+    )
+    return tool._AuthenticatedCampaignPrecursor(
+        mode=mode,
+        commit=commit,
+        post=post,
+        frame=post,
+        input_state="complete" if mode == "compass_click" else "none",
+        receipt=receipt,
+        input_start_clock_s=input_start,
+        input_receipt_clock_s=input_receipt,
+        source_registration=source_registration,
+        zero_click_north_qualification=north_qualification,
+        campaign_reservation_id="6" * 64,
+        reservation_completed_clock_s=reservation_completed,
+        window_hwnd=123,
+        window_process_id=456,
+        window_thread_id=789,
+        window_class_name="SunAwtFrame",
+        window_title_sha256="4" * 64,
+    )
+
+
+def _campaign_reservation(
+    precursor: object,
+    tmp_path: Path,
+) -> CameraBridgeAuthorizationReservation:
+    evidence = CameraBridgeAuthorizationEvidence(
+        r1_report_sha256=_R1_SHA,
+        r2_report_sha256=_R2_SHA,
+        precursor_mode=precursor.mode,
+        precursor_commit_sha256=hashlib.sha256(precursor.commit.payload).hexdigest(),
+        target_hwnd=precursor.window_hwnd,
+        target_process_id=precursor.window_process_id,
+        target_thread_id=precursor.window_thread_id,
+        target_class_name=precursor.window_class_name,
+        target_title_sha256=precursor.window_title_sha256,
+    )
+    return CameraBridgeAuthorizationReservation(
+        git_head_sha=_HEAD,
+        host_authority_root=tmp_path,
+        sentinel_path=tmp_path / "fixed.consumed.json",
+        sentinel_sha256="6" * 64,
+        evidence=evidence,
+    )
+
+
+def _ordered_receipt(
+    tool: ModuleType,
+    precursor: object,
+    authorization: CameraBridgeAuthorizationReservation,
+    bridge_commit: Frame,
+    bridge_post: Frame,
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "campaign_id": tool.CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID,
+        "reservation_id": authorization.sentinel_sha256,
+        "reservation_completed_clock_s": precursor.reservation_completed_clock_s,
+        "maximum_physical_primitives": 2,
+        "actual_physical_primitives": (
+            2 if precursor.mode == "compass_click" else 1
+        ),
+        "allowed_order": [
+            {
+                "ordinal": 0,
+                "stage": "north_precursor",
+                "kind": "compass_click",
+                "logical_client_point": list(tool.REVIEWED_COMPASS_POINT),
+                "zero_click_requires_exact_frozen_north_pixels": True,
+            },
+            {
+                "ordinal": 1,
+                "stage": "bridge",
+                "kind": "key_hold",
+                "key": "right",
+                "hold_seconds": 0.043,
+            },
+        ],
+        "stages": [
+            {
+                "ordinal": 0,
+                "stage": "north_precursor",
+                "mode": precursor.mode,
+                "commit_sha256": hashlib.sha256(precursor.commit.payload).hexdigest(),
+                "post_sha256": hashlib.sha256(precursor.post.payload).hexdigest(),
+                "input_state": precursor.input_state,
+                "receipt": precursor.receipt,
+                "start_clock_s": precursor.input_start_clock_s,
+                "receipt_clock_s": precursor.input_receipt_clock_s,
+            },
+            {
+                "ordinal": 1,
+                "stage": "bridge",
+                "mode": "fixed_right_hold",
+                "commit_sha256": hashlib.sha256(bridge_commit.payload).hexdigest(),
+                "post_sha256": hashlib.sha256(bridge_post.payload).hexdigest(),
+                "input_state": "complete",
+                "receipt": _receipt(tool),
+                "start_clock_s": 0.5,
+                "receipt_clock_s": 0.6,
+            },
+        ],
+    }
+
+
+def _compass_bootstrap_value(
+    tool: ModuleType,
+    frames: dict[str, Frame],
+) -> dict[str, object]:
+    plan = tool._north_plan_dict()
+    preflight = {
+        "client_height": 1078,
+        "client_width": 1005,
+        "focused": True,
+        "supported": True,
+    }
+    receipt = {
+        "plan": plan,
+        "preflight": preflight,
+        "actions": [
+            {
+                "action": plan["actions"][0],
+                "action_index": 0,
+                "input_receipts": [
+                    {
+                        "complete": True,
+                        "completed_events": 2,
+                        "operation": "compass_click",
+                        "requested_events": 2,
+                    }
+                ],
+            }
+        ],
+    }
+    return {
+        "command": "north-bootstrap-v2",
+        "development_only": True,
+        "identity_policy": {
+            "detector_id": "profiled-resource:varrock-east-iron-v1",
+            "detector_version": "2.1.0",
+            "profile_id": "varrock-east-iron-v1",
+            "profile_schema_version": 3,
+            "guidance_v2_id": "issue31-world-only-multi-axis-guidance",
+            "guidance_v2_version": "2.0.0",
+        },
+        "camera_assumptions": {
+            "compass_point": list(tool.REVIEWED_COMPASS_POINT),
+            "compass_click_dwell_s": 0.100,
+            "post_action_settle_s": 1.0,
+            "maximum_semantic_actions": 1,
+            "permitted_action": "compass_click",
+            "diagnostics_can_override_production": False,
+        },
+        "frames": {stage: {} for stage in ("initial", "arm", "commit", "post")},
+        "guidance": {
+            "heading_was_normalized": False,
+            "decision_frame": {
+                "frame_id": frames["initial"].frame_id,
+                "captured_monotonic_s": frames["initial"].captured_monotonic_s,
+                "raw_sha256": hashlib.sha256(frames["initial"].payload).hexdigest(),
+            },
+        },
+        "post_guidance": {
+            "heading_was_normalized": True,
+            "decision_frame": {
+                "frame_id": frames["post"].frame_id,
+                "captured_monotonic_s": frames["post"].captured_monotonic_s,
+                "raw_sha256": hashlib.sha256(frames["post"].payload).hexdigest(),
+            },
+        },
+        "plan": plan,
+        "guards": {
+            "decision_to_arm": {"exact": True},
+            "arm_to_commit": {"exact": True},
+            "decision_to_commit": {"exact": True},
+        },
+        "arm_age": {
+            "status": "within_limit",
+            "origin_clock_s": 0.15,
+            "final_clock_s": 0.3,
+            "age_s": 0.15,
+            "maximum_age_s": 1.0,
+        },
+        "preflight": preflight,
+        "receipt": receipt,
+        "input": {
+            "state": "complete",
+            "attempted": True,
+            "completed": True,
+            "start_clock_s": 0.3,
+            "receipt_clock_s": 0.4,
+            "delivery_duration_s": 0.4 - 0.3,
+        },
+        "pointer_mapping": {
+            "adapter_identity": tool._EXPECTED_WINDOWS_CAMERA_ADAPTER,
+            "reviewed_logical_point": {
+                "coordinate_space": "target_logical_client_pixels",
+                "x": tool.REVIEWED_COMPASS_POINT[0],
+                "y": tool.REVIEWED_COMPASS_POINT[1],
+            },
+            "preflight": preflight,
+            "receipt_backed_target_root_policy": {
+                "complete_compass_receipt": True,
+                "discovery_identity_bound_to_control": True,
+                "numeric_mapping_captured": False,
+                "physical_screen_point": None,
+                "target_root_handle_recorded": False,
+                "target_root_rechecked_before_button_down": True,
+                "target_root_rechecked_during_dwell_before_button_up": True,
+                "claim": "receipt-bound target root",
+            },
+        },
+        "exception": None,
+        "terminal_reason": "bootstrap_executed",
+        "detail": "fixed compass precursor completed",
+        "acceptance": {
+            "authority": "unchanged_production_evaluator_only",
+            "passed": False,
+            "input_receipt_is_acceptance": False,
+            "capture_is_acceptance": False,
+        },
+        "tracked_worktree_clean": True,
+        "camera_evidence_eligible": False,
+        "combined_issue31_acceptance": {
+            "complete": False,
+            "reviewed_live_resource_states_included": False,
+            "same_head_drift_proof_included": False,
+        },
+    }
+
+
 def _provenance(tool: ModuleType) -> dict[str, object]:
     return {
         "detector_id": "profiled-resource:varrock-east-iron-v1",
@@ -373,25 +645,102 @@ def test_capture_envelope_rejects_sub_hold_delivery(tool: ModuleType) -> None:
 def test_capture_chronology_authenticates_full_live_sequence(
     tool: ModuleType,
 ) -> None:
-    tool._validate_capture_input_chronology(
-        north=_timeline_frame(1, 1, 0.1),
-        decision=_timeline_frame(2, 2, 0.1),
-        arm=_timeline_frame(3, 3, 0.2),
-        arm_origin=0.3,
-        commit=_timeline_frame(4, 4, 0.4),
+    tool._validate_capture_campaign_chronology(
+        precursor=_campaign_precursor(
+            tool,
+            post_captured=0.1,
+            reservation_completed=0.475,
+        ),
+        reservation_completed_clock_s=0.475,
+        decision=_timeline_frame(2, 2, 0.2),
+        arm=_timeline_frame(3, 3, 0.3),
+        arm_origin=0.4,
+        commit=_timeline_frame(4, 4, 0.45),
         input_start=0.5,
         input_receipt=0.6,
         post=_timeline_frame(5, 5, 1.6),
     )
 
 
+def test_capture_chronology_authenticates_compass_before_right(
+    tool: ModuleType,
+) -> None:
+    tool._validate_capture_campaign_chronology(
+        precursor=_campaign_precursor(
+            tool,
+            mode="compass_click",
+            commit_captured=0.2,
+            post_captured=1.4,
+            input_start=0.3,
+            input_receipt=0.4,
+        ),
+        reservation_completed_clock_s=0.25,
+        decision=_timeline_frame(3, 3, 1.5),
+        arm=_timeline_frame(4, 4, 1.6),
+        arm_origin=1.7,
+        commit=_timeline_frame(5, 5, 1.8),
+        input_start=1.9,
+        input_receipt=2.0,
+        post=_timeline_frame(6, 6, 3.0),
+    )
+
+
+@pytest.mark.parametrize("reservation_completed", [0.39, 0.51])
+def test_capture_chronology_rejects_reservation_outside_zero_click_right_seam(
+    tool: ModuleType,
+    reservation_completed: float,
+) -> None:
+    with pytest.raises(ValueError, match="zero-click reservation chronology"):
+        tool._validate_capture_campaign_chronology(
+            precursor=_campaign_precursor(
+                tool,
+                post_captured=0.1,
+                reservation_completed=reservation_completed,
+            ),
+            reservation_completed_clock_s=reservation_completed,
+            decision=_timeline_frame(2, 2, 0.2),
+            arm=_timeline_frame(3, 3, 0.3),
+            arm_origin=0.35,
+            commit=_timeline_frame(4, 4, 0.4),
+            input_start=0.5,
+            input_receipt=0.6,
+            post=_timeline_frame(5, 5, 1.6),
+        )
+
+
+@pytest.mark.parametrize("reservation_completed", [0.19, 0.31])
+def test_capture_chronology_rejects_reservation_outside_compass_input_seam(
+    tool: ModuleType,
+    reservation_completed: float,
+) -> None:
+    with pytest.raises(ValueError, match="reservation/compass chronology"):
+        tool._validate_capture_campaign_chronology(
+            precursor=_campaign_precursor(
+                tool,
+                mode="compass_click",
+                commit_captured=0.2,
+                post_captured=1.4,
+                input_start=0.3,
+                input_receipt=0.4,
+            ),
+            reservation_completed_clock_s=reservation_completed,
+            decision=_timeline_frame(3, 3, 1.5),
+            arm=_timeline_frame(4, 4, 1.6),
+            arm_origin=1.7,
+            commit=_timeline_frame(5, 5, 1.8),
+            input_start=1.9,
+            input_receipt=2.0,
+            post=_timeline_frame(6, 6, 3.0),
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("north", 0.11),
-        ("decision", 0.2),
-        ("arm_origin", 0.19),
-        ("arm_origin", 0.41),
+        ("precursor", 0.21),
+        ("decision", 0.3),
+        ("arm_origin", 0.29),
+        ("arm_origin", 0.46),
         ("commit", 0.51),
         ("input_start", 0.61),
     ],
@@ -402,19 +751,24 @@ def test_capture_chronology_rejects_every_out_of_order_seam(
     value: float,
 ) -> None:
     times = {
-        "north": 0.0,
-        "decision": 0.1,
-        "arm": 0.2,
-        "arm_origin": 0.3,
-        "commit": 0.4,
+        "precursor": 0.1,
+        "decision": 0.2,
+        "arm": 0.3,
+        "arm_origin": 0.4,
+        "commit": 0.45,
         "input_start": 0.5,
         "input_receipt": 0.6,
         "post": 1.6,
     }
     times[field] = value
-    with pytest.raises(ValueError, match="north <= decision < arm"):
-        tool._validate_capture_input_chronology(
-            north=_timeline_frame(1, 1, times["north"]),
+    with pytest.raises(ValueError, match="precursor <= decision < arm"):
+        tool._validate_capture_campaign_chronology(
+            precursor=_campaign_precursor(
+                tool,
+                post_captured=times["precursor"],
+                reservation_completed=0.475,
+            ),
+            reservation_completed_clock_s=0.475,
             decision=_timeline_frame(2, 2, times["decision"]),
             arm=_timeline_frame(3, 3, times["arm"]),
             arm_origin=times["arm_origin"],
@@ -425,12 +779,17 @@ def test_capture_chronology_rejects_every_out_of_order_seam(
         )
 
 
-def test_capture_chronology_rejects_north_at_exclusive_age_limit(
+def test_capture_chronology_rejects_precursor_at_exclusive_age_limit(
     tool: ModuleType,
 ) -> None:
-    with pytest.raises(ValueError, match="north handoff.*exclusive age"):
-        tool._validate_capture_input_chronology(
-            north=_timeline_frame(1, 1, 0.0),
+    with pytest.raises(ValueError, match="precursor.*exclusive age"):
+        tool._validate_capture_campaign_chronology(
+            precursor=_campaign_precursor(
+                tool,
+                post_captured=0.0,
+                reservation_completed=29.45,
+            ),
+            reservation_completed_clock_s=29.45,
             decision=_timeline_frame(2, 2, 29.1),
             arm=_timeline_frame(3, 3, 29.2),
             arm_origin=29.3,
@@ -445,8 +804,13 @@ def test_capture_chronology_rejects_post_before_fixed_settle(
     tool: ModuleType,
 ) -> None:
     with pytest.raises(ValueError, match="fixed settle interval"):
-        tool._validate_capture_input_chronology(
-            north=_timeline_frame(1, 1, 0.0),
+        tool._validate_capture_campaign_chronology(
+            precursor=_campaign_precursor(
+                tool,
+                post_captured=0.0,
+                reservation_completed=0.45,
+            ),
+            reservation_completed_clock_s=0.45,
             decision=_timeline_frame(2, 2, 0.1),
             arm=_timeline_frame(3, 3, 0.2),
             arm_origin=0.3,
@@ -483,33 +847,17 @@ def test_capture_pointer_mapping_requires_exact_round_trip_and_owner(
         tool._validate_capture_pointer_mapping(value)
 
 
-def test_post_ingestion_reauthenticates_fixed_one_shot_sentinel(
+def test_post_ingestion_reauthenticates_fixed_campaign_sentinel(
     tool: ModuleType,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    frame = Frame.from_raw(
-        RawFrame(b"\x01\x02\x03\xff", 1, 1, PixelFormat.BGRA8888),
-        frame_id=4,
-        captured_monotonic_s=4.0,
-    )
-    north = tool._AuthenticatedNorthHandoff(
-        report_path=tmp_path / "north.camera.json",
-        report_sha256="3" * 64,
-        raw_path=tmp_path / "north.raw",
-        frame=frame,
-        window_hwnd=123,
-        window_process_id=456,
-        window_thread_id=789,
-        window_class_name="SunAwtFrame",
-        window_title_sha256="4" * 64,
-    )
+    precursor = _campaign_precursor(tool)
     dynamic = CameraBridgeAuthorizationEvidence(
         r1_report_sha256=_R1_SHA,
         r2_report_sha256=_R2_SHA,
-        north_report_sha256="3" * 64,
-        north_post_sha256=hashlib.sha256(frame.payload).hexdigest(),
-        commit_sha256="5" * 64,
+        precursor_mode="zero_click",
+        precursor_commit_sha256=hashlib.sha256(precursor.commit.payload).hexdigest(),
         target_hwnd=123,
         target_process_id=456,
         target_thread_id=789,
@@ -536,73 +884,43 @@ def test_post_ingestion_reauthenticates_fixed_one_shot_sentinel(
 
     monkeypatch.setattr(tool, "authenticate_camera_bridge_authorization", authenticate)
     report_value = reservation.as_dict()
-    assert report_value == {
-        "schema_version": 2,
-        "authorization_id": "issue31-r2-one-shot-bridge-authorization",
-        "authorization_version": "2.2.1",
-        "campaign_id": "issue31-r2-north-up-p610-y043-reset-right-0043-v1",
-        "repository_id": "maadbonnie21-lgtm/Mining-Automation",
-        "authority_scope": "persistent_per_user_host_global",
-        "authority_provider_id": "windows-known-folder-localappdata-v1",
-        "state": "consumed_at_final_pre_input_seam",
-        "authorization_authority": "source_literal_gate_only",
-        "source_gate_enabled_at_consumption": True,
-        "git_head_sha": _HEAD,
-        "objective_id": "north-up-p610-y043-reset:right-key-hold-0.043s",
-        "required_source_sha256": (
-            "c1cb6fe144600ce153b1ceb2e90d6e375d42babea1eda6a08120efbc7ed2a4cd"
-        ),
-        "action_id": "issue31-fixed-camera-bridge-capture-r2",
-        "action_family": "north-up-p610-y043-reset",
-        "key": "right",
-        "hold_seconds": 0.043,
-        "maximum_physical_primitives": 1,
-        "target_policy": {
-            "camera_adapter": (
-                "mining_automation.validation.windows_camera.WindowsCameraControl"
-            ),
-            "client_height": 1078,
-            "client_width": 1005,
-            "input_lease": (
-                "mining_automation.validation.camera_input_lease."
-                "WindowsCameraInputLease"
-            ),
-            "reviewed_pointer_logical_client": [400, 50],
-            "title_substring": "runelite",
-        },
-        "authenticated_evidence_not_authority": dynamic.as_dict(),
-        "owner": "Mining-Automation Issue #31 R2 bridge launcher",
-        "sentinel_relative_to_host_authority_root": "fixed.consumed.json",
-        "sentinel_sha256": "6" * 64,
-        "source_owned_namespace": True,
-        "persistent_per_user_host_global_authority": True,
-        "independent_repository_clone_can_bypass": False,
-        "caller_can_select_campaign": False,
-        "caller_can_select_action_or_target": False,
-        "alternate_output_or_case_prefix_can_bypass": False,
-        "second_invocation_can_send_input": False,
-    }
+    assert report_value["schema_version"] == 3
+    assert report_value["authorization_version"] == "2.3.0"
+    assert report_value["campaign_reservation_id"] == "6" * 64
+    assert report_value["maximum_physical_primitives"] == 2
+    assert report_value["authenticated_evidence_not_authority"] == dynamic.as_dict()
     assert "sentinel_relative_to_common_git_dir" not in report_value
-    tool._authenticate_capture_one_shot_authorization(
+    tool._authenticate_capture_campaign_authorization(
         report_value,
         expected_head=_HEAD,
         expected_r1_sha256=_R1_SHA,
         expected_r2_sha256=_R2_SHA,
-        north=north,
-        commit_sha256="5" * 64,
+        precursor=precursor,
     )
     assert len(calls) == 1
 
     forged = dict(report_value)
     forged["state"] = "available"
     with pytest.raises(ValueError, match="does not bind the fixed sentinel"):
-        tool._authenticate_capture_one_shot_authorization(
+        tool._authenticate_capture_campaign_authorization(
             forged,
             expected_head=_HEAD,
             expected_r1_sha256=_R1_SHA,
             expected_r2_sha256=_R2_SHA,
-            north=north,
-            commit_sha256="5" * 64,
+            precursor=precursor,
+        )
+
+    mismatched_precursor = replace(
+        precursor,
+        campaign_reservation_id="7" * 64,
+    )
+    with pytest.raises(ValueError, match="precursor reservation ID"):
+        tool._authenticate_capture_campaign_authorization(
+            report_value,
+            expected_head=_HEAD,
+            expected_r1_sha256=_R1_SHA,
+            expected_r2_sha256=_R2_SHA,
+            precursor=mismatched_precursor,
         )
 
     tampered_bindings = (
@@ -614,13 +932,12 @@ def test_post_ingestion_reauthenticates_fixed_one_shot_sentinel(
         forged = dict(report_value)
         forged[field_name] = field_value
         with pytest.raises(ValueError, match="does not bind the fixed sentinel"):
-            tool._authenticate_capture_one_shot_authorization(
+            tool._authenticate_capture_campaign_authorization(
                 forged,
                 expected_head=_HEAD,
                 expected_r1_sha256=_R1_SHA,
                 expected_r2_sha256=_R2_SHA,
-                north=north,
-                commit_sha256="5" * 64,
+                precursor=precursor,
             )
 
     retained_common_git_authority = dict(report_value)
@@ -628,13 +945,110 @@ def test_post_ingestion_reauthenticates_fixed_one_shot_sentinel(
         "mining-automation-authorizations/issue31-camera-bridge/fixed.consumed.json"
     )
     with pytest.raises(ValueError, match="does not bind the fixed sentinel"):
-        tool._authenticate_capture_one_shot_authorization(
+        tool._authenticate_capture_campaign_authorization(
             retained_common_git_authority,
             expected_head=_HEAD,
             expected_r1_sha256=_R1_SHA,
             expected_r2_sha256=_R2_SHA,
-            north=north,
-            commit_sha256="5" * 64,
+            precursor=precursor,
+        )
+
+
+@pytest.mark.parametrize("mode", ["zero_click", "compass_click"])
+def test_ordered_campaign_receipt_binds_exact_mode_order_and_counts(
+    tool: ModuleType,
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    precursor = _campaign_precursor(
+        tool,
+        mode=mode,
+        commit_captured=0.0,
+        post_captured=0.1,
+        input_start=0.02 if mode == "compass_click" else None,
+        input_receipt=0.03 if mode == "compass_click" else None,
+    )
+    authorization = _campaign_reservation(precursor, tmp_path)
+    bridge_commit = _timeline_frame(3, 3, 0.4)
+    bridge_post = _timeline_frame(4, 4, 1.6)
+    ordered = _ordered_receipt(
+        tool, precursor, authorization, bridge_commit, bridge_post
+    )
+
+    assert tool._validate_ordered_campaign_receipt(
+        ordered,
+        precursor=precursor,
+        authorization=authorization,
+        bridge_receipt=_receipt(tool),
+        bridge_commit=bridge_commit,
+        bridge_post=bridge_post,
+        bridge_input_start=0.5,
+        bridge_input_receipt=0.6,
+    ) == precursor.reservation_completed_clock_s
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "reservation_id",
+        "physical_count",
+        "stage_order",
+        "stage_ordinal",
+        "zero_receipt",
+        "right_receipt",
+        "right_mode",
+        "allowed_order",
+    ],
+)
+def test_ordered_campaign_receipt_rejects_tampered_sequence(
+    tool: ModuleType,
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    precursor = _campaign_precursor(tool)
+    authorization = _campaign_reservation(precursor, tmp_path)
+    bridge_commit = _timeline_frame(3, 3, 0.4)
+    bridge_post = _timeline_frame(4, 4, 1.6)
+    ordered = _ordered_receipt(
+        tool, precursor, authorization, bridge_commit, bridge_post
+    )
+    stages = ordered["stages"]
+    allowed_order = ordered["allowed_order"]
+    assert isinstance(stages, list)
+    assert isinstance(allowed_order, list)
+    if mutation == "reservation_id":
+        ordered["reservation_id"] = "7" * 64
+    elif mutation == "physical_count":
+        ordered["actual_physical_primitives"] = 2
+    elif mutation == "stage_order":
+        stages.reverse()
+    elif mutation == "stage_ordinal":
+        assert isinstance(stages[0], dict)
+        stages[0]["ordinal"] = 1
+    elif mutation == "zero_receipt":
+        assert isinstance(stages[0], dict)
+        stages[0]["receipt"] = None
+    elif mutation == "right_receipt":
+        assert isinstance(stages[1], dict)
+        stages[1]["receipt"] = {"forged": True}
+    elif mutation == "right_mode":
+        assert isinstance(stages[1], dict)
+        stages[1]["mode"] = "right_hold"
+    else:
+        assert mutation == "allowed_order"
+        assert isinstance(allowed_order[0], dict)
+        allowed_order[0]["logical_client_point"] = [0, 0]
+
+    with pytest.raises(ValueError, match="ordered campaign"):
+        tool._validate_ordered_campaign_receipt(
+            ordered,
+            precursor=precursor,
+            authorization=authorization,
+            bridge_receipt=_receipt(tool),
+            bridge_commit=bridge_commit,
+            bridge_post=bridge_post,
+            bridge_input_start=0.5,
+            bridge_input_receipt=0.6,
         )
 
 
@@ -651,9 +1065,8 @@ def test_post_ingestion_requires_exact_completion_seal(
         evidence=CameraBridgeAuthorizationEvidence(
             r1_report_sha256=_R1_SHA,
             r2_report_sha256=_R2_SHA,
-            north_report_sha256="3" * 64,
-            north_post_sha256="4" * 64,
-            commit_sha256="5" * 64,
+            precursor_mode="zero_click",
+            precursor_commit_sha256="5" * 64,
             target_hwnd=123,
             target_process_id=456,
             target_thread_id=789,
@@ -663,14 +1076,15 @@ def test_post_ingestion_requires_exact_completion_seal(
     )
     evidence: dict[str, object] = {
         "receipt": _receipt(tool),
+        "ordered_campaign_receipt": {"fixed": True},
         "frames": {stage: {"stage": stage} for stage in tool._STAGES},
         "arm_age": {"age_s": 0.5},
         "guards": {"all": "exact"},
         "input": {"attempted": True, "completed": True},
         "preflight": {"supported": True},
         "pointer_mapping": {"root_hwnd_matches_target": True},
-        "compass_north_handoff": {"report_sha256": "3" * 64},
-        "compass_north_registration": {"accepted": True},
+        "campaign_precursor": {"mode": "zero_click"},
+        "precursor_to_commit_registration": {"accepted": True},
         "planner_source_registration": {"accepted": True},
         "post_transition_registration": {"accepted": True},
         "post_transition_closure": {"completed": True},
@@ -694,7 +1108,7 @@ def test_post_ingestion_requires_exact_completion_seal(
         post_sha256="b" * 64,
     )
     first = observed[-1]
-    evidence["receipt"] = {"forged": True}
+    evidence["ordered_campaign_receipt"] = {"forged": True}
     tool._authenticate_capture_completion_seal(
         evidence,
         expected_head=_HEAD,
@@ -709,6 +1123,9 @@ def test_post_ingestion_requires_exact_completion_seal(
     assert first != second
     assert first.authorization_sentinel_sha256 == "6" * 64
     assert first.capture_report_sha256 == "9" * 64
+    assert first.ordered_campaign_receipt_sha256 != (
+        second.ordered_campaign_receipt_sha256
+    )
 
 
 def test_missing_completion_seal_rejects_offline_ingestion(
@@ -724,9 +1141,8 @@ def test_missing_completion_seal_rejects_offline_ingestion(
         evidence=CameraBridgeAuthorizationEvidence(
             r1_report_sha256=_R1_SHA,
             r2_report_sha256=_R2_SHA,
-            north_report_sha256="3" * 64,
-            north_post_sha256="4" * 64,
-            commit_sha256="5" * 64,
+            precursor_mode="zero_click",
+            precursor_commit_sha256="5" * 64,
             target_hwnd=123,
             target_process_id=456,
             target_thread_id=789,
@@ -735,7 +1151,7 @@ def test_missing_completion_seal_rejects_offline_ingestion(
         ),
     )
     evidence = {
-        "receipt": {},
+        "ordered_campaign_receipt": {},
         "frames": {},
         "pointer_mapping": {},
         "post_transition_closure": {},
@@ -760,34 +1176,18 @@ def test_missing_completion_seal_rejects_offline_ingestion(
         )
 
 
-def test_post_ingestion_rejects_missing_one_shot_authorization(
+def test_post_ingestion_rejects_missing_campaign_authorization(
     tool: ModuleType,
     tmp_path: Path,
 ) -> None:
-    frame = Frame.from_raw(
-        RawFrame(b"\x01\x02\x03\xff", 1, 1, PixelFormat.BGRA8888),
-        frame_id=4,
-        captured_monotonic_s=4.0,
-    )
-    north = tool._AuthenticatedNorthHandoff(
-        report_path=tmp_path / "north.camera.json",
-        report_sha256="3" * 64,
-        raw_path=tmp_path / "north.raw",
-        frame=frame,
-        window_hwnd=123,
-        window_process_id=456,
-        window_thread_id=789,
-        window_class_name="SunAwtFrame",
-        window_title_sha256="4" * 64,
-    )
-    with pytest.raises(ValueError, match="one-shot authorization"):
-        tool._authenticate_capture_one_shot_authorization(
+    del tmp_path
+    with pytest.raises(ValueError, match="campaign authorization"):
+        tool._authenticate_capture_campaign_authorization(
             None,
             expected_head=_HEAD,
             expected_r1_sha256=_R1_SHA,
             expected_r2_sha256=_R2_SHA,
-            north=north,
-            commit_sha256="5" * 64,
+            precursor=_campaign_precursor(tool),
         )
 
 
@@ -809,7 +1209,7 @@ def test_provenance_command_requires_exact_single_subcommand(tool: ModuleType) -
         tool._command_options(provenance, "bridge-capture-r2")
 
 
-def test_capture_command_binds_analysis_north_output_and_case(
+def test_capture_command_binds_analysis_output_and_case_without_generic_north(
     tool: ModuleType,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -818,11 +1218,6 @@ def test_capture_command_binds_analysis_north_output_and_case(
     output = tmp_path / "diagnostics" / "bridge"
     capture_report = output / "reports" / "case.camera.json"
     r2_report = tmp_path / "diagnostics" / "r2.json"
-    north_report = tmp_path / "diagnostics" / "north" / "reports" / "north.camera.json"
-    north = SimpleNamespace(
-        report_path=north_report.resolve(),
-        report_sha256="b" * 64,
-    )
     provenance = {
         "command_argv": [
             "python",
@@ -834,10 +1229,6 @@ def test_capture_command_binds_analysis_north_output_and_case(
             str(r2_report),
             "--analysis-sha256",
             _R2_SHA,
-            "--north-report",
-            str(north_report),
-            "--north-sha256",
-            "b" * 64,
             "--output",
             str(output),
             "--case-prefix",
@@ -849,7 +1240,6 @@ def test_capture_command_binds_analysis_north_output_and_case(
         expected_head=_HEAD,
         expected_r2_sha256=_R2_SHA,
         expected_r2_report_path=r2_report,
-        expected_north=north,
         capture_report_path=capture_report,
     )
     provenance["command_argv"][8] = "c" * 64
@@ -859,9 +1249,213 @@ def test_capture_command_binds_analysis_north_output_and_case(
             expected_head=_HEAD,
             expected_r2_sha256=_R2_SHA,
             expected_r2_report_path=r2_report,
-            expected_north=north,
             capture_report_path=capture_report,
         )
+
+    provenance["command_argv"][8] = _R2_SHA
+    provenance["command_argv"].extend(
+        ["--north-report", "generic.camera.json", "--north-sha256", "b" * 64]
+    )
+    with pytest.raises(ValueError, match="only the fixed options"):
+        tool._validate_capture_command_argv(
+            provenance,
+            expected_head=_HEAD,
+            expected_r2_sha256=_R2_SHA,
+            expected_r2_report_path=r2_report,
+            capture_report_path=capture_report,
+        )
+
+
+def test_capture_schema_rejects_legacy_generic_north_authority(
+    tool: ModuleType,
+) -> None:
+    r23 = {
+        "campaign_precursor": {},
+        "campaign_authorization": {},
+        "ordered_campaign_receipt": {},
+    }
+    tool._require_r23_campaign_schema(r23)
+
+    for legacy_field in ("compass_north_handoff", "one_shot_authorization"):
+        legacy = {**r23, legacy_field: {}}
+        with pytest.raises(ValueError, match="legacy generic north authority"):
+            tool._require_r23_campaign_schema(legacy)
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["campaign_precursor", "campaign_authorization", "ordered_campaign_receipt"],
+)
+def test_capture_schema_requires_every_r23_campaign_binding(
+    tool: ModuleType,
+    missing: str,
+) -> None:
+    evidence = {
+        "campaign_precursor": {},
+        "campaign_authorization": {},
+        "ordered_campaign_receipt": {},
+    }
+    del evidence[missing]
+    with pytest.raises(ValueError, match=missing):
+        tool._require_r23_campaign_schema(evidence)
+
+
+def test_embedded_zero_precursor_binds_reservation_window_and_registration(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = _timeline_frame(1, 1, 0.1)
+    monkeypatch.setattr(
+        tool,
+        "_load_embedded_bootstrap_frame",
+        lambda *_args, **_kwargs: (frame, object()),
+    )
+    recomputed = object()
+    monkeypatch.setattr(
+        tool,
+        "_require_exact_registration",
+        lambda *_args, **_kwargs: recomputed,
+    )
+    qualification = {
+        "accepted": True,
+        "exact_frozen_pixel_identity": True,
+    }
+    monkeypatch.setattr(
+        tool,
+        "qualify_exact_frozen_north_registration",
+        lambda observed: (
+            SimpleNamespace(as_dict=lambda: qualification)
+            if observed is recomputed
+            else pytest.fail("qualification did not use recomputed registration")
+        ),
+    )
+    registration = {"accepted": True, "all_three_zones": True}
+    value: dict[str, object] = {
+        "mode": "zero_click",
+        "physical_primitive_count": 0,
+        "captured_monotonic_s": 0.1,
+        "frame_id": 1,
+        "raw_sha256": hashlib.sha256(frame.payload).hexdigest(),
+        "frame": {},
+        "bootstrap": None,
+        "source_to_precursor_registration": registration,
+        "zero_click_north_qualification": qualification,
+        "campaign_reservation_id": "6" * 64,
+        "reservation_completed_clock_s": 0.15,
+        "registration_can_authorize_input_alone": False,
+        "production_remains_sole_scene_authority": True,
+        "embedded_same_process_and_input_lease": True,
+        "external_north_report_accepted": False,
+        "window_binding": {
+            "class_name": "SunAwtFrame",
+            "hwnd": 123,
+            "process_id": 456,
+            "thread_id": 789,
+            "title_sha256": "4" * 64,
+        },
+    }
+    precursor = tool._load_authenticated_campaign_precursor(
+        value,
+        report_path=tmp_path / "case.camera.json",
+        planner_source_frame=frame,
+    )
+    assert precursor.campaign_reservation_id == "6" * 64
+    assert precursor.receipt == {
+        "kind": "zero_click_observation",
+        "physical_input_attempted": False,
+        "physical_input_completed": False,
+        "frame_sha256": hashlib.sha256(frame.payload).hexdigest(),
+        "source_registration_sha256": (
+            tool.canonical_camera_bridge_component_sha256(registration)
+        ),
+        "north_qualification_sha256": (
+            tool.canonical_camera_bridge_component_sha256(qualification)
+        ),
+    }
+
+    for field_name, forged in (
+        ("embedded_same_process_and_input_lease", False),
+        ("external_north_report_accepted", True),
+        ("campaign_reservation_id", "7" * 63),
+        ("reservation_completed_clock_s", float("nan")),
+    ):
+        tampered = dict(value)
+        tampered[field_name] = forged
+        with pytest.raises(ValueError):
+            tool._load_authenticated_campaign_precursor(
+                tampered,
+                report_path=tmp_path / "case.camera.json",
+                planner_source_frame=frame,
+            )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["none", "compass_point", "partial_receipt", "sub_dwell", "post_heading"],
+)
+def test_embedded_compass_bootstrap_requires_exact_fixed_receipt_and_timing(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    frames = {
+        "initial": _timeline_frame(1, 1, 0.0),
+        "arm": _timeline_frame(2, 2, 0.1),
+        "commit": _timeline_frame(3, 3, 0.2),
+        "post": _timeline_frame(4, 4, 1.4),
+    }
+    by_label = {f"v2-{stage}": frame for stage, frame in frames.items()}
+    monkeypatch.setattr(
+        tool,
+        "_load_embedded_bootstrap_frame",
+        lambda *_args, expected_label, **_kwargs: (
+            by_label[expected_label],
+            object(),
+        ),
+    )
+    monkeypatch.setattr(tool, "evaluate_camera_arm_guard", lambda *_args: object())
+    monkeypatch.setattr(tool, "_arm_guard_dict", lambda _guard: {"exact": True})
+    value = _compass_bootstrap_value(tool, frames)
+    if mutation == "compass_point":
+        assumptions = value["camera_assumptions"]
+        assert isinstance(assumptions, dict)
+        assumptions["compass_point"] = [0, 0]
+    elif mutation == "partial_receipt":
+        receipt = value["receipt"]
+        assert isinstance(receipt, dict)
+        actions = receipt["actions"]
+        assert isinstance(actions, list) and isinstance(actions[0], dict)
+        inputs = actions[0]["input_receipts"]
+        assert isinstance(inputs, list) and isinstance(inputs[0], dict)
+        inputs[0]["completed_events"] = 1
+    elif mutation == "sub_dwell":
+        input_evidence = value["input"]
+        assert isinstance(input_evidence, dict)
+        input_evidence["receipt_clock_s"] = 0.35
+        input_evidence["delivery_duration_s"] = 0.35 - 0.3
+    elif mutation == "post_heading":
+        post_guidance = value["post_guidance"]
+        assert isinstance(post_guidance, dict)
+        post_guidance["heading_was_normalized"] = False
+    else:
+        assert mutation == "none"
+
+    if mutation == "none":
+        commit, post, receipt, start, received = tool._validate_compass_bootstrap(
+            tmp_path / "case.camera.json",
+            value,
+        )
+        assert (commit, post) == (frames["commit"], frames["post"])
+        assert receipt == value["receipt"]
+        assert (start, received) == (0.3, 0.4)
+    else:
+        with pytest.raises(ValueError):
+            tool._validate_compass_bootstrap(
+                tmp_path / "case.camera.json",
+                value,
+            )
 
 
 def test_pre_input_registration_is_recomputed_from_exact_endpoint_pixels(

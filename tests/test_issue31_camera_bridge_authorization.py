@@ -1,4 +1,4 @@
-"""R2.2 one-shot authorization and durable reservation regressions."""
+"""R2.3 full-campaign authorization and durable reservation regressions."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -47,16 +48,19 @@ def host_authority_base(
     return root
 
 
-def _evidence(seed: str = "baseline") -> CameraBridgeAuthorizationEvidence:
+def _evidence(
+    seed: str = "baseline",
+    *,
+    precursor_mode: str = "compass_click",
+) -> CameraBridgeAuthorizationEvidence:
     def digest(label: str) -> str:
         return hashlib.sha256(f"{seed}:{label}".encode()).hexdigest()
 
     return CameraBridgeAuthorizationEvidence(
         r1_report_sha256=digest("r1"),
         r2_report_sha256=digest("r2"),
-        north_report_sha256=digest("north-report"),
-        north_post_sha256=digest("north-post"),
-        commit_sha256=digest("commit"),
+        precursor_mode=precursor_mode,
+        precursor_commit_sha256=digest("precursor-commit"),
         target_hwnd=123,
         target_process_id=456,
         target_thread_id=789,
@@ -88,7 +92,7 @@ def _completion(
     return CameraBridgeCompletionEvidence(
         authorization_sentinel_sha256=reservation_sha256,
         capture_report_sha256=digest("report"),
-        receipt_sha256=digest("receipt"),
+        ordered_campaign_receipt_sha256=digest("ordered-campaign-receipt"),
         stage_chain_sha256=digest("stages"),
         commit_sha256=digest("commit"),
         post_sha256=digest("post"),
@@ -199,6 +203,40 @@ def test_disabled_source_gate_cannot_create_reservation(tmp_path: Path) -> None:
     assert not camera_bridge_authorization_consumed(repository)
 
 
+@pytest.mark.parametrize("precursor_mode", ["compass_click", "zero_click"])
+def test_precursor_mode_is_exact_and_authenticated(
+    tmp_path: Path,
+    precursor_mode: str,
+) -> None:
+    repository = _ordinary_repository(tmp_path)
+    evidence = _evidence(precursor_mode=precursor_mode)
+    reservation = reserve_camera_bridge_authorization(
+        repository,
+        git_head_sha=_HEAD,
+        source_gate_enabled=True,
+        evidence=evidence,
+    )
+    authenticated = authenticate_camera_bridge_authorization(
+        repository,
+        git_head_sha=_HEAD,
+        expected_sentinel_sha256=reservation.sentinel_sha256,
+        evidence=evidence,
+    )
+
+    assert evidence.precursor_mode == precursor_mode
+    assert evidence.as_dict()["precursor_mode"] == precursor_mode
+    assert authenticated.evidence.precursor_mode == precursor_mode
+
+
+@pytest.mark.parametrize(
+    "precursor_mode",
+    ["", "CompassClick", "north_report", "direct_registration", "zero-click"],
+)
+def test_invalid_precursor_mode_is_rejected(precursor_mode: str) -> None:
+    with pytest.raises(CameraBridgeAuthorizationError, match="precursor_mode"):
+        _evidence(precursor_mode=precursor_mode)
+
+
 def test_reservation_is_canonical_and_authenticates_exact_evidence(
     tmp_path: Path,
 ) -> None:
@@ -219,9 +257,14 @@ def test_reservation_is_canonical_and_authenticates_exact_evidence(
     )
 
     assert authenticated.as_dict() == reservation.as_dict()
-    assert reservation.as_dict()["schema_version"] == 2
+    report = reservation.as_dict()
+    assert report["schema_version"] == 3
     assert reservation.as_dict()["authorization_version"] == (
         CAMERA_BRIDGE_AUTHORIZATION_VERSION
+    )
+    assert CAMERA_BRIDGE_AUTHORIZATION_VERSION == "2.3.0"
+    assert CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID == (
+        "issue31-r2-3-full-campaign-north-right-0043-v1"
     )
     assert reservation.as_dict()["authority_scope"] == (
         "persistent_per_user_host_global"
@@ -229,10 +272,40 @@ def test_reservation_is_canonical_and_authenticates_exact_evidence(
     assert reservation.as_dict()["independent_repository_clone_can_bypass"] is False
     assert "sentinel_relative_to_host_authority_root" in reservation.as_dict()
     assert "sentinel_relative_to_common_git_dir" not in reservation.as_dict()
-    assert reservation.as_dict()["state"] == "consumed_at_final_pre_input_seam"
-    assert reservation.as_dict()["maximum_physical_primitives"] == 1
-    assert reservation.as_dict()["hold_seconds"] == 0.043
-    assert reservation.as_dict()["key"] == "right"
+    assert reservation.as_dict()["state"] == (
+        "consumed_before_first_possible_physical_primitive"
+    )
+    assert reservation.as_dict()["maximum_physical_primitives"] == 2
+    assert reservation.as_dict()["campaign_reservation_id"] == (
+        reservation.sentinel_sha256
+    )
+    assert reservation.as_dict()["sentinel_sha256"] == reservation.sentinel_sha256
+    assert reservation.as_dict()["ordered_primitive_policy"] == [
+        {
+            "ordinal": 0,
+            "stage": "north_precursor",
+            "kind": "compass_click",
+            "logical_client_point": [608, 49],
+            "zero_click_requires_exact_frozen_north_pixels": True,
+        },
+        {
+            "ordinal": 1,
+            "stage": "bridge",
+            "kind": "key_hold",
+            "key": "right",
+            "hold_seconds": 0.043,
+        },
+    ]
+    for field_name in (
+        "caller_can_select_campaign",
+        "caller_can_select_primitive_order",
+        "caller_can_select_compass_coordinate",
+        "caller_can_select_key_or_duration",
+        "caller_can_select_action_or_target",
+        "caller_can_select_physical_budget",
+        "caller_can_select_source_gate",
+    ):
+        assert reservation.as_dict()[field_name] is False
     assert reservation.as_dict()["target_policy"] == {
         "camera_adapter": (
             "mining_automation.validation.windows_camera.WindowsCameraControl"
@@ -244,7 +317,19 @@ def test_reservation_is_canonical_and_authenticates_exact_evidence(
             "WindowsCameraInputLease"
         ),
         "reviewed_pointer_logical_client": [400, 50],
+        "reviewed_compass_logical_client": [608, 49],
         "title_substring": "runelite",
+    }
+    assert reservation.evidence.as_dict() == {
+        "r1_report_sha256": evidence.r1_report_sha256,
+        "r2_report_sha256": evidence.r2_report_sha256,
+        "precursor_mode": "compass_click",
+        "precursor_commit_sha256": evidence.precursor_commit_sha256,
+        "target_hwnd": 123,
+        "target_process_id": 456,
+        "target_thread_id": 789,
+        "target_class_name": "SunAwtFrame",
+        "target_title_sha256": evidence.target_title_sha256,
     }
 
 
@@ -382,9 +467,8 @@ def digest(label: str) -> str:
 evidence = CameraBridgeAuthorizationEvidence(
     r1_report_sha256=digest("r1"),
     r2_report_sha256=digest("r2"),
-    north_report_sha256=digest("north-report"),
-    north_post_sha256=digest("north-post"),
-    commit_sha256=digest("commit"),
+    precursor_mode="compass_click",
+    precursor_commit_sha256=digest("precursor-commit"),
     target_hwnd=123,
     target_process_id=456,
     target_thread_id=789,
@@ -496,6 +580,8 @@ def test_authentication_rejects_changed_head_or_dynamic_evidence(
     for head, observed_evidence in (
         ("b" * 40, evidence),
         (_HEAD, _evidence("substituted-report")),
+        (_HEAD, replace(evidence, precursor_mode="zero_click")),
+        (_HEAD, replace(evidence, precursor_commit_sha256="f" * 64)),
     ):
         with pytest.raises(CameraBridgeAuthorizationError):
             authenticate_camera_bridge_authorization(
@@ -532,7 +618,7 @@ def test_completion_requires_and_authenticates_exact_full_transaction(
     )
 
     assert completion.as_dict() == authenticated.as_dict()
-    assert completion.as_dict()["schema_version"] == 2
+    assert completion.as_dict()["schema_version"] == 3
     assert completion.as_dict()["authorization_version"] == (
         CAMERA_BRIDGE_AUTHORIZATION_VERSION
     )
@@ -545,6 +631,28 @@ def test_completion_requires_and_authenticates_exact_full_transaction(
     assert completion.as_dict()[
         "reservation_without_this_seal_is_not_an_action_transition"
     ] is True
+    assert completion.as_dict()["maximum_physical_primitives"] == 2
+    assert completion.as_dict()["ordered_primitive_policy"] == (
+        reservation.as_dict()["ordered_primitive_policy"]
+    )
+    completion_evidence = completion.as_dict()["completion_evidence"]
+    assert isinstance(completion_evidence, dict)
+    assert completion_evidence["ordered_campaign_receipt_sha256"] == (
+        evidence.ordered_campaign_receipt_sha256
+    )
+    assert "receipt_sha256" not in completion_evidence
+
+    tampered_receipt = replace(
+        evidence,
+        ordered_campaign_receipt_sha256="f" * 64,
+    )
+    with pytest.raises(CameraBridgeAuthorizationError, match="partial, stale"):
+        authenticate_camera_bridge_completion(
+            second,
+            git_head_sha=_HEAD,
+            expected_seal_sha256=completion.seal_sha256,
+            evidence=tampered_receipt,
+        )
 
 
 def test_concurrent_completion_seal_has_one_immutable_winner(

@@ -49,7 +49,9 @@ from mining_automation.validation.camera_arm_guard import (  # noqa: E402
     CameraArmGuardResult,
 )
 from mining_automation.validation.camera_bootstrap import (  # noqa: E402
+    CameraNorthBootstrapInputState,
     CameraNorthBootstrapResult,
+    CameraNorthBootstrapTerminalReason,
     run_camera_north_bootstrap,
 )
 from mining_automation.validation.camera_bridge_authorization import (  # noqa: E402
@@ -59,6 +61,7 @@ from mining_automation.validation.camera_bridge_authorization import (  # noqa: 
     CameraBridgeAuthorizationEvidence,
     CameraBridgeAuthorizationReservation,
     CameraBridgeCompletionEvidence,
+    authenticate_camera_bridge_authorization,
     camera_bridge_authorization_consumed,
     canonical_camera_bridge_component_sha256,
     repository_worktree_git_dir,
@@ -78,6 +81,10 @@ from mining_automation.validation.camera_bridge_capture import (  # noqa: E402
     _finalize_camera_bridge_post_production,
     camera_bridge_capture_plan,
     run_fixed_camera_bridge_capture,
+)
+from mining_automation.validation.camera_bridge_north_state import (  # noqa: E402
+    CameraBridgeExactNorthQualification,
+    qualify_exact_frozen_north_registration,
 )
 from mining_automation.validation.camera_bridge_planner import (  # noqa: E402
     CAMERA_BRIDGE_PLANNER_ID,
@@ -247,7 +254,79 @@ class _BridgeAnalysisEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class _BridgeCampaignPrecursor:
+    """Same-process north-state evidence preceding the fixed Right bridge."""
+
+    mode: str
+    frame: Frame
+    frame_evidence: CameraServoFrameEvidence
+    registration: RobustWorldRegistration
+    north_qualification: CameraBridgeExactNorthQualification | None
+    bootstrap: CameraNorthBootstrapResult | None
+    window_hwnd: int
+    window_process_id: int
+    window_thread_id: int
+    window_class_name: str
+    window_title_sha256: str
+
+    def __post_init__(self) -> None:
+        if self.mode not in ("compass_click", "zero_click"):
+            raise ValueError("R2.3 precursor mode is invalid")
+        if (self.bootstrap is None) is (self.mode == "compass_click"):
+            raise ValueError("R2.3 precursor mode and bootstrap evidence disagree")
+        if (self.north_qualification is None) != (self.mode == "compass_click"):
+            raise ValueError(
+                "R2.3 zero-click mode requires exact frozen-north qualification"
+            )
+        payload_sha256 = hashlib.sha256(self.frame.payload).hexdigest()
+        if (
+            self.frame_evidence.artifact.raw_sha256 != payload_sha256
+            or self.registration.target.payload_sha256 != payload_sha256
+            or not self.window_class_name
+            or not self.window_title_sha256
+        ):
+            raise ValueError("R2.3 precursor does not bind its exact frame/window")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "mode": self.mode,
+            "physical_primitive_count": 1 if self.mode == "compass_click" else 0,
+            "captured_monotonic_s": self.frame.captured_monotonic_s,
+            "frame_id": self.frame.frame_id,
+            "frame": _bootstrap_frame_dict(self.frame_evidence),
+            "raw_sha256": hashlib.sha256(self.frame.payload).hexdigest(),
+            "bootstrap": (
+                None
+                if self.bootstrap is None
+                else _bootstrap_result_dict(
+                    self.bootstrap,
+                    tracked_worktree_clean=True,
+                )
+            ),
+            "source_to_precursor_registration": self.registration.as_dict(),
+            "zero_click_north_qualification": (
+                None
+                if self.north_qualification is None
+                else self.north_qualification.as_dict()
+            ),
+            "embedded_same_process_and_input_lease": True,
+            "external_north_report_accepted": False,
+            "registration_can_authorize_input_alone": False,
+            "production_remains_sole_scene_authority": True,
+            "window_binding": {
+                "class_name": self.window_class_name,
+                "hwnd": self.window_hwnd,
+                "process_id": self.window_process_id,
+                "thread_id": self.window_thread_id,
+                "title_sha256": self.window_title_sha256,
+            },
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class _BridgeNorthHandoff:
+    """Legacy standalone north report shape; never accepted for R2.3."""
+
     report_path: Path
     report_sha256: str
     frame: Frame
@@ -257,23 +336,6 @@ class _BridgeNorthHandoff:
     window_thread_id: int
     window_class_name: str
     window_title_sha256: str
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "captured_monotonic_s": self.frame.captured_monotonic_s,
-            "frame_id": self.frame.frame_id,
-            "raw_path": _display_repo_path(self.raw_path),
-            "raw_sha256": hashlib.sha256(self.frame.payload).hexdigest(),
-            "report_path": _display_repo_path(self.report_path),
-            "report_sha256": self.report_sha256,
-            "window_binding": {
-                "class_name": self.window_class_name,
-                "hwnd": self.window_hwnd,
-                "process_id": self.window_process_id,
-                "thread_id": self.window_thread_id,
-                "title_sha256": self.window_title_sha256,
-            },
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -553,13 +615,13 @@ def _build_fixed_system_id_parser() -> argparse.ArgumentParser:
 
 
 def _build_bridge_capture_parser() -> argparse.ArgumentParser:
-    """Return the isolated parser for the fixed one-primitive R2 boundary."""
+    """Return the isolated parser for the fixed full-campaign R2 boundary."""
 
     parser = argparse.ArgumentParser(
         prog=f"{Path(__file__).name} {_BRIDGE_CAPTURE_COMMAND}",
         description=(
-            "Capture one fixed, receipt-backed R2 bridge sample after exact-head "
-            "review. This command has no caller-selectable camera control."
+            "Run the fixed, receipt-backed R2.3 north-plus-Right campaign after "
+            "exact-head review. This command has no caller-selectable camera control."
         ),
     )
     parser.add_argument(
@@ -577,17 +639,6 @@ def _build_bridge_capture_parser() -> argparse.ArgumentParser:
         "--analysis-sha256",
         required=True,
         help="reviewed SHA-256 of the R2 bridge-analysis report",
-    )
-    parser.add_argument(
-        "--north-report",
-        required=True,
-        type=Path,
-        help="fresh exact-head compass-north bootstrap report",
-    )
-    parser.add_argument(
-        "--north-sha256",
-        required=True,
-        help="SHA-256 of the fresh compass-north bootstrap report",
     )
     parser.add_argument(
         "--output",
@@ -967,7 +1018,7 @@ def _require_fixed_system_id_runtime_identities() -> None:
 
 
 def _require_bridge_capture_runtime_identities() -> None:
-    """Pin R2 to the reviewed detector and one immutable physical primitive."""
+    """Pin R2.3 and its immutable one-Right bridge stage."""
 
     profile = load_varrock_east_iron_profile()
     detector = build_varrock_east_iron_detector()
@@ -1004,10 +1055,10 @@ def _require_bridge_capture_runtime_identities() -> None:
     }
     expected: dict[str, object] = {
         "authorization_campaign_id": (
-            "issue31-r2-north-up-p610-y043-reset-right-0043-v1"
+            "issue31-r2-3-full-campaign-north-right-0043-v1"
         ),
-        "authorization_id": "issue31-r2-one-shot-bridge-authorization",
-        "authorization_version": "2.2.1",
+        "authorization_id": "issue31-r2-3-full-campaign-authorization",
+        "authorization_version": "2.3.0",
         "bridge_id": "issue31-fixed-camera-bridge-capture-r2",
         "bridge_version": "1.1.0",
         "detector_id": _EXPECTED_DETECTOR_ID,
@@ -1467,7 +1518,12 @@ def _load_bridge_north_handoff(
     expected_sha256: str,
     expected_head: str,
 ) -> _BridgeNorthHandoff:
-    """Authenticate one exact-head compass receipt and its exact post pixels."""
+    """Reject legacy standalone north evidence for the R2.3 campaign."""
+
+    raise ValueError(
+        "generic or externally produced north-bootstrap reports cannot satisfy "
+        "the integrated R2.3 campaign precursor"
+    )
 
     report_path, payload = _load_private_bound_report(
         report,
@@ -4237,8 +4293,9 @@ def _bridge_capture_evidence(
     analysis_evidence: _BridgeAnalysisEvidence,
     authorization_reservation: CameraBridgeAuthorizationReservation | None,
     adapter_identity: str,
-    north_handoff: _BridgeNorthHandoff,
-    north_registration: RobustWorldRegistration | None,
+    campaign_precursor: _BridgeCampaignPrecursor,
+    precursor_to_commit_registration: RobustWorldRegistration | None,
+    reservation_completed_clock_s: float | None,
     planner_source_registration: RobustWorldRegistration | None,
     post_transition_closure: CameraBridgePostTransitionClosure,
     post_transition_production: CameraEvaluation | None,
@@ -4248,6 +4305,15 @@ def _bridge_capture_evidence(
     selected_title: str,
 ) -> dict[str, object]:
     evidence = result.as_dict()
+    campaign_precursor_evidence = campaign_precursor.as_dict()
+    campaign_precursor_evidence["campaign_reservation_id"] = (
+        None
+        if authorization_reservation is None
+        else authorization_reservation.sentinel_sha256
+    )
+    campaign_precursor_evidence["reservation_completed_clock_s"] = (
+        reservation_completed_clock_s
+    )
     evidence["transition_candidate_eligible"] = False
     evidence["action_transition_emitted"] = False
     evidence["authenticated_ingestion_required"] = True
@@ -4284,16 +4350,16 @@ def _bridge_capture_evidence(
             "command": _BRIDGE_CAPTURE_COMMAND,
             "development_only": True,
             "analysis_evidence": analysis_evidence.as_dict(),
-            "one_shot_authorization": (
+            "campaign_authorization": (
                 None
                 if authorization_reservation is None
                 else authorization_reservation.as_dict()
             ),
-            "compass_north_handoff": north_handoff.as_dict(),
-            "compass_north_registration": (
+            "campaign_precursor": campaign_precursor_evidence,
+            "precursor_to_commit_registration": (
                 None
-                if north_registration is None
-                else north_registration.as_dict()
+                if precursor_to_commit_registration is None
+                else precursor_to_commit_registration.as_dict()
             ),
             "planner_source_registration": (
                 None
@@ -4327,10 +4393,10 @@ def _bridge_capture_evidence(
             },
             "post_capture_registration_required": True,
             "registration_execution": {
-                "north_to_commit_executed_in_input_seam": (
-                    north_registration is not None
+                "precursor_to_commit_executed_in_input_seam": (
+                    precursor_to_commit_registration is not None
                 ),
-                "planner_source_to_north_precomputed_before_arm": (
+                "planner_source_to_precursor_precomputed_before_arm": (
                     planner_source_registration is not None
                 ),
                 "post_transition_registration_performed": (
@@ -4352,13 +4418,309 @@ def _bridge_capture_evidence(
                 "production remains sole scene authority"
             ),
             "robust_registration_executed_in_input_seam": (
-                north_registration is not None
+                precursor_to_commit_registration is not None
             ),
             "robust_registration_can_authorize_input_alone": False,
             "tracked_worktree_clean": True,
         }
     )
+    if authorization_reservation is not None:
+        if reservation_completed_clock_s is None:
+            raise RuntimeError("R2.3 reservation is missing its completion clock")
+        evidence["ordered_campaign_receipt"] = _ordered_campaign_receipt(
+            campaign_precursor,
+            result,
+            reservation=authorization_reservation,
+            reservation_completed_clock_s=reservation_completed_clock_s,
+        )
+    else:
+        evidence["ordered_campaign_receipt"] = None
     return evidence
+
+
+def _capture_campaign_precursor_frame(
+    source: CaptureSource,
+    recorder: _PrivateArtifactRecorder,
+) -> tuple[Frame, CameraServoFrameEvidence]:
+    frame = source.capture()
+    artifact = recorder("r2-campaign-precursor", frame)
+    readiness = evaluate_client_input_readiness(frame)
+    production = (
+        evaluate_varrock_east_camera(frame)
+        if readiness.safe_to_attempt_camera_input
+        else None
+    )
+    return frame, CameraServoFrameEvidence(
+        artifact=artifact,
+        captured_monotonic_s=frame.captured_monotonic_s,
+        readiness=readiness,
+        production=production,
+    )
+
+
+def _require_fail_closed_campaign_frame(
+    evidence: CameraServoFrameEvidence,
+    *,
+    context: str,
+) -> None:
+    if not evidence.readiness.safe_to_attempt_camera_input:
+        raise RuntimeError(f"{context} lost client input readiness")
+    production = evidence.production
+    if production is None:
+        raise RuntimeError(f"{context} has no production evaluation")
+    _require_north_bootstrap_production_identity(context, production)
+    if (
+        production.passed
+        or production.scene_validated
+        or production.definitive_target_ids
+        or not production.resource_states
+        or any(item.state.value != "uncertain" for item in production.resource_states)
+    ):
+        raise RuntimeError(f"{context} is not production-fail-closed")
+
+
+def _ordered_campaign_receipt(
+    precursor: _BridgeCampaignPrecursor,
+    result: CameraBridgeCaptureResult,
+    *,
+    reservation: CameraBridgeAuthorizationReservation,
+    reservation_completed_clock_s: float,
+) -> dict[str, object]:
+    """Serialize the immutable optional-compass then fixed-Right receipt."""
+
+    if (
+        isinstance(reservation_completed_clock_s, bool)
+        or not isinstance(reservation_completed_clock_s, (int, float))
+        or not math.isfinite(float(reservation_completed_clock_s))
+        or float(reservation_completed_clock_s) < 0.0
+    ):
+        raise RuntimeError("R2.3 reservation completion clock is invalid")
+    bootstrap = precursor.bootstrap
+    if bootstrap is None:
+        if precursor.north_qualification is None:
+            raise RuntimeError("zero-click precursor lacks exact north qualification")
+        precursor_commit_sha256 = precursor.frame_evidence.artifact.raw_sha256
+        precursor_post_sha256 = precursor_commit_sha256
+        precursor_receipt: dict[str, object] | None = {
+            "kind": "zero_click_observation",
+            "physical_input_attempted": False,
+            "physical_input_completed": False,
+            "frame_sha256": precursor_commit_sha256,
+            "source_registration_sha256": (
+                canonical_camera_bridge_component_sha256(
+                    precursor.registration.as_dict()
+                )
+            ),
+            "north_qualification_sha256": (
+                canonical_camera_bridge_component_sha256(
+                    precursor.north_qualification.as_dict()
+                )
+            ),
+        }
+        precursor_input_state = "none"
+        precursor_input_start = None
+        precursor_input_receipt = None
+    else:
+        if (
+            bootstrap.commit is None
+            or bootstrap.post is None
+            or bootstrap.input_state is not CameraNorthBootstrapInputState.COMPLETE
+            or bootstrap.receipt is None
+            or bootstrap.input_start_clock_s is None
+            or reservation_completed_clock_s > bootstrap.input_start_clock_s
+        ):
+            raise RuntimeError("compass precursor lacks exact commit/post evidence")
+        precursor_commit_sha256 = bootstrap.commit.artifact.raw_sha256
+        precursor_post_sha256 = bootstrap.post.artifact.raw_sha256
+        precursor_receipt = (
+            None
+            if bootstrap.receipt is None
+            else _plan_receipt_dict(bootstrap.receipt)
+        )
+        precursor_input_state = bootstrap.input_state.value
+        precursor_input_start = bootstrap.input_start_clock_s
+        precursor_input_receipt = bootstrap.input_receipt_clock_s
+    bridge_post_sha256 = (
+        None if result.post is None else result.post.artifact.raw_sha256
+    )
+    bridge_commit_sha256 = (
+        None if result.commit is None else result.commit.artifact.raw_sha256
+    )
+    if (
+        reservation.evidence.precursor_mode != precursor.mode
+        or reservation.evidence.precursor_commit_sha256
+        != precursor_commit_sha256
+    ):
+        raise RuntimeError("R2.3 ordered receipt does not bind its reservation")
+    actual_physical_primitives = (
+        (1 if precursor.mode == "compass_click" else 0)
+        + (1 if result.input_attempted else 0)
+    )
+    if actual_physical_primitives > 2:
+        raise RuntimeError("R2.3 campaign exceeded its physical primitive budget")
+    if result.input_attempted and (
+        result.input_start_clock_s is None
+        or reservation_completed_clock_s > result.input_start_clock_s
+    ):
+        raise RuntimeError("R2.3 reservation did not precede Right input")
+    return {
+        "schema_version": 1,
+        "campaign_id": CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID,
+        "reservation_id": reservation.sentinel_sha256,
+        "reservation_completed_clock_s": reservation_completed_clock_s,
+        "maximum_physical_primitives": 2,
+        "actual_physical_primitives": actual_physical_primitives,
+        "allowed_order": [
+            {
+                "ordinal": 0,
+                "stage": "north_precursor",
+                "kind": "compass_click",
+                "logical_client_point": list(REVIEWED_COMPASS_POINT),
+                "zero_click_requires_exact_frozen_north_pixels": True,
+            },
+            {
+                "ordinal": 1,
+                "stage": "bridge",
+                "kind": "key_hold",
+                "key": "right",
+                "hold_seconds": CAMERA_BRIDGE_CAPTURE_HOLD_SECONDS,
+            },
+        ],
+        "stages": [
+            {
+                "ordinal": 0,
+                "stage": "north_precursor",
+                "mode": precursor.mode,
+                "commit_sha256": precursor_commit_sha256,
+                "post_sha256": precursor_post_sha256,
+                "input_state": precursor_input_state,
+                "receipt": precursor_receipt,
+                "start_clock_s": precursor_input_start,
+                "receipt_clock_s": precursor_input_receipt,
+            },
+            {
+                "ordinal": 1,
+                "stage": "bridge",
+                "mode": "fixed_right_hold",
+                "commit_sha256": bridge_commit_sha256,
+                "post_sha256": bridge_post_sha256,
+                "input_state": result.input_state.value,
+                "receipt": (
+                    None
+                    if result.receipt is None
+                    else _plan_receipt_dict(result.receipt)
+                ),
+                "start_clock_s": result.input_start_clock_s,
+                "receipt_clock_s": result.input_receipt_clock_s,
+            },
+        ],
+    }
+
+
+def _write_consumed_precursor_failure_report(
+    *,
+    result: CameraNorthBootstrapResult,
+    reservation: CameraBridgeAuthorizationReservation,
+    reservation_completed_clock_s: float,
+    report_path: Path,
+    expected_head: str,
+    command_argv: tuple[str, ...],
+    selected_hwnd: int,
+    selected_process_id: int,
+    selected_thread_id: int,
+    selected_class_name: str,
+    selected_title_sha256: str,
+    detail: str,
+) -> str:
+    """Publish truthful consumed/no-Right evidence without a completion seal."""
+
+    precursor_commit_sha256 = (
+        None if result.commit is None else result.commit.artifact.raw_sha256
+    )
+    precursor_post_sha256 = (
+        None if result.post is None else result.post.artifact.raw_sha256
+    )
+    ordered_receipt = {
+        "schema_version": 1,
+        "campaign_id": CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID,
+        "reservation_id": reservation.sentinel_sha256,
+        "reservation_completed_clock_s": reservation_completed_clock_s,
+        "maximum_physical_primitives": 2,
+        "actual_physical_primitives": 1 if result.input_attempted else 0,
+        "campaign_completed": False,
+        "stages": [
+            {
+                "ordinal": 0,
+                "stage": "north_precursor",
+                "mode": "compass_click",
+                "commit_sha256": precursor_commit_sha256,
+                "post_sha256": precursor_post_sha256,
+                "input_state": result.input_state.value,
+                "receipt": (
+                    None
+                    if result.receipt is None
+                    else _plan_receipt_dict(result.receipt)
+                ),
+                "start_clock_s": result.input_start_clock_s,
+                "receipt_clock_s": result.input_receipt_clock_s,
+            },
+            {
+                "ordinal": 1,
+                "stage": "bridge",
+                "mode": "fixed_right_hold",
+                "status": "forbidden_after_precursor_failure",
+                "receipt": None,
+            },
+        ],
+    }
+    evidence = {
+        "command": _BRIDGE_CAPTURE_COMMAND,
+        "development_only": True,
+        "campaign_authorization": reservation.as_dict(),
+        "campaign_precursor": {
+            "mode": "compass_click",
+            "campaign_reservation_id": reservation.sentinel_sha256,
+            "reservation_completed_clock_s": reservation_completed_clock_s,
+            "bootstrap": _bootstrap_result_dict(
+                result,
+                tracked_worktree_clean=True,
+            ),
+            "embedded_same_process_and_input_lease": True,
+            "external_north_report_accepted": False,
+            "window_binding": {
+                "class_name": selected_class_name,
+                "hwnd": selected_hwnd,
+                "process_id": selected_process_id,
+                "thread_id": selected_thread_id,
+                "title_sha256": selected_title_sha256,
+            },
+        },
+        "ordered_campaign_receipt": ordered_receipt,
+        "terminal_reason": "campaign_precursor_failed",
+        "detail": detail,
+        "right_input_attempted": False,
+        "right_input_forbidden": True,
+        "completion_seal_eligible": False,
+        "production_remains_sole_scene_authority": True,
+        "registration_can_validate_scene": False,
+        "registration_can_expose_resources": False,
+        "tracked_worktree_clean": True,
+    }
+    provenance = CameraReportProvenance(
+        git_head_sha=expected_head,
+        detector_id=_EXPECTED_DETECTOR_ID,
+        detector_version=_EXPECTED_DETECTOR_VERSION,
+        profile_id=_EXPECTED_PROFILE_ID,
+        plan_id=CAMERA_BRIDGE_CAPTURE_ID,
+        plan_version=CAMERA_BRIDGE_CAPTURE_VERSION,
+        command_argv=command_argv,
+        tracked_worktree_clean=True,
+    )
+    return write_camera_validation_report(
+        report_path,
+        evidence,
+        provenance,
+    ).sha256
 
 
 def _bridge_completion_evidence(
@@ -4369,7 +4731,10 @@ def _bridge_completion_evidence(
 ) -> CameraBridgeCompletionEvidence:
     """Bind every completed stage used by offline ActionTransition ingestion."""
 
-    receipt = _json_object(capture_evidence.get("receipt"), "bridge receipt")
+    ordered_receipt = _json_object(
+        capture_evidence.get("ordered_campaign_receipt"),
+        "ordered R2.3 campaign receipt",
+    )
     frames = _json_object(capture_evidence.get("frames"), "bridge frames")
     closure = _json_object(
         capture_evidence.get("post_transition_closure"),
@@ -4397,9 +4762,9 @@ def _bridge_completion_evidence(
         "preflight": capture_evidence.get("preflight"),
     }
     registrations = {
-        "compass_north_handoff": capture_evidence.get("compass_north_handoff"),
-        "compass_north_registration": capture_evidence.get(
-            "compass_north_registration"
+        "campaign_precursor": capture_evidence.get("campaign_precursor"),
+        "precursor_to_commit_registration": capture_evidence.get(
+            "precursor_to_commit_registration"
         ),
         "planner_source_registration": capture_evidence.get(
             "planner_source_registration"
@@ -4413,7 +4778,9 @@ def _bridge_completion_evidence(
             authorization_reservation.sentinel_sha256
         ),
         capture_report_sha256=capture_report_sha256,
-        receipt_sha256=canonical_camera_bridge_component_sha256(receipt),
+        ordered_campaign_receipt_sha256=(
+            canonical_camera_bridge_component_sha256(ordered_receipt)
+        ),
         stage_chain_sha256=canonical_camera_bridge_component_sha256(stage_chain),
         commit_sha256=commit_sha256,
         post_sha256=post_sha256,
@@ -4450,27 +4817,33 @@ def _run_live_bridge_capture(
     digest_path: Path,
     case_prefix: str,
     expected_head: str,
-    north_handoff: _BridgeNorthHandoff,
     command_argv: tuple[str, ...],
     publication_state: _ReportPublicationState,
 ) -> int:
-    """Run one fixed R2 primitive while the caller owns the input lease."""
+    """Run the integrated R2.3 precursor and bridge under one input lease."""
 
     backend: WindowsCaptureBackend | None = None
     source: CaptureSource | None = None
     control: WindowsCameraControl | None = None
     result: CameraBridgeCaptureResult | None = None
     adapter_identity: str | None = None
+    selected_hwnd: int | None = None
+    selected_process_id: int | None = None
+    selected_thread_id: int | None = None
     selected_class_name: str | None = None
     selected_title: str | None = None
+    selected_title_sha256: str | None = None
     registration_engine: RobustRegistrationEngine | None = None
+    campaign_precursor: _BridgeCampaignPrecursor | None = None
     planner_source_registration: RobustWorldRegistration | None = None
-    north_registration: RobustWorldRegistration | None = None
+    precursor_to_commit_registration: RobustWorldRegistration | None = None
     post_transition_closure: CameraBridgePostTransitionClosure | None = None
     post_transition_production: CameraEvaluation | None = None
     post_transition_registration: RobustWorldRegistration | None = None
     pointer_evidence: _BridgePointerEvidence | None = None
     authorization_reservation: CameraBridgeAuthorizationReservation | None = None
+    reservation_completed_clock_s: float | None = None
+    north_result: CameraNorthBootstrapResult | None = None
     handled_error: Exception | None = None
     unhandled_error: BaseException | None = None
     cleanup_errors: list[str] = []
@@ -4479,15 +4852,6 @@ def _run_live_bridge_capture(
         if head_inside != expected_head or not clean_inside:
             raise RuntimeError(
                 "Git HEAD/worktree changed before the leased R2 boundary"
-            )
-        north_age = time.monotonic() - north_handoff.frame.captured_monotonic_s
-        if (
-            not math.isfinite(north_age)
-            or north_age < 0.0
-            or north_age >= _BRIDGE_NORTH_MAXIMUM_AGE_SECONDS
-        ):
-            raise RuntimeError(
-                "fresh compass-north handoff expired before R2 capture"
             )
         _reserve_case_namespace(
             output_root,
@@ -4503,18 +4867,10 @@ def _run_live_bridge_capture(
         selected = backend.selected_window
         if selected is None:
             raise RuntimeError("capture succeeded without a selected RuneLite window")
+        selected_hwnd = selected.hwnd
         selected_title_sha256 = hashlib.sha256(
             selected.title.encode("utf-8")
         ).hexdigest()
-        if (
-            selected.hwnd != north_handoff.window_hwnd
-            or selected.class_name != north_handoff.window_class_name
-            or selected_title_sha256 != north_handoff.window_title_sha256
-        ):
-            raise RuntimeError(
-                "fresh compass-north handoff does not bind the selected RuneLite "
-                "window"
-            )
         selected_class_name = selected.class_name
         selected_title = selected.title
         recorder = _PrivateArtifactRecorder(
@@ -4530,16 +4886,15 @@ def _run_live_bridge_capture(
             expected_title=selected.title,
         )
         control_identity = control.target_identity
+        selected_process_id = control_identity.process_id
+        selected_thread_id = control_identity.thread_id
         if (
-            control_identity.process_id != north_handoff.window_process_id
-            or control_identity.thread_id != north_handoff.window_thread_id
-            or control_identity.class_name != north_handoff.window_class_name
+            control_identity.class_name != selected.class_name
             or hashlib.sha256(control_identity.title.encode("utf-8")).hexdigest()
-            != north_handoff.window_title_sha256
+            != selected_title_sha256
         ):
             raise RuntimeError(
-                "fresh compass-north handoff does not bind the current RuneLite "
-                "process/thread/window identity"
+                "selected RuneLite window does not bind the camera-control identity"
             )
         adapter_identity = f"{type(control).__module__}.{type(control).__qualname__}"
         if adapter_identity != _EXPECTED_WINDOWS_CAMERA_ADAPTER:
@@ -4547,45 +4902,213 @@ def _run_live_bridge_capture(
         pointer_api = RealWindowsCameraApi()
         pointer_api.declare_dpi_awareness()
         registration_engine = RobustRegistrationEngine()
-        # This relationship is wholly between two already-authenticated saved
-        # artifacts. Compute it before the live decision/arm clock starts, then
-        # revalidate its exact hashes at every physical-input guard. Keeping the
-        # stable link outside the one-second arm seam leaves only the fresh
-        # north-to-commit relationship to compute after the arm observation.
-        planner_source_registration = registration_engine.analyze(
+        def require_campaign_window_identity() -> None:
+            current = control.target_identity
+            if (
+                current.process_id != control_identity.process_id
+                or current.thread_id != control_identity.thread_id
+                or current.class_name != control_identity.class_name
+                or hashlib.sha256(current.title.encode("utf-8")).hexdigest()
+                != selected_title_sha256
+            ):
+                raise RuntimeError(
+                    "RuneLite process/thread/window identity changed inside R2.3"
+                )
+
+        def authorization_evidence(
+            mode: str,
+            precursor_commit_sha256: str,
+        ) -> CameraBridgeAuthorizationEvidence:
+            return CameraBridgeAuthorizationEvidence(
+                r1_report_sha256=analysis_evidence.r1_report_sha256,
+                r2_report_sha256=analysis_evidence.report_sha256,
+                precursor_mode=mode,
+                precursor_commit_sha256=precursor_commit_sha256,
+                target_hwnd=selected.hwnd,
+                target_process_id=control_identity.process_id,
+                target_thread_id=control_identity.thread_id,
+                target_class_name=selected.class_name,
+                target_title_sha256=selected_title_sha256,
+            )
+
+        def reserve_campaign(
+            mode: str,
+            precursor_commit_sha256: str,
+        ) -> None:
+            nonlocal authorization_reservation, reservation_completed_clock_s
+            if authorization_reservation is not None:
+                raise RuntimeError("R2.3 campaign reservation was requested twice")
+            authorization_reservation = reserve_camera_bridge_authorization(
+                _REPO_ROOT,
+                git_head_sha=expected_head,
+                source_gate_enabled=_BRIDGE_LIVE_INPUT_ENABLED,
+                evidence=authorization_evidence(mode, precursor_commit_sha256),
+            )
+            reservation_completed_clock_s = time.monotonic()
+
+        # The only zero-click route is exact byte identity with the frozen,
+        # receipt-proven north frame plus identity registration. Ordinary
+        # accepted registration may relate a different yaw/pitch/zoom pose and
+        # therefore cannot omit the compass primitive.
+        precursor_frame, precursor_evidence = _capture_campaign_precursor_frame(
+            source,
+            recorder,
+        )
+        _require_fail_closed_campaign_frame(
+            precursor_evidence,
+            context="fresh R2.3 precursor",
+        )
+        direct_registration = registration_engine.analyze(
             analysis_evidence.source_frame,
-            north_handoff.frame,
+            precursor_frame,
         )
-        fresh_north_sha256 = hashlib.sha256(
-            north_handoff.frame.payload
-        ).hexdigest()
-        _require_bridge_starting_registration(
-            planner_source_registration,
-            expected_source_sha256=analysis_evidence.source_sha256,
-            expected_target_sha256=fresh_north_sha256,
-            context="reviewed planner source to fresh compass-north handoff",
-        )
+        direct_north_qualification: CameraBridgeExactNorthQualification | None
+        try:
+            _require_bridge_starting_registration(
+                direct_registration,
+                expected_source_sha256=analysis_evidence.source_sha256,
+                expected_target_sha256=precursor_evidence.artifact.raw_sha256,
+                context="frozen planner source to zero-click precursor",
+            )
+            direct_north_qualification = qualify_exact_frozen_north_registration(
+                direct_registration
+            )
+        except RuntimeError:
+            direct_registration_accepted = False
+            direct_north_qualification = None
+        except ValueError:
+            direct_registration_accepted = False
+            direct_north_qualification = None
+        else:
+            direct_registration_accepted = True
+
+        if direct_registration_accepted:
+            if direct_north_qualification is None:  # pragma: no cover - defensive
+                raise RuntimeError("zero-click route lost exact north qualification")
+            planner_source_registration = direct_registration
+            campaign_precursor = _BridgeCampaignPrecursor(
+                mode="zero_click",
+                frame=precursor_frame,
+                frame_evidence=precursor_evidence,
+                registration=direct_registration,
+                north_qualification=direct_north_qualification,
+                bootstrap=None,
+                window_hwnd=selected.hwnd,
+                window_process_id=control_identity.process_id,
+                window_thread_id=control_identity.thread_id,
+                window_class_name=selected.class_name,
+                window_title_sha256=selected_title_sha256,
+            )
+        else:
+            def require_safe_compass_seam(
+                initial: CameraServoFrameEvidence,
+                arm: CameraServoFrameEvidence,
+                commit: CameraServoFrameEvidence,
+            ) -> None:
+                current_head, current_clean = _git_state()
+                if current_head != expected_head or not current_clean:
+                    raise RuntimeError(
+                        "Git HEAD/worktree changed before the compass seam"
+                    )
+                require_campaign_window_identity()
+                for stage, evidence in (
+                    ("north-initial", initial),
+                    ("north-arm", arm),
+                    ("north-commit", commit),
+                ):
+                    _require_fail_closed_campaign_frame(evidence, context=stage)
+
+            def reserve_before_compass(
+                initial: CameraServoFrameEvidence,
+                arm: CameraServoFrameEvidence,
+                commit: CameraServoFrameEvidence,
+            ) -> None:
+                require_safe_compass_seam(initial, arm, commit)
+                reserve_campaign("compass_click", commit.artifact.raw_sha256)
+
+            north_result = run_camera_north_bootstrap(
+                source,
+                control,
+                sleeper=time.sleep,
+                settle_s=_NORTH_BOOTSTRAP_SETTLE_SECONDS,
+                recorder=recorder,
+                pre_input_guard=require_safe_compass_seam,
+                final_input_guard=reserve_before_compass,
+            )
+            _require_north_bootstrap_result_identities(north_result)
+            if (
+                north_result.terminal_reason
+                is not CameraNorthBootstrapTerminalReason.BOOTSTRAP_EXECUTED
+                or north_result.input_state
+                is not CameraNorthBootstrapInputState.COMPLETE
+                or north_result.post is None
+                or north_result.commit is None
+                or authorization_reservation is None
+                or reservation_completed_clock_s is None
+            ):
+                raise RuntimeError(
+                    "R2.3 north precursor did not complete; Right is forbidden"
+                )
+            if (
+                north_result.input_start_clock_s is None
+                or reservation_completed_clock_s > north_result.input_start_clock_s
+            ):
+                raise RuntimeError(
+                    "R2.3 reservation did not precede the compass input seam"
+                )
+            _require_fail_closed_campaign_frame(
+                north_result.post,
+                context="R2.3 compass post",
+            )
+            precursor_frame = _bridge_evidence_frame(
+                output_root,
+                north_result.post,
+            )
+            planner_source_registration = registration_engine.analyze(
+                analysis_evidence.source_frame,
+                precursor_frame,
+            )
+            _require_bridge_starting_registration(
+                planner_source_registration,
+                expected_source_sha256=analysis_evidence.source_sha256,
+                expected_target_sha256=north_result.post.artifact.raw_sha256,
+                context="frozen planner source to compass-post precursor",
+            )
+            campaign_precursor = _BridgeCampaignPrecursor(
+                mode="compass_click",
+                frame=precursor_frame,
+                frame_evidence=north_result.post,
+                registration=planner_source_registration,
+                north_qualification=None,
+                bootstrap=north_result,
+                window_hwnd=selected.hwnd,
+                window_process_id=control_identity.process_id,
+                window_thread_id=control_identity.thread_id,
+                window_class_name=selected.class_name,
+                window_title_sha256=selected_title_sha256,
+            )
+
+        if campaign_precursor is None or planner_source_registration is None:
+            raise RuntimeError("R2.3 campaign produced no authenticated precursor")
         prearm_head, prearm_clean = _git_state()
-        prearm_north_age = time.monotonic() - north_handoff.frame.captured_monotonic_s
+        precursor_age = time.monotonic() - campaign_precursor.frame.captured_monotonic_s
         if prearm_head != expected_head or not prearm_clean:
             raise RuntimeError(
-                "Git HEAD/worktree changed during the read-only R2 precompute"
+                "Git HEAD/worktree changed during the read-only R2.3 precursor"
             )
         if (
-            not math.isfinite(prearm_north_age)
-            or prearm_north_age < 0.0
-            or prearm_north_age >= _BRIDGE_NORTH_MAXIMUM_AGE_SECONDS
+            not math.isfinite(precursor_age)
+            or precursor_age < 0.0
+            or precursor_age >= _BRIDGE_NORTH_MAXIMUM_AGE_SECONDS
         ):
-            raise RuntimeError(
-                "compass-north handoff expired during the read-only R2 precompute"
-            )
+            raise RuntimeError("R2.3 campaign precursor expired before Right")
 
         def require_same_clean_head_before_input(
             decision: CameraServoFrameEvidence,
             arm: CameraServoFrameEvidence,
             commit: CameraServoFrameEvidence,
         ) -> None:
-            nonlocal north_registration, planner_source_registration, pointer_evidence
+            nonlocal precursor_to_commit_registration, pointer_evidence
             current_head, current_clean = _git_state()
             if current_head != expected_head or not current_clean:
                 raise RuntimeError(
@@ -4604,8 +5127,9 @@ def _run_live_bridge_capture(
                     stage,
                     evidence.production,
                 )
+            require_campaign_window_identity()
             current_north_age = (
-                time.monotonic() - north_handoff.frame.captured_monotonic_s
+                time.monotonic() - campaign_precursor.frame.captured_monotonic_s
             )
             if (
                 not math.isfinite(current_north_age)
@@ -4613,10 +5137,10 @@ def _run_live_bridge_capture(
                 or current_north_age >= _BRIDGE_NORTH_MAXIMUM_AGE_SECONDS
             ):
                 raise RuntimeError(
-                    "compass-north handoff expired at the physical input seam"
+                    "R2.3 precursor expired at the Right physical input seam"
                 )
             fresh_north_sha256 = hashlib.sha256(
-                north_handoff.frame.payload
+                campaign_precursor.frame.payload
             ).hexdigest()
             if planner_source_registration is None:  # pragma: no cover - defensive
                 raise RuntimeError("R2 planner-source registration was not precomputed")
@@ -4624,69 +5148,78 @@ def _run_live_bridge_capture(
                 planner_source_registration,
                 expected_source_sha256=analysis_evidence.source_sha256,
                 expected_target_sha256=fresh_north_sha256,
-                context="reviewed planner source to fresh compass-north handoff",
+                context="reviewed planner source to R2.3 campaign precursor",
             )
             commit_frame = _bridge_evidence_frame(output_root, commit)
             if (
-                north_registration is None
-                or north_registration.target.payload_sha256
+                precursor_to_commit_registration is None
+                or precursor_to_commit_registration.target.payload_sha256
                 != commit.artifact.raw_sha256
             ):
                 candidate = registration_engine.analyze(
-                    north_handoff.frame,
+                    campaign_precursor.frame,
                     commit_frame,
                 )
                 _require_bridge_starting_registration(
                     candidate,
                     expected_source_sha256=fresh_north_sha256,
                     expected_target_sha256=commit.artifact.raw_sha256,
-                    context="fresh compass-north handoff to live commit",
+                    context="R2.3 campaign precursor to live Right commit",
                 )
-                north_registration = candidate
+                precursor_to_commit_registration = candidate
             else:
                 _require_bridge_starting_registration(
-                    north_registration,
+                    precursor_to_commit_registration,
                     expected_source_sha256=fresh_north_sha256,
                     expected_target_sha256=commit.artifact.raw_sha256,
-                    context="fresh compass-north handoff to live commit",
+                    context="R2.3 campaign precursor to live Right commit",
                 )
             pointer_evidence = _require_bridge_pointer_ownership(
                 pointer_api,
                 hwnd=selected.hwnd,
             )
 
-        def consume_one_shot_authorization_before_input(
+        def authenticate_or_reserve_campaign_before_right(
             decision: CameraServoFrameEvidence,
             arm: CameraServoFrameEvidence,
             commit: CameraServoFrameEvidence,
         ) -> None:
-            """Revalidate the live seam, then atomically burn the campaign."""
+            """Burn zero-click campaigns or reauthenticate compass campaigns."""
 
-            nonlocal authorization_reservation
+            nonlocal authorization_reservation, reservation_completed_clock_s
             require_same_clean_head_before_input(decision, arm, commit)
-            if authorization_reservation is not None:  # pragma: no cover - defensive
-                raise RuntimeError(
-                    "one-shot bridge authorization was consumed more than once"
+            precursor_commit_sha256 = (
+                campaign_precursor.frame_evidence.artifact.raw_sha256
+                if campaign_precursor.bootstrap is None
+                else (
+                    campaign_precursor.bootstrap.commit.artifact.raw_sha256
+                    if campaign_precursor.bootstrap.commit is not None
+                    else ""
                 )
-            authorization_reservation = reserve_camera_bridge_authorization(
-                _REPO_ROOT,
-                git_head_sha=expected_head,
-                source_gate_enabled=_BRIDGE_LIVE_INPUT_ENABLED,
-                evidence=CameraBridgeAuthorizationEvidence(
-                    r1_report_sha256=analysis_evidence.r1_report_sha256,
-                    r2_report_sha256=analysis_evidence.report_sha256,
-                    north_report_sha256=north_handoff.report_sha256,
-                    north_post_sha256=hashlib.sha256(
-                        north_handoff.frame.payload
-                    ).hexdigest(),
-                    commit_sha256=commit.artifact.raw_sha256,
-                    target_hwnd=selected.hwnd,
-                    target_process_id=control_identity.process_id,
-                    target_thread_id=control_identity.thread_id,
-                    target_class_name=selected.class_name,
-                    target_title_sha256=selected_title_sha256,
-                ),
             )
+            if not precursor_commit_sha256:
+                raise RuntimeError("compass campaign lost its exact commit hash")
+            expected_authorization = authorization_evidence(
+                campaign_precursor.mode,
+                precursor_commit_sha256,
+            )
+            if authorization_reservation is None:
+                if campaign_precursor.mode != "zero_click":
+                    raise RuntimeError(
+                        "compass campaign reached Right without its reservation"
+                    )
+                reserve_campaign("zero_click", precursor_commit_sha256)
+            else:
+                authenticated = authenticate_camera_bridge_authorization(
+                    _REPO_ROOT,
+                    git_head_sha=expected_head,
+                    expected_sentinel_sha256=(
+                        authorization_reservation.sentinel_sha256
+                    ),
+                    evidence=expected_authorization,
+                )
+                if authenticated.sentinel_sha256 != authorization_reservation.sentinel_sha256:
+                    raise RuntimeError("R2.3 campaign reservation identity changed")
 
         result = run_fixed_camera_bridge_capture(
             source,
@@ -4694,8 +5227,17 @@ def _run_live_bridge_capture(
             sleeper=time.sleep,
             recorder=recorder,
             pre_input_guard=require_same_clean_head_before_input,
-            final_input_guard=consume_one_shot_authorization_before_input,
+            final_input_guard=authenticate_or_reserve_campaign_before_right,
         )
+        if result.input_attempted and (
+            authorization_reservation is None
+            or reservation_completed_clock_s is None
+            or result.input_start_clock_s is None
+            or reservation_completed_clock_s > result.input_start_clock_s
+        ):
+            raise RuntimeError(
+                "R2.3 reservation did not precede the first possible Right input"
+            )
     except (
         CaptureError,
         FileExistsError,
@@ -4721,6 +5263,48 @@ def _run_live_bridge_capture(
                 cleanup_errors.append(f"capture cleanup failed: {exc}")
 
     if handled_error is not None:
+        if (
+            authorization_reservation is not None
+            and reservation_completed_clock_s is not None
+            and north_result is not None
+            and selected_hwnd is not None
+            and selected_process_id is not None
+            and selected_thread_id is not None
+            and selected_class_name is not None
+            and selected_title_sha256 is not None
+        ):
+            try:
+                failure_head, failure_clean = _git_state()
+                if failure_head != expected_head or not failure_clean:
+                    raise RuntimeError(
+                        "cannot publish consumed failure evidence from a changed head"
+                    )
+                failure_sha256 = _write_consumed_precursor_failure_report(
+                    result=north_result,
+                    reservation=authorization_reservation,
+                    reservation_completed_clock_s=reservation_completed_clock_s,
+                    report_path=report_path,
+                    expected_head=expected_head,
+                    command_argv=command_argv,
+                    selected_hwnd=selected_hwnd,
+                    selected_process_id=selected_process_id,
+                    selected_thread_id=selected_thread_id,
+                    selected_class_name=selected_class_name,
+                    selected_title_sha256=selected_title_sha256,
+                    detail=str(handled_error),
+                )
+                publication_state.published_by_this_invocation = True
+                print(
+                    "Consumed R2.3 precursor-failure report SHA-256: "
+                    f"{failure_sha256}",
+                    file=sys.stderr,
+                )
+            except (OSError, RuntimeError, TypeError, ValueError) as report_error:
+                print(
+                    "Could not publish consumed R2.3 precursor-failure evidence: "
+                    f"{report_error}",
+                    file=sys.stderr,
+                )
         print(f"R2 bridge capture failed: {handled_error}", file=sys.stderr)
         if cleanup_errors:
             print("; ".join(cleanup_errors), file=sys.stderr)
@@ -4845,13 +5429,17 @@ def _run_live_bridge_capture(
                 )
         if result.input_attempted and (
             authorization_reservation is None
+            or reservation_completed_clock_s is None
+            or campaign_precursor is None
             or planner_source_registration is None
-            or north_registration is None
+            or precursor_to_commit_registration is None
             or pointer_evidence is None
         ):
             raise RuntimeError(
-                "attempted bridge input lacks north/pointer precondition evidence"
+                "attempted bridge input lacks full-campaign precondition evidence"
             )
+        if campaign_precursor is None:
+            raise RuntimeError("R2.3 report lacks its embedded campaign precursor")
         provenance = CameraReportProvenance(
             git_head_sha=expected_head,
             detector_id=_EXPECTED_DETECTOR_ID,
@@ -4867,8 +5455,9 @@ def _run_live_bridge_capture(
             analysis_evidence=analysis_evidence,
             authorization_reservation=authorization_reservation,
             adapter_identity=adapter_identity,
-            north_handoff=north_handoff,
-            north_registration=north_registration,
+            campaign_precursor=campaign_precursor,
+            precursor_to_commit_registration=precursor_to_commit_registration,
+            reservation_completed_clock_s=reservation_completed_clock_s,
             planner_source_registration=planner_source_registration,
             post_transition_closure=post_transition_closure,
             post_transition_production=post_transition_production,
@@ -4900,7 +5489,7 @@ def _run_live_bridge_capture(
         if post_transition_closure.completed:
             if authorization_reservation is None:
                 raise RuntimeError(
-                    "complete bridge transaction lacks one-shot authorization"
+                    "complete bridge transaction lacks campaign authorization"
                 )
             publication_state.pending_bridge_completion = _PendingBridgeCompletion(
                 git_head_sha=expected_head,
@@ -4944,7 +5533,7 @@ def _run_live_bridge_capture(
 
 
 def _main_bridge_capture(command_args: list[str]) -> int:
-    """Keep the prepared one-primitive R2 launcher inert pending lead review."""
+    """Keep the integrated R2.3 campaign inert pending lead review."""
 
     args = _build_bridge_capture_parser().parse_args(command_args[1:])
     try:
@@ -4954,10 +5543,6 @@ def _main_bridge_capture(command_args: list[str]) -> int:
         analysis_sha256 = _validate_cli_text(
             "--analysis-sha256",
             args.analysis_sha256,
-        )
-        north_sha256 = _validate_cli_text(
-            "--north-sha256",
-            args.north_sha256,
         )
         case_prefix = _validate_case_prefix(args.case_prefix)
         command_argv = _exact_command_argv(command_args)
@@ -4993,7 +5578,7 @@ def _main_bridge_capture(command_args: list[str]) -> int:
         return 2
     if not _BRIDGE_LIVE_INPUT_ENABLED:
         print(
-            "R2.2 bridge capture remains input-disabled pending a future "
+            "R2.3 full campaign remains input-disabled pending a future "
             "exact-head LEAD authorization; no report can grant input authority.",
             file=sys.stderr,
         )
@@ -5001,20 +5586,15 @@ def _main_bridge_capture(command_args: list[str]) -> int:
     try:
         if camera_bridge_authorization_consumed(_REPO_ROOT):
             raise RuntimeError(
-                "the source-owned R2.2 one-shot campaign is already consumed"
+                "the source-owned R2.3 full campaign is already consumed"
             )
     except (OSError, RuntimeError, ValueError) as exc:
-        print(f"Cannot establish R2.2 one-shot state: {exc}", file=sys.stderr)
+        print(f"Cannot establish R2.3 campaign state: {exc}", file=sys.stderr)
         return 2
     try:
         analysis_evidence = _load_bridge_analysis_evidence(
             args.analysis_report,
             expected_sha256=analysis_sha256,
-            expected_head=expected_head,
-        )
-        north_handoff = _load_bridge_north_handoff(
-            args.north_report,
-            expected_sha256=north_sha256,
             expected_head=expected_head,
         )
     except (OSError, RuntimeError, ValueError) as exc:
@@ -5034,7 +5614,6 @@ def _main_bridge_capture(command_args: list[str]) -> int:
                 digest_path=digest_path,
                 case_prefix=case_prefix,
                 expected_head=expected_head,
-                north_handoff=north_handoff,
                 command_argv=command_argv,
                 publication_state=publication_state,
             )

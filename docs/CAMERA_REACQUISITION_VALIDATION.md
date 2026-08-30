@@ -470,6 +470,11 @@ evidence, input-request-to-receipt timing, and the receipt-backed pointer
 policy remain under ignored `diagnostics/`. The report explicitly does not
 claim a captured numeric logical-to-physical pointer mapping.
 
+This standalone report is not an R2.3 bridge-campaign input. The R2.3 launcher
+does not accept `--north-report` or `--north-sha256`, and a complete generic
+`north-bootstrap-v2` report cannot substitute for precursor pixels captured and
+evaluated inside the bridge process and input lease.
+
 ### Fixed A/B/A camera system identification
 
 After the corrected north-bootstrap experiment left the real client at only
@@ -736,104 +741,120 @@ still the canonical evidence. The machine planner disposition is
 `no_safe_endpoint_evidence`; the human-readable result conclusion is
 `no safe endpoint evidence`.
 
-The development-only fixed Right `0.043 s` capture wrapper is retained as an
-inert reviewed design for a possible future qualified planner result. Its
-same-transaction evidence protocol remains version `1.1.0`; the separate
-source-owned one-shot authorization protocol is R2.2 version `2.2.1`. The
-physical gate is still `False`. If later authorized on a separately reviewed
-exact head, it must start from an authenticated fresh compass-north state and:
+The development-only R2 bridge is now one inert full-campaign design rather
+than a two-command compass-report handoff. The fixed Right capture component
+remains version `1.1.0`; its source-owned campaign authorization is R2.3 version
+`2.3.0`. The source-literal physical gate remains the compile-time value
+`False`, so this design does not authorize live input.
 
-1. allow at most one input primitive between captures;
-2. obtain fresh decision, arm, no-input platform preflight, commit, and
-   post-action observations, with exact-head provenance, input lease,
-   focus/HWND, geometry, pointer ownership, and released-input checks intact;
-3. evaluate decision, arm, and commit observations with the unchanged
-   production detector, which remains the sole scene-acceptance and
-   resource-exposure authority;
-4. release the Right key, record the exact receipt, settle, then capture and
-   hash the post-action pixels plus readiness without running post production
-   perception yet;
-5. release all owned input and close capture before performing the potentially
-   expensive exact commit-to-post robust-registration evaluation;
-6. run the sole unchanged production evaluation of the exact post frame only
-   after that registration attempt, even when registration rejects or raises;
-   and
-7. serialize the physical receipt, registration outcome, production outcome,
-   exact frame hashes, objective binding, and report sidecar without a second
-   production-detector invocation; and
-8. create a separate source-owned completion seal only after that exact report
-   is durable, so a pre-input reservation alone can never become an offline
-   action transition.
+If a future exact head is separately reviewed and its literal gate is changed,
+the only live invocation is one `bridge-capture-r2` command:
 
-R2.2 gives the possible future capture exactly one source-owned campaign slot.
-The campaign ID, action family, Right key, `0.043 s` hold, one-primitive limit,
-`1005x1078` geometry, target-title policy, camera adapter, input lease, and
-reviewed pointer point and repository identity are compile-time values. On
-Windows the authoritative namespace is resolved from `FOLDERID_LocalAppData`
-through `SHGetKnownFolderPath`, then extended only with fixed source-owned path
+```powershell
+.\.venv\Scripts\python.exe tools\validate_varrock_east_camera.py bridge-capture-r2 `
+  --expected-head <EXACT_HEAD> `
+  --analysis-report diagnostics\issue31-camera-bridge-r2\issue31-camera-bridge-r2-<HEAD_PREFIX>.json `
+  --analysis-sha256 <R2_REPORT_SHA256> `
+  --output diagnostics\issue31-camera-bridge-r2 `
+  --case-prefix <PERMANENTLY_UNIQUE_CASE_PREFIX>
+```
+
+That command owns one process, one capture source, one exact RuneLite
+HWND/process/thread binding, one camera-control instance, and one machine-global
+input lease for the entire campaign. It accepts no north-report argument. After
+the exact clean-head and private-output checks, it:
+
+1. captures and evaluates a fresh precursor frame inside the lease;
+2. keeps production fail closed and runs read-only all-zone registration from
+   the frozen reviewed source to that exact frame;
+3. uses authenticated `zero_click` mode only when the fresh raw pixels are
+   byte-identical to the frozen, receipt-proven north frame and registration
+   independently resolves to the high-overlap identity translation; every
+   visually different frame instead runs the one fixed compass click at
+   `(608,49)` through the existing decision/arm/preflight/commit safety seam;
+4. atomically reserves the host-global campaign before the first possible
+   physical input: before the compass click in `compass_click` mode or before
+   Right-down in `zero_click` mode;
+5. retains and reauthenticates that same reservation identity while it captures
+   fresh post-precursor evidence and rechecks the clean head, exact window,
+   focus, `1005x1078` geometry, readiness, production fail-closed result,
+   released inputs, pointer ownership, freshness, and world-only registration;
+6. executes at most the fixed Right hold for `0.043 s`, then records its exact
+   down/up receipt, settles, and captures the exact post-action pixels;
+7. cleans up all owned input and capture state before the potentially expensive
+   commit-to-post registration and the single unchanged post production
+   evaluation; and
+8. publishes the canonical report and sidecar, releases the lease, rechecks the
+   clean head, and only then creates the separate completion seal.
+
+The immutable ordered campaign policy has two stages and a maximum of two
+physical primitives. Ordinal `0` is the fixed compass click, with an
+authenticated `zero_click` alternative that contributes no physical primitive.
+Ordinal `1` is the fixed Right hold for `0.043 s`. The caller cannot select the
+campaign, stage order, compass coordinate, key, duration, target, physical
+budget, or source gate. The embedded ordered receipt records the precursor mode,
+exact precursor commit/post hashes and receipt, fixed Right commit/post hashes
+and receipt, actual physical count, reservation digest, and the clock at which
+that reservation became durable. Reordered, missing, duplicated, partial, or
+over-budget evidence is not an authentic campaign.
+
+R2.3 provides exactly one source-owned campaign slot. On Windows its authority
+root is resolved from `FOLDERID_LocalAppData` through
+`SHGetKnownFolderPath`, then extended only with fixed source-owned path
 components. It does not read `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`, `HOME`,
-Git variables, `PATH`, the current directory, or any CLI value. Namespace
-location does not depend on the repository path. Every linked worktree and
-every independent clone for the same Windows
-user and host therefore resolves the same campaign slot. The fixed namespace
+Git variables, `PATH`, the current directory, output path, case prefix, or any
+other CLI value. Every linked worktree and independent clone for the same
+Windows user and host therefore resolves the same campaign slot. The namespace
 must be a non-reparse directory on a local fixed volume with hard-link support;
-resolution, inspection, or access ambiguity fails closed before backend or
-input construction. The physical common Git directory remains relevant only
-to clean-head provenance and is not authorization authority or a fallback.
+resolution, inspection, or access ambiguity fails closed. The physical common
+Git directory remains clean-head provenance only and is never authorization
+authority or a fallback.
 
-After the fresh decision/arm/preflight/commit sequence and after the existing
-clean-head, exact-window, registration, geometry, pointer, freshness, and
-released-input checks, the final input guard uses exclusive file creation to
-consume the campaign. It writes canonical bytes, flushes, and `fsync`s before
-the plan runner can send Right-down. The sentinel is never removed. An empty,
-partial, tampered, interrupted, cleanup-failed, publication-failed, or
-partial/unknown attempt remains consumed and every later invocation sends zero
-input. Deleting or modifying it is evidence tampering, not a supported retry;
-a retry requires a new source campaign and a new lead-reviewed code head.
+The race-safe reservation uses exclusive file creation and writes canonical
+schema-3 bytes, flushes, and `fsync`s before either permitted primitive can be
+sent. It records the exact clean head, R1/R2 report digests, precursor mode and
+commit hash, and selected HWND/process/thread/class/title hash. These dynamic
+facts are authenticated evidence, not authority. They cannot select an action,
+alter the frozen source/objective, enable the gate, increase the budget, or
+create another campaign. The sentinel is never removed. Once it exists, a
+partial or unknown compass outcome, loss of safety before Right, capture or
+cleanup failure, interruption, publication failure, or any later error leaves
+the campaign permanently consumed. Every later invocation sends zero input;
+deleting or modifying host-global state is evidence tampering, not a supported
+retry.
 
-The reservation sentinel records the actual clean head, exact authenticated
-R1/R2 and fresh north report digests, north post and final commit pixel hashes,
-and the exact selected HWND/process/thread/class/title hash. Those dynamic
-hashes are evidence only: they cannot select an action, change the frozen
-source/objective, enable the source gate, or create another campaign. A cheap
-precheck can reject an already consumed campaign before the lease/backend; the
-exclusive create at the final seam remains the authoritative race-safe
-operation.
+A separate fixed host-global file seals completion. After the report is durable
+and the lease has released successfully, canonical bytes are written and
+`fsync`ed to an exclusive never-removed pending witness, then atomically linked
+to the final seal path. The seal binds the reservation digest, capture-report
+digest, complete ordered-campaign receipt, decision/arm/commit/post chain,
+exact commit and post hashes, pointer/window evidence, registration records,
+and complete closure. An interrupted or tampered pending/final artifact can
+consume the campaign but cannot authenticate an offline `ActionTransition`.
 
-A different fixed file in the same host-global namespace seals completion. It
-is created only after the exact capture report and sidecar exist, the
-machine-global input lease has released successfully, and the clean head has
-been rechecked. The canonical bytes are first written and `fsync`ed to a fixed,
-exclusive, never-removed pending witness; only then is an atomic hard link made
-at the final seal path. An interrupted write can therefore consume the campaign
-but can never leave an authentic final completion seal. Its canonical payload
-binds the reservation digest, capture-report digest, complete input receipt,
-every decision/arm/commit/post hash and monotonic timestamp, arm/guard/
-preflight/input chain, exact commit and post hashes, pointer/window evidence,
-all three registration records, and the complete closure. It is also never
-removed. Missing, partial, stale, interrupted, or tampered completion evidence
-cannot yield an offline `ActionTransition`, even when the pre-input reservation
-is authentic.
+A standalone `north-bootstrap-v2` report, even when well formed and fresh, is
+generic evidence only. R2.3 rejects the old `--north-report` and
+`--north-sha256` inputs and never lets external report bytes establish the
+precursor mode, reservation, stage order, or Right authority. Both precursor
+routes use pixels captured in the same bridge process and lease.
 
-The fresh north handoff is also exact. Its private report records the selected
-HWND, class, title hash, adapter identity, and source-owned title policy. The
-bridge loader authenticates its exact launcher arguments, fixed compass plan,
-single complete receipt, focused geometry, raw post pixels, readiness,
-unchanged production result, age, and selected-window binding. A substituted
-north report or a different live HWND/class/title stops before reservation or
-bridge input.
+Ordinary registration cannot select the zero-click route: R1 deliberately
+accepts translation, similarity, affine, and homography relationships across a
+wide diagnostic envelope, so an accepted edge is not proof of north heading.
+Zero-click instead requires exact frozen raw-pixel identity and an identity
+translation registration. Registration may otherwise characterize or reject a
+visual edge and support offline transition evidence. It may not validate the
+scene, expose resources, promote a production rejection, or authorize a
+caller-selected primitive. The unchanged production detector remains the sole
+scene-acceptance and resource-exposure authority. Reports continue to
+distinguish visual registration, exact frozen-north qualification, receipt
+proof, production support, and bridge rejection; none implies production
+support on its own.
 
-Registration may reject or characterize the saved edge, but it may not
-validate the scene, expose resources, authorize another primitive, or override
-production. Reports explicitly separate
-`REGISTRATION_BRIDGE_OBSERVED`, `ACTION_BRIDGE_RECEIPT_PROVEN`,
-`PRODUCTION_SUPPORTED_ENDPOINT`, and `BRIDGE_REJECTED`. A visual relationship
-or exact receipt never implies production support.
-
-The live artifact is report-only: it never emits an `ActionTransition`, always
-marks transition-candidate eligibility false, and states that authenticated
-offline ingestion is still required. The read-only post verifier is the only
-supported ingestion path:
+The live artifact remains report-only: it emits no `ActionTransition`, marks
+transition-candidate eligibility false, and requires authenticated offline
+ingestion. The read-only post verifier remains the only supported ingestion
+path:
 
 ```powershell
 .\.venv\Scripts\python.exe tools\verify_issue31_bridge_r2_post.py `
@@ -848,39 +869,35 @@ supported ingestion path:
   --report diagnostics\issue31-camera-bridge-r2\issue31-camera-bridge-r2-post-<HEAD_PREFIX>.json
 ```
 
-The verifier accepts no capture root, action, axis, direction, duration, or
-input option. It derives the private capture root as the capture report's
-grandparent, constrains every artifact below that ignored diagnostics root,
-and resolves the four raw references as
-`frames/<CASE_PREFIX>-r2-{decision,arm,commit,post}.raw`. It authenticates the
-exact report bytes and adjacent sidecars, rejects duplicate keys and non-finite
-JSON numbers, binds both analysis reports and the capture report to the same
-clean exact head, and reloads the frozen R1/R2 corpus from its authenticated
-paths. The capture receipt must reconstruct as exactly one Right-key hold for
-`0.043 s`, with one complete `1/1` `key_down` receipt followed by one complete
-`1/1` `key_up` receipt at focused `1005x1078` geometry.
+The verifier accepts no capture root, action, precursor mode, compass
+coordinate, axis, direction, duration, budget, or input option. It derives the
+private root from the capture report, confines every referenced artifact below
+that ignored diagnostics root, authenticates exact report bytes and sidecars,
+rejects duplicate keys and non-finite JSON, and binds the R1/R2 analysis and
+capture report to the same clean exact head. It rejects legacy generic north
+handoffs.
 
 All material facts are rederived rather than accepted as report booleans. The
-verifier reloads and hashes decision, arm, commit, and post pixels; recomputes
-all four readiness and unchanged-production results plus all three pre-input
-structural guards; authenticates the sealed source-to-fresh-north and
-fresh-north-to-commit execution fields; and checks the same-transaction closure
-and its four explicit semantic states. It pins the one-second arm maximum,
-requires the exact north/decision/arm/arm-origin/commit/input/receipt/post
-ordering, keeps north-to-input below 30 seconds, requires at least the frozen
-`0.043 s` delivery interval, and authenticates the one-second post settle. It
-also reopens the one fixed host-global campaign sentinel, exact-compares its
-canonical bytes and digest, and requires the capture report's one-shot object
-to match the authenticated sentinel. Finally it reopens and exact-compares the
-separate completion seal described above. A missing, partial, stale, or
-tampered reservation or completion seal rejects ingestion. Importing this
-offline command does not load the Windows camera adapter or machine-global
-input-lease module. The verification core independently
-recomputes the exact frozen-source-to-commit visual prefix and the
-commit-to-post registration and graph evidence. A graph action transition may
-be constructed only after that authentication. Its source is the exact fresh
-**commit** payload at the input seam and its target is the exact immediate
-**post** payload. The frozen
+verifier reloads and hashes the precursor and Right-stage frames, reconstructs
+either the authenticated zero-click route or one complete fixed compass receipt,
+then reconstructs exactly one Right hold with one complete `1/1` `key_down`
+followed by one complete `1/1` `key_up`. It enforces ordinal order, a maximum of
+two physical primitives, exact `1005x1078` geometry, monotonic chronology,
+freshness,
+all pre-input structural guards, readiness, unchanged production results, and
+the same-transaction closure. It independently recomputes source-to-precursor,
+precursor-to-commit, and commit-to-post registration evidence without allowing
+any registration result to override production.
+
+The verifier reopens and exact-compares the fixed host-global reservation and
+completion seal. The embedded precursor, campaign authorization, ordered
+receipt, and completion evidence must all carry the same reservation identity.
+A missing, partial, stale, interrupted, or tampered artifact rejects ingestion.
+Importing this offline command does not load the Windows camera adapter or
+machine-global input-lease module. A graph action transition may be constructed
+only after this authentication. Its source is the exact fresh **commit** payload
+at the Right input seam and its target is the exact immediate **post** payload.
+The frozen
 `c1cb6fe144600ce153b1ceb2e90d6e375d42babea1eda6a08120efbc7ed2a4cd`
 objective source remains a precondition binding and is never substituted for
 the physical commit pixels.
@@ -900,15 +917,14 @@ exit `1` records a truthful insufficient-evidence/STOP result; and exit `2`
 means authentication, setup, provenance, or publication failed. Every outcome
 sends zero input and can never authorize a second sample.
 
-The live capture command itself still has a source-literal,
-caller-inaccessible disabled gate and stops before inspecting/reserving the
-campaign, loading a live handoff, acquiring the input lease, or constructing
-the capture backend. A planner or post-verifier report is evidence only and can
-never satisfy or toggle that gate. Enabling one future sample therefore
-requires a new exact code head and explicit lead review; no CLI flag, report
-field, environment variable, or caller-selected value can do so. No live input
-from this design is authorized, and this section makes no reacquisition-success
-claim.
+The live capture command still has a source-literal, caller-inaccessible
+`False` gate and stops before inspecting or reserving the campaign, loading
+analysis pixels, acquiring the lease, or constructing the capture backend. No
+planner, generic north report, capture report, verifier result, CLI flag,
+environment variable, output path, or caller-selected value can satisfy or
+toggle that gate. Enabling one future sample requires a new exact code head and
+explicit lead review. No live input from this R2.3 design is authorized, and
+this section makes no reacquisition-success claim.
 
 ## Repeated trial protocol
 
