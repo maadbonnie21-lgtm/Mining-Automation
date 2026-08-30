@@ -11,6 +11,7 @@ package imports do not load this module.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import math
 import threading
@@ -468,8 +469,13 @@ def robust_registration_environment() -> dict[str, object]:
     with _CV_LOCK:
         _configure_opencv_determinism()
         return {
+            "numpy_distribution_version": importlib.metadata.version("numpy"),
             "numpy_version": np.__version__,
             "opencv_opencl_enabled": bool(cv2.ocl.useOpenCL()),
+            "opencv_distribution": "opencv-python-headless",
+            "opencv_distribution_version": importlib.metadata.version(
+                "opencv-python-headless"
+            ),
             "opencv_threads": int(cv2.getNumThreads()),
             "opencv_version": cv2.__version__,
             "rng_seed": _OPENCV_RNG_SEED,
