@@ -71,10 +71,25 @@ class InventoryValidationProvenance:
     capture_build: str | None = None
     runelite_build: str | None = None
     notes: tuple[str, ...] = ()
+    windows_scaling_percent: int | None = None
+    client_mode: str | None = None
+    runelite_theme: str | None = None
+    renderer: str | None = None
+    capture_configuration_id: str | None = None
 
     def __post_init__(self) -> None:
         _optional_text("capture_build", self.capture_build)
         _optional_text("runelite_build", self.runelite_build)
+        if self.windows_scaling_percent is not None and (
+            not isinstance(self.windows_scaling_percent, int)
+            or isinstance(self.windows_scaling_percent, bool)
+            or self.windows_scaling_percent <= 0
+        ):
+            raise ValueError("windows_scaling_percent must be None or a positive integer")
+        _optional_text("client_mode", self.client_mode)
+        _optional_text("runelite_theme", self.runelite_theme)
+        _optional_text("renderer", self.renderer)
+        _optional_text("capture_configuration_id", self.capture_configuration_id)
         if not isinstance(self.notes, tuple):
             raise TypeError("notes must be an immutable tuple")
         for index, note in enumerate(self.notes):
@@ -82,11 +97,20 @@ class InventoryValidationProvenance:
                 raise ValueError(f"notes[{index}] must be a non-empty string")
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "capture_build": self.capture_build,
             "notes": list(self.notes),
             "runelite_build": self.runelite_build,
         }
+        optional_fields: tuple[tuple[str, object | None], ...] = (
+            ("windows_scaling_percent", self.windows_scaling_percent),
+            ("client_mode", self.client_mode),
+            ("runelite_theme", self.runelite_theme),
+            ("renderer", self.renderer),
+            ("capture_configuration_id", self.capture_configuration_id),
+        )
+        result.update((key, value) for key, value in optional_fields if value is not None)
+        return result
 
 
 @dataclass(frozen=True, slots=True)

@@ -222,6 +222,15 @@ the exact captured frame without an architecture change. See
 `INVENTORY_LIVE_VALIDATION.md` for the command, report schema, exit semantics,
 privacy review, and replay-promotion workflow.
 
+After a guided session is captured, use `INVENTORY_REVIEW_REPLAY_GATE.md` for
+the independent truth-recording, reviewed-evidence-only candidate derivation,
+unchanged-detector replay, privacy sanitization, and non-activation boundary.
+The package panels are re-derived from durable owned frames during evaluation,
+and the review record is reviewer-attributed and hash-bound to complete package
+coverage. It is not a cryptographic signature. Capture-environment values
+remain `operator-reported-bound` until a reviewer or lead separately approves
+them.
+
 ## Replay and failure-promotion workflow
 
 Real failures become permanent tests through the merged perception replay
@@ -295,6 +304,15 @@ incomplete handoff: `capture_build`, `runelite_build`, `frame_size`,
 `validation_split`. Set `validation_split` to `reference`, `calibration`, or
 `held-out`; do not put account names in provenance.
 
+For the guided Windows session, the structured operator-reporting flags are
+`--capture-build`, `--runelite-build`, `--windows-scaling-percent`,
+`--client-mode`, `--runelite-theme`, `--renderer`, and
+`--capture-configuration-id`; `--note` is repeatable supplemental provenance.
+They are frozen when the session is created and cannot be replaced on resume.
+For detector-run resume, the requested detector ID/version and configured
+profile/configuration IDs must also match every completed capture before a new
+backend is constructed.
+
 ### Calibration discipline
 
 Use reviewed frames to propose an immutable `ClassificationPolicy`, then
@@ -319,6 +337,15 @@ approve thresholds. Capture additional byte-distinct partial and full frames
 with different item art for `calibration` and `held-out` splits. If the first
 handoff contains only one partial and one full frame, it can validate the
 composition and replay path but cannot establish a production calibration.
+
+The current real-client evidence remains below this bar: the unchanged
+production detector returns `unknown` for the reviewed partial and full iron
+inventories; no frame visibly proves a genuine held/drag state; the clean
+held-out detector-owned empty region is byte-identical to the reference; and
+the earlier batch lacks the structured scaling/mode/theme/renderer/capture-
+configuration provenance. Keep those real failures as permanent replays and
+do not weaken thresholds, obstruction guards, slot ownership, confidence, or
+unknown-state behavior to make them known.
 
 ## Required live RuneLite validation
 

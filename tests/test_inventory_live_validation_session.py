@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from mining_automation.capture import Frame, PixelFormat, RawFrame
 from mining_automation.capture.testing import ManualClock
 from mining_automation.capture.windows import CapturedPixels, WindowInfo, WindowsCaptureBackend
 from mining_automation.capture.windows.testing import FakeWin32Api
+from mining_automation.perception.detector import DetectorMetadata
 from mining_automation.perception.inventory import (
     DEFAULT_INVENTORY_VALIDATION_CASES,
     InventoryDetector,
@@ -112,17 +114,27 @@ def provenance() -> InventoryValidationProvenance:
     return InventoryValidationProvenance(
         capture_build="issue-23-test",
         runelite_build="synthetic",
+        windows_scaling_percent=125,
+        client_mode="resizable",
+        runelite_theme="dark",
+        renderer="gpu",
+        capture_configuration_id="synthetic-session-v1",
         notes=("guided session regression",),
     )
 
 
-def _detector() -> InventoryDetector:
+def _detector(*, profile_id: str = _LAYOUT.profile_id) -> InventoryDetector:
+    layout = InventoryGridLayout(
+        profile_id=profile_id,
+        column_stride=_LAYOUT.column_stride,
+        row_stride=_LAYOUT.row_stride,
+    )
     profile = InventoryFrameProfile(
-        profile_id=_LAYOUT.profile_id,
+        profile_id=profile_id,
         frame_width=_FRAME_WIDTH,
         frame_height=_FRAME_HEIGHT,
         region=_REGION,
-        layout=_LAYOUT,
+        layout=layout,
     )
     reference = Frame.from_raw(
         RawFrame(
@@ -135,6 +147,34 @@ def _detector() -> InventoryDetector:
         captured_monotonic_s=400.0,
     )
     return inventory_detector_from_profile(profile, reference)
+
+
+def _paused_detector_run_session(
+    tmp_path: Path,
+    provenance: InventoryValidationProvenance,
+    detector: InventoryDetector,
+) -> Path:
+    factory = _BackendFactory((_EMPTY_PAYLOAD,))
+
+    def pause_after_first(*_: object) -> None:
+        if factory.calls == 1:
+            raise KeyboardInterrupt
+
+    with pytest.raises(InventoryValidationSessionPaused) as raised:
+        run_inventory_validation_session(
+            backend_factory=factory,
+            output_root=tmp_path / "sessions",
+            provenance=provenance,
+            cases=(
+                InventoryValidationCase.EMPTY_VALIDATION,
+                InventoryValidationCase.PARTIAL,
+            ),
+            detector=detector,
+            ready_callback=pause_after_first,
+            utc_clock=_fixed_utc,
+        )
+    assert factory.calls == 1
+    return raised.value.session_directory
 
 
 def test_default_plan_and_capture_only_session_contract(
@@ -239,6 +279,92 @@ def test_unique_ownership_pause_and_resume_do_not_recapture_completed_cases(
     assert second.session_directory != session_directory
 
 
+def test_schema_v1_session_loads_when_environment_provenance_is_absent(
+    tmp_path: Path,
+) -> None:
+    legacy_provenance = InventoryValidationProvenance(
+        capture_build="legacy-v1-capture",
+        runelite_build="legacy-v1-runelite",
+        notes=("predates typed environment provenance",),
+    )
+    report = run_inventory_validation_session(
+        backend_factory=_BackendFactory((_EMPTY_PAYLOAD,)),
+        output_root=tmp_path / "sessions",
+        provenance=legacy_provenance,
+        cases=(InventoryValidationCase.EMPTY_REFERENCE,),
+        utc_clock=_fixed_utc,
+    )
+
+    manifest = json.loads(report.report_path.read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 1
+    assert manifest["provenance"] == {
+        "capture_build": "legacy-v1-capture",
+        "notes": ["predates typed environment provenance"],
+        "runelite_build": "legacy-v1-runelite",
+    }
+    capture_report_path = report.session_directory / report.records[0].report_path  # type: ignore[operator]
+    capture_payload = json.loads(capture_report_path.read_text(encoding="utf-8"))
+    assert capture_payload["provenance"] == manifest["provenance"]
+
+    loaded = load_inventory_validation_session(report.session_directory)
+    assert loaded.provenance == legacy_provenance
+    assert loaded.records == report.records
+
+
+def test_resume_rejects_replacement_of_each_environment_provenance_field(
+    tmp_path: Path,
+    provenance: InventoryValidationProvenance,
+) -> None:
+    initial_factory = _BackendFactory((_EMPTY_PAYLOAD,))
+
+    def pause_after_first(
+        case: InventoryValidationCase,
+        order: int,
+        total: int,
+        session_directory: Path,
+    ) -> None:
+        del case, total, session_directory
+        if order == 2:
+            raise KeyboardInterrupt
+
+    with pytest.raises(InventoryValidationSessionPaused) as raised:
+        run_inventory_validation_session(
+            backend_factory=initial_factory,
+            output_root=tmp_path / "sessions",
+            provenance=provenance,
+            cases=(
+                InventoryValidationCase.EMPTY_REFERENCE,
+                InventoryValidationCase.PARTIAL,
+            ),
+            ready_callback=pause_after_first,
+            utc_clock=_fixed_utc,
+        )
+    assert initial_factory.calls == 1
+    replacements = (
+        replace(provenance, windows_scaling_percent=150),
+        replace(provenance, client_mode="fixed"),
+        replace(provenance, runelite_theme="classic"),
+        replace(provenance, renderer="software"),
+        replace(provenance, capture_configuration_id="other-capture-config"),
+    )
+
+    for replacement in replacements:
+        resumed_factory = _BackendFactory((_EMPTY_PAYLOAD,))
+        with pytest.raises(InventoryValidationSessionError, match="provenance differs"):
+            run_inventory_validation_session(
+                backend_factory=resumed_factory,
+                output_root=raised.value.session_directory.parent,
+                provenance=replacement,
+                cases=(
+                    InventoryValidationCase.EMPTY_REFERENCE,
+                    InventoryValidationCase.PARTIAL,
+                ),
+                resume_directory=raised.value.session_directory,
+                utc_clock=_fixed_utc,
+            )
+        assert resumed_factory.calls == 0
+
+
 def test_cross_case_review_flags_geometry_and_reference_separation(
     tmp_path: Path,
     provenance: InventoryValidationProvenance,
@@ -309,6 +435,99 @@ def test_reviewed_detector_keeps_identity_and_wrong_geometry_fails_closed(
     assert unknown.detector_confidence == 0.0
     assert unknown.detector_reason is not None
     assert "inventory_region_not_localized" in unknown.detector_reason
+
+
+def test_resume_rejects_changed_detector_version_before_backend_construction(
+    tmp_path: Path,
+    provenance: InventoryValidationProvenance,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    detector = _detector()
+    session_directory = _paused_detector_run_session(
+        tmp_path,
+        provenance,
+        detector,
+    )
+    monkeypatch.setattr(
+        "mining_automation.perception.inventory.detector._DETECTOR_METADATA",
+        DetectorMetadata(detector_id="inventory-baseline", version="1.0.1-test"),
+    )
+    resumed_factory = _BackendFactory((_EMPTY_PAYLOAD,))
+
+    with pytest.raises(InventoryValidationSessionError, match="detector version"):
+        run_inventory_validation_session(
+            backend_factory=resumed_factory,
+            output_root=session_directory.parent,
+            provenance=provenance,
+            cases=(
+                InventoryValidationCase.EMPTY_VALIDATION,
+                InventoryValidationCase.PARTIAL,
+            ),
+            detector=detector,
+            resume_directory=session_directory,
+            utc_clock=_fixed_utc,
+        )
+
+    assert resumed_factory.calls == 0
+
+
+def test_resume_rejects_changed_detector_profile_before_backend_construction(
+    tmp_path: Path,
+    provenance: InventoryValidationProvenance,
+) -> None:
+    session_directory = _paused_detector_run_session(
+        tmp_path,
+        provenance,
+        _detector(),
+    )
+    resumed_factory = _BackendFactory((_EMPTY_PAYLOAD,))
+
+    with pytest.raises(InventoryValidationSessionError, match="detector profile"):
+        run_inventory_validation_session(
+            backend_factory=resumed_factory,
+            output_root=session_directory.parent,
+            provenance=provenance,
+            cases=(
+                InventoryValidationCase.EMPTY_VALIDATION,
+                InventoryValidationCase.PARTIAL,
+            ),
+            detector=_detector(profile_id="different-reviewed-live-profile"),
+            resume_directory=session_directory,
+            utc_clock=_fixed_utc,
+        )
+
+    assert resumed_factory.calls == 0
+
+
+def test_resume_rejects_changed_detector_configuration_before_backend_construction(
+    tmp_path: Path,
+    provenance: InventoryValidationProvenance,
+) -> None:
+    original = _detector()
+    session_directory = _paused_detector_run_session(tmp_path, provenance, original)
+    changed = InventoryDetector(
+        locator=original.locator,
+        classifier=original.classifier,
+        localization_threshold=original.localization_threshold,
+        minimum_slot_confidence=0.81,
+    )
+    resumed_factory = _BackendFactory((_EMPTY_PAYLOAD,))
+
+    with pytest.raises(InventoryValidationSessionError, match="detector configuration"):
+        run_inventory_validation_session(
+            backend_factory=resumed_factory,
+            output_root=session_directory.parent,
+            provenance=provenance,
+            cases=(
+                InventoryValidationCase.EMPTY_VALIDATION,
+                InventoryValidationCase.PARTIAL,
+            ),
+            detector=changed,
+            resume_directory=session_directory,
+            utc_clock=_fixed_utc,
+        )
+
+    assert resumed_factory.calls == 0
 
 
 def test_no_row_gutter_reviewed_detector_remains_fail_closed_unknown(
@@ -433,6 +652,18 @@ def test_cli_runs_default_and_optional_cases_without_false_pass_language(
             str(tmp_path / "sessions"),
             "--capture-build",
             "session-cli-test",
+            "--runelite-build",
+            "runelite-cli-test",
+            "--windows-scaling-percent",
+            "125",
+            "--client-mode",
+            "resizable",
+            "--runelite-theme",
+            "dark",
+            "--renderer",
+            "gpu",
+            "--capture-configuration-id",
+            "cli-capture-config-v1",
             "--include-case",
             "hover-drag",
             "--include-case",
@@ -454,6 +685,63 @@ def test_cli_runs_default_and_optional_cases_without_false_pass_language(
         "hover-drag",
         "quantity-text",
     ]
+    assert payload["provenance"] == {
+        "capture_build": "session-cli-test",
+        "capture_configuration_id": "cli-capture-config-v1",
+        "client_mode": "resizable",
+        "notes": [],
+        "renderer": "gpu",
+        "runelite_build": "runelite-cli-test",
+        "runelite_theme": "dark",
+        "windows_scaling_percent": 125,
+    }
+
+
+@pytest.mark.parametrize(
+    ("option", "replacement"),
+    [
+        ("--capture-build", "other-build"),
+        ("--runelite-build", "other-runelite"),
+        ("--windows-scaling-percent", "150"),
+        ("--client-mode", "fixed"),
+        ("--runelite-theme", "classic"),
+        ("--renderer", "software"),
+        ("--capture-configuration-id", "other-config"),
+        ("--note", "replacement note"),
+    ],
+)
+def test_cli_resume_rejects_every_provenance_replacement_before_capture(
+    tmp_path: Path,
+    provenance: InventoryValidationProvenance,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    option: str,
+    replacement: str,
+) -> None:
+    report = run_inventory_validation_session(
+        backend_factory=_BackendFactory((_EMPTY_PAYLOAD,)),
+        output_root=tmp_path / "sessions",
+        provenance=provenance,
+        cases=(InventoryValidationCase.EMPTY_REFERENCE,),
+        utc_clock=_fixed_utc,
+    )
+
+    def unexpected_backend(**_: object) -> WindowsCaptureBackend:
+        raise AssertionError("resume provenance rejection must precede capture")
+
+    monkeypatch.setattr(
+        live_validation_session_cli,
+        "WindowsCaptureBackend",
+        unexpected_backend,
+    )
+    exit_code = live_validation_session_cli.main(
+        ["--resume", str(report.session_directory), option, replacement],
+        input_function=lambda _: "",
+    )
+
+    output = capsys.readouterr()
+    assert exit_code == 2
+    assert "provenance is loaded" in output.err
 
 
 def test_tool_is_thin_and_manifest_rejects_truth_promotion(

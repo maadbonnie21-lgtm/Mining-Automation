@@ -27,6 +27,13 @@ Optional provenance can be added with `--runelite-build` and repeatable
 `--note` arguments. `--title` changes the case-insensitive window-title match;
 its default remains the production backend's `runelite` match.
 
+This one-frame command intentionally exposes only `--capture-build`,
+`--runelite-build`, and repeatable `--note` provenance fields. Use the guided
+session command in `INVENTORY_VALIDATION_SESSION.md` when release evidence must
+also bind Windows scaling, client mode, RuneLite theme, renderer, and capture
+configuration through their dedicated CLI flags. All such values remain
+operator-reported until independent review.
+
 No reviewed live profile/reference ships yet. With no detector option, the
 normal result is therefore:
 
@@ -104,3 +111,11 @@ explicit expected observations and an inventory-specific count assertion.
 Keep the reference, calibration, and held-out sets separate. A successful
 capture or agreement with the operator's label is never sufficient promotion
 evidence.
+
+Use the deterministic review/replay gate described in
+`INVENTORY_REVIEW_REPLAY_GATE.md` to create panel-only review material, record
+independent reviewer truth, derive a non-activating candidate only from reviewed
+evidence, and prove unchanged-detector behavior before any fixture is promoted.
+The gate re-derives those panel artifacts from the durable owned frames and
+requires complete, exact package/review coverage; an attributed hash-bound
+review record is not a cryptographic reviewer signature.

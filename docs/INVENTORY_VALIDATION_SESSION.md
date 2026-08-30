@@ -17,6 +17,30 @@ Run from the repository root on Windows with RuneLite open:
 python tools/validate_inventory_session.py --capture-build <HARNESS_COMMIT_SHA>
 ```
 
+For release-candidate evidence, record the complete structured environment at
+session creation:
+
+```powershell
+python tools/validate_inventory_session.py `
+  --capture-build <EXACT_40_CHARACTER_HEAD> `
+  --runelite-build <RUNELITE_VERSION> `
+  --windows-scaling-percent <PERCENT> `
+  --client-mode <fixed-or-resizable> `
+  --runelite-theme <THEME_ID> `
+  --renderer <RENDERER_ID> `
+  --capture-configuration-id <CAPTURE_CONFIGURATION_ID>
+```
+
+The guided-session provenance flags are exactly `--capture-build`,
+`--runelite-build`, `--windows-scaling-percent`, `--client-mode`,
+`--runelite-theme`, `--renderer`, `--capture-configuration-id`, and repeatable
+`--note`. All are operator-reported and durably bound to the private session.
+The structured environment fields enter the review package with status
+`operator-reported-bound`; free-form notes remain excluded from that reduced
+package. Binding prevents silent replacement but does not make a value
+independently measured or reviewer-approved. `--title` selects the capture
+window and is not a reviewed environment assertion.
+
 The default ordered plan is:
 
 1. `empty-reference`
@@ -59,6 +83,14 @@ The case plan and provenance are immutable after session creation. A
 capture-only session cannot switch to a reviewed detector halfway through;
 owned captures can be evaluated separately after review.
 
+A resumed detector-run session must also be given the same
+`--reviewed-detector MODULE:ATTRIBUTE`. Before any backend is constructed, the
+resume path reloads the durable capture reports and requires the requested
+detector ID, detector version, configured profile ID, and configured
+configuration ID to match every completed detector-run case. A missing or
+different identity fails setup with zero recapture. Provenance flags likewise
+cannot be replaced on resume; they are loaded from the durable session.
+
 ## Session artifacts
 
 One unique directory is allocated below
@@ -95,6 +127,13 @@ The session summary flags, but never auto-corrects:
 
 Capture-only evidence remains useful even when the detector is not configured.
 It does not become production truth.
+
+The first real-client batch predates the structured scaling, mode, theme,
+renderer, and capture-configuration fields, so the review gate correctly keeps
+that immutable batch provenance-incomplete. Its clean held-out inventory region
+is also byte-identical to the reference region. Those facts cannot be repaired
+by editing the durable report; a new attributed batch may add evidence, while
+the earlier batch remains bound as captured.
 
 ## Profile-review draft
 
@@ -135,3 +174,8 @@ Raw frames, BMPs, and RuneLite window identity can expose private information.
 Review every artifact before sharing or committing it. The generated profile
 file is a draft only, has `activation_allowed=false`, and cannot be treated as
 release approval.
+
+Completed sessions are inputs to the deterministic privacy-reduced workflow in
+`INVENTORY_REVIEW_REPLAY_GATE.md`. That gate keeps operator labels separate from
+reviewer truth, replays the unchanged production detector, and emits only a
+non-activating candidate plus sanitized regression material.

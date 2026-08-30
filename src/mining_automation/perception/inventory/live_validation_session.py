@@ -21,6 +21,7 @@ from typing import Final
 
 from ...capture import MonotonicClock
 from ...capture.windows import WindowsCaptureBackend
+from ..detector import validate_detector
 from .detector import InventoryDetector
 from .live_validation import (
     InventoryValidationCase,
@@ -98,6 +99,10 @@ class _CaptureSummary:
     window_class: str
     detector_mode: str
     detector_status: str
+    detector_id: str | None
+    detector_version: str | None
+    detector_configured_profile_id: str | None
+    detector_configured_configuration_id: str | None
     detector_profile_id: str | None
     detector_configuration_id: str | None
     detector_occupied_slots: int | None
@@ -550,6 +555,16 @@ def load_inventory_validation_session(
     provenance = InventoryValidationProvenance(
         capture_build=_optional_text(provenance_raw.get("capture_build")),
         runelite_build=_optional_text(provenance_raw.get("runelite_build")),
+        windows_scaling_percent=_optional_positive_int(
+            provenance_raw.get("windows_scaling_percent"),
+            "windows_scaling_percent",
+        ),
+        client_mode=_optional_text(provenance_raw.get("client_mode")),
+        runelite_theme=_optional_text(provenance_raw.get("runelite_theme")),
+        renderer=_optional_text(provenance_raw.get("renderer")),
+        capture_configuration_id=_optional_text(
+            provenance_raw.get("capture_configuration_id")
+        ),
         notes=tuple(notes_raw),
     )
     cases_raw = raw.get("cases")
@@ -678,6 +693,79 @@ def _validate_detector_mode(
         raise InventoryValidationSessionError(
             "resume cannot change detector mode after evidence has been captured"
         )
+    if existing_modes != {"detector-run"} or detector is None:
+        return
+
+    requested_identity = _configured_detector_identity(detector)
+    for record in report.captured_records:
+        assert record.report_path is not None
+        summary = _load_capture_summary(
+            report.session_directory / record.report_path,
+            session_directory=report.session_directory,
+            expected_case=record.case,
+            expected_provenance=report.provenance,
+        )
+        captured_identity = (
+            summary.detector_id,
+            summary.detector_version,
+            summary.detector_configured_profile_id,
+            summary.detector_configured_configuration_id,
+        )
+        if None in (
+            summary.detector_id,
+            summary.detector_version,
+            summary.detector_configured_configuration_id,
+        ):
+            raise InventoryValidationSessionError(
+                "detector-run resume evidence does not contain a complete configured "
+                "detector identity"
+            )
+        if captured_identity[0] != requested_identity[0]:
+            raise InventoryValidationSessionError(
+                "resume detector id differs from captured detector-run evidence"
+            )
+        if captured_identity[1] != requested_identity[1]:
+            raise InventoryValidationSessionError(
+                "resume detector version differs from captured detector-run evidence"
+            )
+        if captured_identity[2] != requested_identity[2]:
+            raise InventoryValidationSessionError(
+                "resume detector profile differs from captured detector-run evidence"
+            )
+        if captured_identity[3] != requested_identity[3]:
+            raise InventoryValidationSessionError(
+                "resume detector configuration differs from captured detector-run "
+                "evidence"
+            )
+
+
+def _configured_detector_identity(
+    detector: InventoryDetector,
+) -> tuple[str, str, str | None, str]:
+    try:
+        metadata = validate_detector(detector)
+        configuration_id = detector.configuration_id
+        profile_id = getattr(detector.classifier, "profile_id", None)
+    except Exception as exc:
+        raise InventoryValidationSessionError(
+            "resume detector configured identity could not be read"
+        ) from exc
+    if not isinstance(configuration_id, str) or not configuration_id.strip():
+        raise InventoryValidationSessionError(
+            "resume detector configuration identity must be a non-empty string"
+        )
+    if profile_id is not None and (
+        not isinstance(profile_id, str) or not profile_id.strip()
+    ):
+        raise InventoryValidationSessionError(
+            "resume detector profile identity must be a non-empty string or None"
+        )
+    return (
+        metadata.detector_id,
+        metadata.version,
+        profile_id,
+        configuration_id,
+    )
 
 
 def _validate_record_summary(
@@ -813,6 +901,14 @@ def _capture_summary_from_raw(
         window_class=_required_text(window, "class_name"),
         detector_mode=_required_text(detector, "mode"),
         detector_status=_required_text(detector, "status"),
+        detector_id=_optional_text(detector.get("detector_id")),
+        detector_version=_optional_text(detector.get("detector_version")),
+        detector_configured_profile_id=_optional_text(
+            detector.get("configured_profile_id")
+        ),
+        detector_configured_configuration_id=_optional_text(
+            detector.get("configured_configuration_id")
+        ),
         detector_profile_id=_optional_text(detector.get("profile_id")),
         detector_configuration_id=_optional_text(detector.get("configuration_id")),
         detector_occupied_slots=_optional_nonnegative_int(

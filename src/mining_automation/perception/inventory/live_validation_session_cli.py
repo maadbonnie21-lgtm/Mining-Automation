@@ -19,6 +19,7 @@ from .live_validation_session import (
     OPTIONAL_INVENTORY_VALIDATION_CASES,
     InventoryValidationSessionError,
     InventoryValidationSessionPaused,
+    _validate_detector_mode,
     load_inventory_validation_session,
     run_inventory_validation_session,
 )
@@ -91,6 +92,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--capture-build", help="capture/harness build or commit identity")
     parser.add_argument("--runelite-build", help="RuneLite build/version when known")
     parser.add_argument(
+        "--windows-scaling-percent",
+        type=int,
+        help="Windows display scaling percentage used for the captured client",
+    )
+    parser.add_argument(
+        "--client-mode",
+        help="RuneLite client mode, for example fixed or resizable",
+    )
+    parser.add_argument("--runelite-theme", help="RuneLite theme identity")
+    parser.add_argument("--renderer", help="RuneLite renderer identity")
+    parser.add_argument(
+        "--capture-configuration-id",
+        help="stable identity for the reviewed capture configuration",
+    )
+    parser.add_argument(
         "--note",
         action="append",
         dest="notes",
@@ -128,6 +144,15 @@ def main(
             provenance = InventoryValidationProvenance(
                 capture_build=cast(str | None, arguments.capture_build),
                 runelite_build=cast(str | None, arguments.runelite_build),
+                windows_scaling_percent=cast(
+                    int | None, arguments.windows_scaling_percent
+                ),
+                client_mode=cast(str | None, arguments.client_mode),
+                runelite_theme=cast(str | None, arguments.runelite_theme),
+                renderer=cast(str | None, arguments.renderer),
+                capture_configuration_id=cast(
+                    str | None, arguments.capture_configuration_id
+                ),
                 notes=tuple(cast(list[str], arguments.notes)),
             )
             output_root = cast(Path, arguments.output_root)
@@ -137,10 +162,15 @@ def main(
             if (
                 arguments.capture_build is not None
                 or arguments.runelite_build is not None
+                or arguments.windows_scaling_percent is not None
+                or arguments.client_mode is not None
+                or arguments.runelite_theme is not None
+                or arguments.renderer is not None
+                or arguments.capture_configuration_id is not None
                 or cast(list[str], arguments.notes)
             ):
                 raise ValueError(
-                    "build/notes are loaded from the resumed session and cannot be replaced"
+                    "provenance is loaded from the resumed session and cannot be replaced"
                 )
             durable = load_inventory_validation_session(resume)
             cases = tuple(item.case for item in durable.records)
@@ -218,21 +248,4 @@ def _validate_resume_detector_mode(
     if resume is None:
         return
     durable = load_inventory_validation_session(resume)
-    modes = {
-        item.detector_mode
-        for item in durable.captured_records
-        if item.detector_mode is not None
-    }
-    if modes == {"capture-only"} and detector is not None:
-        raise InventoryValidationSessionError(
-            "a capture-only session cannot switch detector mode during resume; "
-            "finish evidence collection, then evaluate the owned frames separately"
-        )
-    if modes == {"detector-run"} and detector is None:
-        raise InventoryValidationSessionError(
-            "a detector-run session must resume with --reviewed-detector"
-        )
-    if len(modes) > 1:
-        raise InventoryValidationSessionError(
-            "the durable session already contains mixed detector modes"
-        )
+    _validate_detector_mode(durable, detector)
