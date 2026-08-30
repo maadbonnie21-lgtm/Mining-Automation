@@ -66,6 +66,39 @@ SHA-256 sidecar is written exclusively. The tool returns nonzero for incomplete
 expectations, count/readiness/production mismatches, dirty or changing Git
 state, or an authority-invariant failure.
 
+`analyze_issue31_robust_registration.py` is the no-input Robust Registration
+R1 and view-graph evaluator. Install its optional backend with
+`python -m pip install -e ".[dev,vision-dev]"`, then run the canonical frozen
+corpus from a clean exact head:
+
+```powershell
+.venv\Scripts\python.exe tools\analyze_issue31_robust_registration.py --expected-head <40-char-sha> --report diagnostics\issue31-robust-registration-r1\issue31-robust-registration-r1.json
+```
+
+The command has fixed project-relative inputs for the reviewed supported
+fixtures, all 36 real drift frames, the completed A/B/A observations and exact
+receipt-proven transitions, explicitly labeled risky/disconnected frames, and
+the current unsupported pose. It neither opens capture nor imports an input
+adapter. Its raw source frames stay private; the exclusive canonical JSON and
+adjacent `.sha256` sidecar contain hashes and scalar evidence only.
+
+R1 removes candidate/resource regions, fixed UI/readiness chrome, sanitized
+areas, and other non-world pixels before feature extraction. It requires
+bidirectional mutual matches, deterministic outlier rejection, inlier coverage
+across all three existing macro zones, acceptable reprojection/cycle residuals,
+overlap, conditioning, and distortion. Translation, similarity, affine, and
+homography are evaluated in that order; the lowest adequate family wins, while
+parallax/non-planarity that defeats one global model rejects the edge.
+
+Pairwise acceptance alone is not a verified graph edge. Each edge also needs a
+consistent graph cycle. Explicit disconnected examples measure false edges,
+and visual connectivity is reported separately from directed action edges that
+have exact saved input receipts. The only successful controller conclusion is
+`offline controller path available`; otherwise the report names one exact
+`missing graph link`. Both are offline engineering evidence. Neither can
+validate a scene, expose resources, override production perception, or
+authorize live camera input.
+
 The current Track A real-frame diagnosis is intentionally separate from input
 authority. Production matched `0/6` landmarks. A wide diagnostic recovered
 only three local landmarks at noncoherent offsets, and the best shared offset

@@ -18,6 +18,10 @@ dev = [
   "ruff~=0.16.3",
   "mypy~=2.3.1",
 ]
+vision-dev = [
+  "numpy==2.5.2",
+  "opencv-python-headless==5.0.0.93",
+]
 
 [project.scripts]
 mining-automation = "mining_automation.app:main"

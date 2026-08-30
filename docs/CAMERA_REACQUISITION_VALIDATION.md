@@ -538,6 +538,76 @@ evaluation is still the sole scene-acceptance authority. Wide minima, a clean
 control derivative, or a completed Windows receipt cannot validate the scene,
 expose a resource, or satisfy the Issue #31 positive-side acceptance gate.
 
+### Robust world registration R1 and the read-only view graph
+
+The fixed horizontal A/B/A result retired the six-landmark controller for this
+camera envelope. Its replacement starts as an **offline, read-only diagnostic**:
+Robust Registration R1 analyzes exact saved frames and builds an evidence-backed
+view graph. R1 never constructs a camera-input adapter, sends input, validates a
+scene, exposes a resource, or changes a production observation. A graph path is
+therefore a candidate for a future reviewed controller, not camera-reacquisition
+acceptance.
+
+Install the dedicated optional validation dependencies before running R1:
+
+```powershell
+python -m pip install -e ".[dev,vision-dev]"
+```
+
+`vision-dev` currently freezes NumPy `2.5.2` and headless OpenCV `5.0.0.93`.
+They are not normal project dependencies and are not imported by the production
+package surface. R1 records the resolved versions and deterministic OpenCV
+settings in its report; Linux CI and native Windows development both exercise
+the same optional group.
+
+The canonical corpus command is:
+
+```powershell
+.venv\Scripts\python.exe tools\analyze_issue31_robust_registration.py --expected-head <40-char-sha> --report diagnostics\issue31-robust-registration-r1\issue31-robust-registration-r1.json
+```
+
+The tool loads only the frozen canonical corpus: reviewed supported fixtures,
+all 36 stored real drift frames, the saved A/B/A observations and their
+receipt-proven transitions, explicitly labeled risky/disconnected views, and
+the current unsupported pose. It binds the run to the requested clean exact Git
+head. It writes deterministic JSON plus an adjacent `.sha256` sidecar beneath
+ignored `diagnostics/`; raw private pixels remain outside the report and Git.
+
+Every feature and correspondence must lie in trusted world pixels. The mask
+excludes every resource/candidate region, fixed RuneLite UI and readiness
+chrome, and every sanitized or otherwise non-world area. Descriptor support
+that crosses an exclusion is rejected as well. Matching is bidirectional and
+mutual, with deterministic ordering and outlier rejection. Registration reports
+the source/target feature counts, forward/reverse match counts, mutual matches,
+inliers, inlier ratio, per-zone inlier counts and spatial coverage, median and
+p90 reprojection residual, forward/reverse cycle error, overlap, conditioning,
+scale/distortion, and rejection reason.
+
+R1 evaluates translation, similarity, affine, and homography in increasing
+complexity and selects the lowest-complexity model that meets the frozen
+evidence policy. A homography is not presumed. If no single model explains the
+distributed world evidence without excessive residual, distortion, poor
+conditioning, or inadequate coverage, the edge is rejected as a global-model
+failure consistent with parallax/non-planarity.
+
+The view graph does not accept a pairwise fit by itself. An edge must have
+robust inliers distributed across all three existing macro zones and must also
+participate in a consistent graph cycle. Explicitly disconnected endpoints are
+used to count false edges. Saved input receipts label only the exact directed
+transitions they actually produced; visual similarity never invents an action
+or its inverse. The report therefore keeps these separate:
+
+- a cycle-verified visual path, which describes saved-view connectivity; and
+- a receipt-backed directed action path, which is the only basis for the exact
+  conclusion `offline controller path available`.
+
+When no receipt-backed path reaches an exact reviewed production-supported
+anchor, the report instead emits
+`missing graph link: <exact missing relationship/sample needed>`. That result
+identifies one smallest additional evidence edge; it does not authorize a live
+probe. Any future live use of R1 requires a separate architecture review and
+must still end in a fresh pass of the unchanged production detector.
+
 ## Repeated trial protocol
 
 A complete run applies three distinct deliberate perturbations. The current

@@ -6,6 +6,18 @@ Use Python 3.12 in a virtual environment, then install the project and its devel
 python -m pip install -e '.[dev]'
 ```
 
+Robust Registration R1 additionally uses a dedicated optional computer-vision
+group. It is development/validation tooling, not a normal shipped dependency:
+
+```bash
+python -m pip install -e '.[dev,vision-dev]'
+```
+
+The group freezes NumPy `2.5.2` and `opencv-python-headless` `5.0.0.93` so the
+same feature extraction and registration backend can be proved in Linux CI and
+native Windows development. Production package imports do not require or load
+these libraries. Use `.[dev]` for work that does not run the R1 tool.
+
 Local virtual environments, editable-install metadata, coverage data, bytecode, and tool caches are
 ignored by Git so running the checks does not pollute a change set.
 
@@ -128,6 +140,31 @@ same-pose offset and descriptor jitter. It also records closure, production
 evaluations, exact input receipts, adapter/pointer policy, Git identity, and
 SHA-256. Its conclusion is calibration evidence only and cannot override
 the production scene gate or satisfy Issue #31 reacquisition acceptance.
+
+The A/B/A conclusion retired the six-landmark controller for this envelope.
+The next architecture is the read-only Robust Registration R1/view-graph
+analysis:
+
+```powershell
+.venv\Scripts\python.exe tools\analyze_issue31_robust_registration.py --expected-head <40-char-sha> --report diagnostics\issue31-robust-registration-r1\issue31-robust-registration-r1.json
+```
+
+The command evaluates the fixed saved-frame corpus only and sends no RuneLite
+input. It excludes candidate/resource pixels, fixed UI/readiness chrome, and
+all non-world regions before extracting mutually matched features. It evaluates
+translation, similarity, affine, and homography from lowest to highest
+complexity, requires deterministic inliers across all three existing macro
+zones, and rejects a global model when residual, cycle, coverage,
+conditioning, or distortion evidence is inadequate.
+
+The resulting view graph requires cycle-backed robust edges and keeps visual
+connectivity separate from directed receipt-proven camera transitions. A
+diagnostic path cannot validate the production scene or expose resources. The
+canonical JSON and adjacent `.sha256` sidecar record exact Git and dependency
+provenance, per-model/per-zone evidence, false-edge counts, reachability, and
+either `offline controller path available` or one exact `missing graph link`.
+R1 has no live-input command; any controller built from it requires a separate
+review and fresh production-detector confirmation.
 
 All raw frames, BMP previews, unreviewed drafts, JSON reports, and report digest
 sidecars stay beneath ignored `diagnostics/`. The camera recipe remains pending
