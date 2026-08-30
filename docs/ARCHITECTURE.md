@@ -44,6 +44,10 @@ Professional desktop interface. Talks to application services/state contracts ra
 
 ## Core contracts
 
+The blocked first-v1 typed perception handoff and its required test matrix are
+specified in `V1_VERTICAL_SLICE_PERCEPTION_CONTRACT.md`. It remains a design
+contract until the inventory and resource production release gates close.
+
 ### Observation
 A time-bounded perception result with:
 - frame id/timestamp
