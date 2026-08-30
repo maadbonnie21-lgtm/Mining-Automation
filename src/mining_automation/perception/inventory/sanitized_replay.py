@@ -195,15 +195,32 @@ def replay_inventory_sanitized_fixture(
     case_ids = tuple(item[0] for item in parsed_cases)
     if len(set(case_ids)) != len(case_ids):
         raise InventorySanitizedReplayError("sanitized fixture case ids are not unique")
-    references = tuple(
-        item
-        for item in parsed_cases
-        if item[3].get("validation_split") == "reference"
-        and item[3].get("decision") == "approved"
-        and item[3].get("visibility") == "inventory-visible"
-        and item[3].get("occupied_slots") == 0
+    imported_candidate = (
+        schema_version == 2
+        and _candidate_derivation_mode(candidate)
+        == "imported-reviewed-sanitized-fixture"
     )
+    if imported_candidate:
+        references = tuple(
+            item
+            for item in parsed_cases
+            if _is_imported_candidate_reference(item, candidate_evidence)
+        )
+    else:
+        references = tuple(
+            item
+            for item in parsed_cases
+            if item[3].get("validation_split") == "reference"
+            and item[3].get("decision") == "approved"
+            and item[3].get("visibility") == "inventory-visible"
+            and item[3].get("occupied_slots") == 0
+        )
     if len(references) != 1:
+        if imported_candidate:
+            raise InventorySanitizedReplayError(
+                "imported sanitized fixture requires its candidate-evidence "
+                "reference to be one approved clear empty reference/held-out case"
+            )
         raise InventorySanitizedReplayError(
             "sanitized fixture requires exactly one approved empty reference"
         )
@@ -330,6 +347,62 @@ def _candidate_evidence(candidate: Mapping[str, object]) -> dict[str, str]:
         "reference_session_id": _required_text(evidence, "reference_session_id"),
         "review_record_sha256": _required_sha256(evidence, "review_record_sha256"),
     }
+
+
+def _candidate_derivation_mode(candidate: Mapping[str, object]) -> str | None:
+    value = candidate.get("derivation")
+    if value is None:
+        return None
+    derivation = _object_value(value, "candidate derivation")
+    mode = _required_text(derivation, "mode")
+    if mode != "imported-reviewed-sanitized-fixture":
+        return mode
+    source = _required_object(derivation, "source_fixture")
+    _required_text(source, "dataset_id")
+    _required_sha256(source, "manifest_sha256")
+    source_schema = _required_positive_int(source, "schema_version")
+    if source_schema not in (1, 2):
+        raise InventorySanitizedReplayError(
+            "imported candidate source fixture has an unsupported schema"
+        )
+    source_generator = source.get("generator_head_sha")
+    if source_schema == 2:
+        _required_git_sha(source, "generator_head_sha")
+    elif source_generator is not None:
+        raise InventorySanitizedReplayError(
+            "schema-v1 imported candidate source cannot claim a generator head"
+        )
+    return mode
+
+
+def _is_imported_candidate_reference(
+    case: tuple[
+        str,
+        bytes,
+        dict[str, object],
+        dict[str, object],
+        dict[str, object],
+    ],
+    candidate_evidence: Mapping[str, str],
+) -> bool:
+    case_id, _, _, review_truth, _ = case
+    session_id = review_truth.get("session_id")
+    capture_id = review_truth.get("capture_id")
+    return (
+        session_id == candidate_evidence["reference_session_id"]
+        and capture_id == candidate_evidence["reference_capture_id"]
+        and case_id == f"{session_id}/{capture_id}"
+        and review_truth.get("decision") == "approved"
+        and review_truth.get("validation_split") in ("reference", "held-out")
+        and review_truth.get("visibility") == "inventory-visible"
+        and review_truth.get("occupied_slots") == 0
+        and review_truth.get("operator_intent_confirmed") is True
+        and review_truth.get("hover_visible") is False
+        and review_truth.get("selected_item_visible") is False
+        and review_truth.get("drag_visible") is False
+        and review_truth.get("quantity_text_visible") is False
+        and review_truth.get("geometry_source") is False
+    )
 
 
 def _validate_reference_provenance(

@@ -47,6 +47,9 @@ from mining_automation.perception.inventory.review_gate import (
     _derive_unique_inventory_lattice,
     _remaining_release_gaps,
 )
+from mining_automation.perception.inventory.sanitized_replay import (
+    _sanitized_dataset_id as _replay_dataset_id,
+)
 
 _HEAD_SHA = "a" * 40
 _WINDOW_HANDLE = 731
@@ -284,6 +287,47 @@ def _rewrite_sanitized_manifest(
         f"{digest}  manifest.json\n",
         encoding="utf-8",
     )
+
+
+def _rebind_sanitized_dataset_id(raw: dict[str, object]) -> None:
+    candidate = raw["candidate"]
+    cases = raw["cases"]
+    assert isinstance(candidate, dict)
+    assert isinstance(cases, list)
+    profile = candidate["profile"]
+    assert isinstance(profile, dict)
+    profile_id = profile["profile_id"]
+    assert isinstance(profile_id, str)
+    raw["dataset_id"] = _replay_dataset_id(profile_id, list(cases))
+
+
+def _imported_candidate_fixture(tmp_path: Path) -> Path:
+    session = _session(tmp_path)
+    package = _prepare(tmp_path, session)
+    review_path = _write_review(
+        tmp_path / "review.json",
+        _review_record(package.package_directory),
+    )
+    source_fixture = tmp_path / "source-fixture"
+    run_inventory_review_replay_gate(
+        (session.session_directory,),
+        package.package_directory,
+        review_path,
+        tmp_path / "source-output",
+        expected_head_sha=_HEAD_SHA,
+        fixture_output_directory=source_fixture,
+    )
+    imported_fixture = tmp_path / "imported-fixture"
+    run_inventory_review_replay_gate(
+        (session.session_directory,),
+        package.package_directory,
+        review_path,
+        tmp_path / "imported-output",
+        expected_head_sha=_HEAD_SHA,
+        fixture_output_directory=imported_fixture,
+        candidate_fixture_directory=source_fixture,
+    )
+    return imported_fixture
 
 
 def _review_for_package(package: InventoryReviewPackage) -> InventoryReviewRecord:
@@ -944,10 +988,183 @@ def test_gate_reuses_verified_nonactivating_candidate_without_rederiving_geometr
     results = report.payload["results"]
     assert isinstance(results, list)
     assert all(item["sanitized_observation_equals_exact_owned"] is True for item in results)
+
+    def mark_original_reference_held_out(raw: dict[str, object]) -> None:
+        candidate = raw["candidate"]
+        cases = raw["cases"]
+        assert isinstance(candidate, dict)
+        assert isinstance(cases, list)
+        evidence = candidate["evidence"]
+        assert isinstance(evidence, dict)
+        reference_id = (
+            f"{evidence['reference_session_id']}/{evidence['reference_capture_id']}"
+        )
+        reference = next(
+            item
+            for item in cases
+            if isinstance(item, dict) and item.get("case_id") == reference_id
+        )
+        truth = reference["review_truth"]
+        assert isinstance(truth, dict)
+        truth["validation_split"] = "held-out"
+        _rebind_sanitized_dataset_id(raw)
+
+    _rewrite_sanitized_manifest(imported_fixture, mark_original_reference_held_out)
     replay = replay_inventory_sanitized_fixture(imported_fixture)
     assert replay.passed
     assert replay.fixture_schema_version == 2
     assert replay.generator_head_sha == _HEAD_SHA
+
+
+def test_current_derived_schema_v2_fixture_keeps_strict_reference_split(
+    tmp_path: Path,
+) -> None:
+    session = _session(tmp_path)
+    package = _prepare(tmp_path, session)
+    review_path = _write_review(
+        tmp_path / "review.json",
+        _review_record(package.package_directory),
+    )
+    fixture = tmp_path / "derived-fixture"
+    run_inventory_review_replay_gate(
+        (session.session_directory,),
+        package.package_directory,
+        review_path,
+        tmp_path / "derived-output",
+        expected_head_sha=_HEAD_SHA,
+        fixture_output_directory=fixture,
+    )
+
+    def mark_reference_held_out(raw: dict[str, object]) -> None:
+        cases = raw["cases"]
+        assert isinstance(cases, list)
+        reference = cases[0]
+        assert isinstance(reference, dict)
+        truth = reference["review_truth"]
+        assert isinstance(truth, dict)
+        truth["validation_split"] = "held-out"
+        _rebind_sanitized_dataset_id(raw)
+
+    _rewrite_sanitized_manifest(fixture, mark_reference_held_out)
+    with pytest.raises(
+        InventorySanitizedReplayError,
+        match="requires exactly one approved empty reference",
+    ):
+        replay_inventory_sanitized_fixture(fixture)
+
+
+def test_mode_only_tamper_cannot_enable_imported_reference_selection(
+    tmp_path: Path,
+) -> None:
+    session = _session(tmp_path)
+    package = _prepare(tmp_path, session)
+    review_path = _write_review(
+        tmp_path / "review.json",
+        _review_record(package.package_directory),
+    )
+    fixture = tmp_path / "derived-fixture"
+    run_inventory_review_replay_gate(
+        (session.session_directory,),
+        package.package_directory,
+        review_path,
+        tmp_path / "derived-output",
+        expected_head_sha=_HEAD_SHA,
+        fixture_output_directory=fixture,
+    )
+
+    def flip_mode_and_reference_split(raw: dict[str, object]) -> None:
+        candidate = raw["candidate"]
+        cases = raw["cases"]
+        assert isinstance(candidate, dict)
+        assert isinstance(cases, list)
+        derivation = candidate["derivation"]
+        reference = cases[0]
+        assert isinstance(derivation, dict)
+        assert isinstance(reference, dict)
+        truth = reference["review_truth"]
+        assert isinstance(truth, dict)
+        derivation["mode"] = "imported-reviewed-sanitized-fixture"
+        truth["validation_split"] = "held-out"
+        _rebind_sanitized_dataset_id(raw)
+
+    _rewrite_sanitized_manifest(fixture, flip_mode_and_reference_split)
+    with pytest.raises(
+        InventorySanitizedReplayError,
+        match="source_fixture must be an object",
+    ):
+        replay_inventory_sanitized_fixture(fixture)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("operator_intent_confirmed", False),
+        ("hover_visible", True),
+        ("selected_item_visible", True),
+        ("drag_visible", True),
+        ("quantity_text_visible", True),
+        ("geometry_source", True),
+        ("validation_split", "calibration"),
+    ),
+)
+def test_imported_schema_v2_reference_must_be_reviewed_clear_empty(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    fixture = _imported_candidate_fixture(tmp_path)
+
+    def attack_reference_truth(raw: dict[str, object]) -> None:
+        candidate = raw["candidate"]
+        cases = raw["cases"]
+        assert isinstance(candidate, dict)
+        assert isinstance(cases, list)
+        evidence = candidate["evidence"]
+        assert isinstance(evidence, dict)
+        reference_id = (
+            f"{evidence['reference_session_id']}/{evidence['reference_capture_id']}"
+        )
+        reference = next(
+            item
+            for item in cases
+            if isinstance(item, dict) and item.get("case_id") == reference_id
+        )
+        truth = reference["review_truth"]
+        assert isinstance(truth, dict)
+        truth["validation_split"] = "held-out"
+        truth[field] = value
+        _rebind_sanitized_dataset_id(raw)
+
+    _rewrite_sanitized_manifest(fixture, attack_reference_truth)
+    with pytest.raises(
+        InventorySanitizedReplayError,
+        match="one approved clear empty reference/held-out case",
+    ):
+        replay_inventory_sanitized_fixture(fixture)
+
+
+def test_schema_v1_fixture_cannot_enable_imported_reference_selection(
+    tmp_path: Path,
+) -> None:
+    fixture = _imported_candidate_fixture(tmp_path)
+
+    def downgrade_and_mark_reference_held_out(raw: dict[str, object]) -> None:
+        raw["schema_version"] = 1
+        raw.pop("generated")
+        cases = raw["cases"]
+        assert isinstance(cases, list)
+        reference = cases[0]
+        assert isinstance(reference, dict)
+        truth = reference["review_truth"]
+        assert isinstance(truth, dict)
+        truth["validation_split"] = "held-out"
+
+    _rewrite_sanitized_manifest(fixture, downgrade_and_mark_reference_held_out)
+    with pytest.raises(
+        InventorySanitizedReplayError,
+        match="requires exactly one approved empty reference",
+    ):
+        replay_inventory_sanitized_fixture(fixture)
 
 
 def test_reused_candidate_rejects_rebound_full_payload_provenance(
