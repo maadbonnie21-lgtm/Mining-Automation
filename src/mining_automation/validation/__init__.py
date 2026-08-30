@@ -98,6 +98,7 @@ from .camera_plan import (
     CameraControl,
     CameraDragAxis,
     CameraHoldKey,
+    CameraInputNotAttemptedError,
     CameraInputOperation,
     CameraInputReceipt,
     CameraKeyHold,
@@ -195,6 +196,7 @@ from .windows_camera import (
     WindowsCameraApi,
     WindowsCameraControl,
     WindowsCameraError,
+    WindowsCameraPreInputError,
 )
 
 __all__ = [
@@ -261,6 +263,7 @@ __all__ = [
     "CameraGuidanceV2Reason",
     "CameraGuidanceV2Session",
     "CameraHoldKey",
+    "CameraInputNotAttemptedError",
     "CameraInputLeaseApi",
     "CameraInputLeaseError",
     "CameraInputLeaseHeldError",
@@ -340,6 +343,7 @@ __all__ = [
     "WindowsCameraApi",
     "WindowsCameraControl",
     "WindowsCameraError",
+    "WindowsCameraPreInputError",
     "WindowsCameraInputLease",
     "WorldCameraGuidance",
     "WorldCameraGuidanceV2",

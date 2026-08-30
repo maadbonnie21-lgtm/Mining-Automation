@@ -8,12 +8,16 @@ import json
 from mining_automation.capture import PixelFormat
 from mining_automation.perception.resource import ResourceVisualState
 from mining_automation.perception.scene_landmarks import MacroZone
+from mining_automation.validation.camera_bridge_capture import (
+    CAMERA_BRIDGE_CAPTURE_ID,
+)
 from mining_automation.validation.camera_bridge_planner import (
     CAMERA_BRIDGE_PLANNER_ID,
     CAMERA_BRIDGE_PLANNER_VERSION,
     FROZEN_ENDPOINT_FAMILY_ID,
     FROZEN_ENDPOINT_OBJECTIVE,
     FROZEN_ENDPOINT_OBJECTIVE_ID,
+    FROZEN_ENDPOINT_SOURCE_SHA256,
     BridgePlannerDisposition,
     FrozenPrimitiveExperiment,
     FrozenPrimitiveInventory,
@@ -143,9 +147,10 @@ def _node(
     anchor: bool = False,
     production_passed: bool = False,
     readiness_safe: bool = True,
+    sha256: str | None = None,
 ) -> GraphNodeEvidence:
     return GraphNodeEvidence(
-        sha256=_sha(label),
+        sha256=_sha(label) if sha256 is None else sha256,
         payload_bytes=4,
         width=1,
         height=1,
@@ -243,6 +248,7 @@ def _edge(
     accepted: bool = True,
     included_zones: tuple[MacroZone, ...] = _ZONES,
     action_ids: tuple[str, ...] = (),
+    cycle: bool = True,
     forward_matrix: tuple[tuple[float, float, float], ...] = _IDENTITY,
 ) -> GraphEdgeEvidence:
     source, target = sorted((source_sha256, target_sha256))
@@ -258,7 +264,7 @@ def _edge(
             forward_matrix=forward_matrix,
         ),
         pre_registration_rejection=None,
-        supporting_cycle_ids=("cycle-1",),
+        supporting_cycle_ids=("cycle-1",) if cycle else (),
         action_ids=action_ids,
     )
 
@@ -267,12 +273,18 @@ def _transition(
     experiment: FrozenPrimitiveExperiment,
     source_sha256: str,
     target_sha256: str,
+    *,
+    report_sha256: str | None = None,
 ) -> ActionTransition:
     return ActionTransition(
         action_id=experiment.action_id,
         source_sha256=source_sha256,
         target_sha256=target_sha256,
-        evidence_report_sha256=experiment.receipt_report_sha256s[0],
+        evidence_report_sha256=(
+            experiment.selection_backing_report_sha256s[0]
+            if report_sha256 is None
+            else report_sha256
+        ),
         receipt_verified=True,
     )
 
@@ -349,11 +361,12 @@ def _experiment(
     return FrozenPrimitiveExperiment(
         experiment_id=experiment_id,
         family_id=family_id,
-        action_id=experiment_id,
+        action_id=CAMERA_BRIDGE_CAPTURE_ID,
         ordinal=ordinal,
         key=CameraHoldKey.RIGHT,
         duration_s=0.043,
-        receipt_report_sha256s=(_sha(receipt_label or family_id),),
+        required_source_sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
+        selection_backing_report_sha256s=(_sha(receipt_label or family_id),),
     )
 
 
@@ -403,10 +416,13 @@ def _endpoint(
 
 def test_repeated_frozen_endpoint_selects_first_missing_right_hold() -> None:
     current = _node(
-        "current",
+        "compass-north",
         roles=(ViewRole.SYSTEM_IDENTIFICATION,),
         current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
     )
+    first = _node("repeat-target-1", roles=(ViewRole.SYSTEM_IDENTIFICATION,))
+    second = _node("repeat-target-2", roles=(ViewRole.SYSTEM_IDENTIFICATION,))
     anchor = _node(
         "anchor",
         roles=(ViewRole.REVIEWED_SUPPORTED,),
@@ -414,16 +430,24 @@ def test_repeated_frozen_endpoint_selects_first_missing_right_hold() -> None:
         production_passed=True,
     )
     graph = _graph(
-        (current, anchor),
-        components=((current.sha256,), (anchor.sha256,)),
+        (current, first, second, anchor),
+        edges=(
+            _edge(first.sha256, second.sha256),
+            _edge(first.sha256, anchor.sha256),
+            _edge(second.sha256, anchor.sha256),
+        ),
+        components=(
+            (current.sha256,),
+            tuple(sorted((first.sha256, second.sha256, anchor.sha256))),
+        ),
     )
-    receipts = FROZEN_ENDPOINT_OBJECTIVE.receipt_report_sha256s
+    receipts = FROZEN_ENDPOINT_OBJECTIVE.selection_backing_report_sha256s
     evidence = tuple(
         _endpoint(
             evidence_id=f"repeat-{index}",
             family_id=FROZEN_ENDPOINT_FAMILY_ID,
             source_sha256=current.sha256,
-            target_sha256=_sha(f"repeat-target-{index}"),
+            target_sha256=(first.sha256, second.sha256)[index - 1],
             receipt_sha256=receipt,
             experiment_id=f"legacy-repeat-{index}",
             production_passed=True,
@@ -440,12 +464,17 @@ def test_repeated_frozen_endpoint_selects_first_missing_right_hold() -> None:
     assert result.disposition is BridgePlannerDisposition.MISSING_EXPERIMENT
     assert result.bridge_evidence_available is False
     assert result.missing_experiment is not None
+    assert result.missing_experiment.action_id == CAMERA_BRIDGE_CAPTURE_ID
     assert result.missing_experiment.family_id == FROZEN_ENDPOINT_FAMILY_ID
     assert result.missing_experiment.experiment_id == FROZEN_ENDPOINT_OBJECTIVE_ID
     assert result.missing_experiment.key is CameraHoldKey.RIGHT
     assert result.missing_experiment.duration_s == 0.043
     assert result.missing_experiment.can_execute_input is False
     assert result.missing_experiment.uses_rejected_registration_matrix is False
+    assert all(
+        endpoint.production_passed is False
+        for endpoint in result.ranked_families[0].evaluation.endpoints
+    )
 
 
 def test_negative_nodes_and_transitions_are_quarantined_from_bridge() -> None:
@@ -453,6 +482,7 @@ def test_negative_nodes_and_transitions_are_quarantined_from_bridge() -> None:
         "current-negative-case",
         roles=(ViewRole.SYSTEM_IDENTIFICATION,),
         current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
     )
     risky = _node(
         "risky",
@@ -491,7 +521,7 @@ def test_negative_nodes_and_transitions_are_quarantined_from_bridge() -> None:
         family_id=first.family_id,
         source_sha256=current.sha256,
         target_sha256=risky.sha256,
-        receipt_sha256=first.receipt_report_sha256s[0],
+        receipt_sha256=first.selection_backing_report_sha256s[0],
         target_roles=(ViewRole.RISKY_STATE_CHANGE,),
     )
 
@@ -543,7 +573,7 @@ def test_readiness_vetoed_current_has_no_safe_component_or_experiment() -> None:
         anchor=True,
         production_passed=True,
     )
-    receipt = FROZEN_ENDPOINT_OBJECTIVE.receipt_report_sha256s[0]
+    receipt = FROZEN_ENDPOINT_OBJECTIVE.selection_backing_report_sha256s[0]
     prior = _endpoint(
         evidence_id="unsafe-current-prior",
         family_id=FROZEN_ENDPOINT_FAMILY_ID,
@@ -566,6 +596,7 @@ def test_action_edge_missing_one_macro_zone_is_not_a_bridge() -> None:
         "current-missing-zone",
         roles=(ViewRole.SYSTEM_IDENTIFICATION,),
         current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
     )
     anchor = _node(
         "anchor-missing-zone",
@@ -601,9 +632,9 @@ def test_action_edge_missing_one_macro_zone_is_not_a_bridge() -> None:
     assert result.can_authorize_camera_input is False
 
 
-def test_forged_receipt_transition_cannot_create_a_bridge() -> None:
+def test_action_from_non_frozen_source_cannot_create_a_bridge() -> None:
     current = _node(
-        "current-forged-receipt",
+        "non-frozen-source",
         roles=(ViewRole.SYSTEM_IDENTIFICATION,),
         current=True,
     )
@@ -648,6 +679,7 @@ def test_transition_action_must_be_bound_to_the_exact_registration_edge() -> Non
         "current-unbound-action",
         roles=(ViewRole.SYSTEM_IDENTIFICATION,),
         current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
     )
     anchor = _node(
         "anchor-unbound-action",
@@ -683,6 +715,7 @@ def test_pairwise_acceptance_without_cycle_support_is_not_a_bridge() -> None:
         "current-no-cycle",
         roles=(ViewRole.SYSTEM_IDENTIFICATION,),
         current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
     )
     anchor = _node(
         "anchor-no-cycle",
@@ -720,10 +753,12 @@ def test_pairwise_acceptance_without_cycle_support_is_not_a_bridge() -> None:
 
 def test_all_zone_cycle_verified_receipt_edge_is_evidence_not_authority() -> None:
     current = _node(
-        "current-valid-bridge",
+        "north-valid-bridge",
         roles=(ViewRole.SYSTEM_IDENTIFICATION,),
         current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
     )
+    fresh = _node("fresh-post-action", roles=(ViewRole.SYSTEM_IDENTIFICATION,))
     anchor = _node(
         "anchor-valid-bridge",
         roles=(ViewRole.REVIEWED_SUPPORTED,),
@@ -731,16 +766,29 @@ def test_all_zone_cycle_verified_receipt_edge_is_evidence_not_authority() -> Non
         production_passed=True,
     )
     objective = _experiment("valid-bridge")
+    new_report_sha256 = _sha("new-honest-bridge-report")
+    assert (
+        new_report_sha256
+        not in objective.selection_backing_report_sha256s
+    )
     graph = _graph(
-        (current, anchor),
+        (current, fresh, anchor),
         edges=(
             _edge(
                 current.sha256,
-                anchor.sha256,
+                fresh.sha256,
                 action_ids=(objective.action_id,),
             ),
+            _edge(fresh.sha256, anchor.sha256),
         ),
-        transitions=(_transition(objective, current.sha256, anchor.sha256),),
+        transitions=(
+            _transition(
+                objective,
+                current.sha256,
+                fresh.sha256,
+                report_sha256=new_report_sha256,
+            ),
+        ),
     )
 
     result = plan_camera_bridge(
@@ -750,8 +798,13 @@ def test_all_zone_cycle_verified_receipt_edge_is_evidence_not_authority() -> Non
     )
 
     assert result.disposition is BridgePlannerDisposition.BRIDGE_EVIDENCE_AVAILABLE
-    assert result.bridge_node_path == (current.sha256, anchor.sha256)
+    assert result.bridge_node_path == (
+        current.sha256,
+        fresh.sha256,
+        anchor.sha256,
+    )
     assert result.bridge_action_ids == (objective.action_id,)
+    assert result.bridge_report_sha256s == (new_report_sha256,)
     assert result.bridge_evidence_available is True
     assert result.can_accept is False
     assert result.can_validate_scene is False
@@ -789,54 +842,139 @@ def test_production_pass_alone_does_not_grant_bridge_or_authority() -> None:
     }
 
 
-def test_ranking_and_serialization_are_deterministic_under_shuffle() -> None:
+def test_production_definitive_endpoint_cannot_qualify_unsupported_family() -> None:
     current = _node(
-        "current-ranking",
+        "north-production-endpoint",
         roles=(ViewRole.SYSTEM_IDENTIFICATION,),
         current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
+    )
+    first = _node(
+        "production-repeat-1",
+        roles=(ViewRole.SYSTEM_IDENTIFICATION,),
+        production_passed=True,
+    )
+    second = _node(
+        "production-repeat-2",
+        roles=(ViewRole.SYSTEM_IDENTIFICATION,),
+        production_passed=True,
+    )
+    anchor = _node(
+        "production-repeat-anchor",
+        roles=(ViewRole.REVIEWED_SUPPORTED,),
+        anchor=True,
+        production_passed=True,
+    )
+    graph = _graph(
+        (current, first, second, anchor),
+        edges=(
+            _edge(first.sha256, second.sha256),
+            _edge(first.sha256, anchor.sha256),
+            _edge(second.sha256, anchor.sha256),
+        ),
+        components=(
+            (current.sha256,),
+            tuple(sorted((first.sha256, second.sha256, anchor.sha256))),
+        ),
+    )
+    receipts = FROZEN_ENDPOINT_OBJECTIVE.selection_backing_report_sha256s
+    evidence = (
+        _endpoint(
+            evidence_id="production-endpoint-1",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=first.sha256,
+            receipt_sha256=receipts[0],
+        ),
+        _endpoint(
+            evidence_id="production-endpoint-2",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=second.sha256,
+            receipt_sha256=receipts[1],
+        ),
+    )
+
+    result = plan_camera_bridge(graph, evidence)
+
+    assert result.disposition is BridgePlannerDisposition.NO_SAFE_ENDPOINT_EVIDENCE
+    assert result.missing_experiment is None
+    assert result.ranked_families == ()
+    assert {item.reason for item in result.excluded_endpoints} == {
+        "endpoint_not_production_fail_closed"
+    }
+
+
+def test_ranking_and_serialization_are_deterministic_under_shuffle() -> None:
+    current = _node(
+        "north-ranking",
+        roles=(ViewRole.SYSTEM_IDENTIFICATION,),
+        current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
+    )
+    first_endpoint = _node(
+        "rank-repeat-1", roles=(ViewRole.SYSTEM_IDENTIFICATION,)
+    )
+    second_endpoint = _node(
+        "rank-repeat-2", roles=(ViewRole.SYSTEM_IDENTIFICATION,)
     )
     anchor = _node(
         "anchor-ranking",
         roles=(ViewRole.REVIEWED_SUPPORTED,),
         anchor=True,
+        production_passed=True,
     )
-    alpha = _experiment("alpha")
-    beta = _experiment("beta")
-    inventory = _inventory(beta, alpha)
-    alpha_evidence = _endpoint(
-        evidence_id="alpha-evidence",
-        family_id=alpha.family_id,
+    receipts = FROZEN_ENDPOINT_OBJECTIVE.selection_backing_report_sha256s
+    first_evidence = _endpoint(
+        evidence_id="repeat-a",
+        family_id=FROZEN_ENDPOINT_FAMILY_ID,
         source_sha256=current.sha256,
-        target_sha256=_sha("alpha-target"),
-        receipt_sha256=alpha.receipt_report_sha256s[0],
+        target_sha256=first_endpoint.sha256,
+        receipt_sha256=receipts[0],
     )
-    beta_evidence = _endpoint(
-        evidence_id="beta-evidence",
-        family_id=beta.family_id,
+    second_evidence = _endpoint(
+        evidence_id="repeat-b",
+        family_id=FROZEN_ENDPOINT_FAMILY_ID,
         source_sha256=current.sha256,
-        target_sha256=_sha("beta-target"),
-        receipt_sha256=beta.receipt_report_sha256s[0],
+        target_sha256=second_endpoint.sha256,
+        receipt_sha256=receipts[1],
+    )
+    edges = (
+        _edge(first_endpoint.sha256, second_endpoint.sha256),
+        _edge(first_endpoint.sha256, anchor.sha256),
+        _edge(second_endpoint.sha256, anchor.sha256),
     )
     graph = _graph(
-        (anchor, current),
-        components=((anchor.sha256,), (current.sha256,)),
+        (current, first_endpoint, second_endpoint, anchor),
+        edges=edges,
+        components=(
+            (current.sha256,),
+            tuple(
+                sorted(
+                    (first_endpoint.sha256, second_endpoint.sha256, anchor.sha256)
+                )
+            ),
+        ),
+    )
+    shuffled = _graph(
+        (anchor, second_endpoint, current, first_endpoint),
+        edges=tuple(reversed(edges)),
+        components=tuple(reversed(graph.components)),
     )
 
     first = plan_camera_bridge(
         graph,
-        (beta_evidence, alpha_evidence),
-        inventory=inventory,
+        (second_evidence, first_evidence),
     )
     second = plan_camera_bridge(
-        graph,
-        (alpha_evidence, beta_evidence),
-        inventory=inventory,
+        shuffled,
+        (first_evidence, second_evidence),
     )
 
     assert first.as_dict() == second.as_dict()
-    assert first.ranked_families[0].family_id == "alpha"
+    assert first.ranked_families[0].family_id == FROZEN_ENDPOINT_FAMILY_ID
     assert first.missing_experiment is not None
-    assert first.missing_experiment.family_id == "alpha"
+    assert first.missing_experiment.family_id == FROZEN_ENDPOINT_FAMILY_ID
     assert json.dumps(
         first.as_dict(), sort_keys=True, separators=(",", ":")
     ) == json.dumps(second.as_dict(), sort_keys=True, separators=(",", ":"))
@@ -844,14 +982,22 @@ def test_ranking_and_serialization_are_deterministic_under_shuffle() -> None:
 
 def test_rejected_matrix_coefficients_never_enter_control_recommendation() -> None:
     current = _node(
-        "current-rejected-matrix",
+        "north-rejected-matrix",
         roles=(ViewRole.SYSTEM_IDENTIFICATION,),
         current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
+    )
+    first_endpoint = _node(
+        "rejected-repeat-1", roles=(ViewRole.SYSTEM_IDENTIFICATION,)
+    )
+    second_endpoint = _node(
+        "rejected-repeat-2", roles=(ViewRole.SYSTEM_IDENTIFICATION,)
     )
     anchor = _node(
         "anchor-rejected-matrix",
         roles=(ViewRole.REVIEWED_SUPPORTED,),
         anchor=True,
+        production_passed=True,
     )
     rejected_coefficients = (
         (1.0, 0.0, 9123.456789),
@@ -859,34 +1005,283 @@ def test_rejected_matrix_coefficients_never_enter_control_recommendation() -> No
         (0.0, 0.0, 1.0),
     )
     graph = _graph(
-        (current, anchor),
+        (current, first_endpoint, second_endpoint, anchor),
         edges=(
+            _edge(first_endpoint.sha256, second_endpoint.sha256),
+            _edge(first_endpoint.sha256, anchor.sha256),
             _edge(
-                current.sha256,
+                second_endpoint.sha256,
                 anchor.sha256,
                 accepted=False,
                 forward_matrix=rejected_coefficients,
             ),
         ),
-        components=((current.sha256,), (anchor.sha256,)),
+        components=((current.sha256,),),
     )
-    receipt = FROZEN_ENDPOINT_OBJECTIVE.receipt_report_sha256s[0]
-    prior = _endpoint(
-        evidence_id="scalar-prior",
-        family_id=FROZEN_ENDPOINT_FAMILY_ID,
-        source_sha256=current.sha256,
-        target_sha256=_sha("scalar-target"),
-        receipt_sha256=receipt,
+    receipts = FROZEN_ENDPOINT_OBJECTIVE.selection_backing_report_sha256s
+    records = (
+        _endpoint(
+            evidence_id="repeat-1",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=first_endpoint.sha256,
+            receipt_sha256=receipts[0],
+        ),
+        _endpoint(
+            evidence_id="repeat-2",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=second_endpoint.sha256,
+            receipt_sha256=receipts[1],
+            registration_accepted=True,
+            inlier_ratio=1.0,
+        ),
     )
 
-    result = plan_camera_bridge(graph, (prior,))
+    result = plan_camera_bridge(graph, records)
     report_json = json.dumps(result.as_dict(), sort_keys=True)
 
-    assert result.missing_experiment is not None
-    assert result.missing_experiment.key is CameraHoldKey.RIGHT
-    assert result.missing_experiment.duration_s == 0.043
-    assert result.missing_experiment.uses_rejected_registration_matrix is False
+    assert result.ranked_families == ()
+    assert result.missing_experiment is None
     assert "forward_matrix" not in report_json
     assert "reverse_matrix" not in report_json
     assert "9123.456789" not in report_json
     assert "-8765.432198" not in report_json
+
+
+def test_absent_endpoint_node_is_excluded_before_family_selection() -> None:
+    current = _node(
+        "north-absent",
+        roles=(ViewRole.SYSTEM_IDENTIFICATION,),
+        current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
+    )
+    anchor = _node(
+        "anchor-absent",
+        roles=(ViewRole.REVIEWED_SUPPORTED,),
+        anchor=True,
+        production_passed=True,
+    )
+    receipts = FROZEN_ENDPOINT_OBJECTIVE.selection_backing_report_sha256s
+    absent = _endpoint(
+        evidence_id="absent-endpoint",
+        family_id=FROZEN_ENDPOINT_FAMILY_ID,
+        source_sha256=current.sha256,
+        target_sha256=_sha("not-in-graph"),
+        receipt_sha256=receipts[0],
+    )
+
+    result = plan_camera_bridge(_graph((current, anchor)), (absent,))
+
+    assert result.ranked_families == ()
+    assert result.excluded_endpoints[0].reason == "endpoint_not_in_graph"
+
+
+def test_graph_roles_and_readiness_override_forged_safe_caller_claims() -> None:
+    current = _node(
+        "north-forged-claims",
+        roles=(ViewRole.SYSTEM_IDENTIFICATION,),
+        current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
+    )
+    risky = _node("risky-claim", roles=(ViewRole.RISKY_STATE_CHANGE,))
+    vetoed = _node(
+        "vetoed-claim",
+        roles=(ViewRole.SYSTEM_IDENTIFICATION,),
+        readiness_safe=False,
+    )
+    anchor = _node(
+        "anchor-forged-claims",
+        roles=(ViewRole.REVIEWED_SUPPORTED,),
+        anchor=True,
+        production_passed=True,
+    )
+    receipts = FROZEN_ENDPOINT_OBJECTIVE.selection_backing_report_sha256s
+    risky_claim = _endpoint(
+        evidence_id="risky-safe-claim",
+        family_id=FROZEN_ENDPOINT_FAMILY_ID,
+        source_sha256=current.sha256,
+        target_sha256=risky.sha256,
+        receipt_sha256=receipts[0],
+        target_roles=(ViewRole.SYSTEM_IDENTIFICATION,),
+        production_passed=True,
+        production_zones=_ZONES,
+        production_matches=6,
+    )
+    vetoed_claim = _endpoint(
+        evidence_id="vetoed-safe-claim",
+        family_id=FROZEN_ENDPOINT_FAMILY_ID,
+        source_sha256=current.sha256,
+        target_sha256=vetoed.sha256,
+        receipt_sha256=receipts[1],
+        target_roles=(ViewRole.SYSTEM_IDENTIFICATION,),
+        production_passed=True,
+        production_zones=_ZONES,
+        production_matches=6,
+    )
+
+    result = plan_camera_bridge(
+        _graph((current, risky, vetoed, anchor)),
+        (risky_claim, vetoed_claim),
+    )
+
+    assert {(item.evidence_id, item.reason) for item in result.excluded_endpoints} == {
+        ("risky-safe-claim", "endpoint_negative_graph_role"),
+        ("vetoed-safe-claim", "endpoint_readiness_veto"),
+    }
+    assert result.ranked_families == ()
+
+
+def test_repeated_family_requires_distinct_authenticated_reports() -> None:
+    current = _node(
+        "north-distinct-reports",
+        roles=(ViewRole.SYSTEM_IDENTIFICATION,),
+        current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
+    )
+    first = _node("same-report-1", roles=(ViewRole.SYSTEM_IDENTIFICATION,))
+    second = _node("same-report-2", roles=(ViewRole.SYSTEM_IDENTIFICATION,))
+    anchor = _node(
+        "anchor-same-report",
+        roles=(ViewRole.REVIEWED_SUPPORTED,),
+        anchor=True,
+        production_passed=True,
+    )
+    receipt = FROZEN_ENDPOINT_OBJECTIVE.selection_backing_report_sha256s[0]
+    graph = _graph(
+        (current, first, second, anchor),
+        edges=(
+            _edge(first.sha256, second.sha256),
+            _edge(first.sha256, anchor.sha256),
+            _edge(second.sha256, anchor.sha256),
+        ),
+    )
+    records = (
+        _endpoint(
+            evidence_id="same-report-a",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=first.sha256,
+            receipt_sha256=receipt,
+        ),
+        _endpoint(
+            evidence_id="same-report-b",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=second.sha256,
+            receipt_sha256=receipt,
+        ),
+    )
+
+    result = plan_camera_bridge(graph, records)
+
+    assert result.ranked_families == ()
+    assert "insufficient_distinct_receipt_reports:1/2" in (
+        result.family_evaluations[0].failure_reasons
+    )
+
+
+def test_missing_endpoint_to_anchor_edge_keeps_family_incomplete() -> None:
+    current = _node(
+        "north-missing-anchor",
+        roles=(ViewRole.SYSTEM_IDENTIFICATION,),
+        current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
+    )
+    first = _node("missing-anchor-1", roles=(ViewRole.SYSTEM_IDENTIFICATION,))
+    second = _node("missing-anchor-2", roles=(ViewRole.SYSTEM_IDENTIFICATION,))
+    anchor = _node(
+        "missing-anchor-target",
+        roles=(ViewRole.REVIEWED_SUPPORTED,),
+        anchor=True,
+        production_passed=True,
+    )
+    receipts = FROZEN_ENDPOINT_OBJECTIVE.selection_backing_report_sha256s
+    graph = _graph(
+        (current, first, second, anchor),
+        edges=(
+            _edge(first.sha256, second.sha256),
+            _edge(first.sha256, anchor.sha256),
+        ),
+    )
+    records = (
+        _endpoint(
+            evidence_id="missing-anchor-a",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=first.sha256,
+            receipt_sha256=receipts[0],
+        ),
+        _endpoint(
+            evidence_id="missing-anchor-b",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=second.sha256,
+            receipt_sha256=receipts[1],
+        ),
+    )
+
+    result = plan_camera_bridge(graph, records)
+
+    missing_edge_id = ":".join(sorted((second.sha256, anchor.sha256)))
+    assert result.ranked_families == ()
+    assert (
+        f"anchor_edge_not_verified_all_zones:{missing_edge_id}"
+        in result.family_evaluations[0].failure_reasons
+    )
+
+
+def test_actual_corpus_shape_unverified_repeat_cycle_yields_no_recommendation() -> None:
+    current = _node(
+        "north-no-repeat-cycle",
+        roles=(ViewRole.SYSTEM_IDENTIFICATION,),
+        current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
+    )
+    first = _node("no-cycle-repeat-1", roles=(ViewRole.SYSTEM_IDENTIFICATION,))
+    second = _node("no-cycle-repeat-2", roles=(ViewRole.SYSTEM_IDENTIFICATION,))
+    anchor = _node(
+        "anchor-no-repeat-cycle",
+        roles=(ViewRole.REVIEWED_SUPPORTED,),
+        anchor=True,
+        production_passed=True,
+    )
+    receipts = FROZEN_ENDPOINT_OBJECTIVE.selection_backing_report_sha256s
+    graph = _graph(
+        (current, first, second, anchor),
+        edges=(
+            _edge(first.sha256, second.sha256, cycle=False),
+            _edge(first.sha256, anchor.sha256),
+            _edge(second.sha256, anchor.sha256),
+        ),
+        components=(
+            (current.sha256,),
+            tuple(sorted((first.sha256, second.sha256, anchor.sha256))),
+        ),
+    )
+    records = (
+        _endpoint(
+            evidence_id="no-cycle-a",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=first.sha256,
+            receipt_sha256=receipts[0],
+        ),
+        _endpoint(
+            evidence_id="no-cycle-b",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=second.sha256,
+            receipt_sha256=receipts[1],
+        ),
+    )
+
+    result = plan_camera_bridge(graph, records)
+
+    assert result.ranked_families == ()
+    assert result.missing_experiment is None
+    assert result.disposition is BridgePlannerDisposition.NO_SAFE_ENDPOINT_EVIDENCE
+    assert any(
+        reason.startswith("repeat_edge_not_verified_all_zones:")
+        for reason in result.family_evaluations[0].failure_reasons
+    )

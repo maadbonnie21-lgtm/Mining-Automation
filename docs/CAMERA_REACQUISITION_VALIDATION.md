@@ -645,6 +645,106 @@ identifies one smallest additional evidence edge; it does not authorize a live
 probe. Any future live use of R1 requires a separate architecture review and
 must still end in a fresh pass of the unchanged production detector.
 
+### R2 bridge-capture design (proposed; no live input authorized)
+
+R1's exact result is
+`missing graph link: one receipt-proven, readiness-safe camera transition from
+the current cycle-verified component to any exact reviewed
+production-supported anchor, with robust inliers distributed across
+north_west, north_east, and south_west at both endpoints`. Its negative gate
+also found 19 accepted and 19 cycle-verified relationships incident to
+`RISKY_STATE_CHANGE` nodes, but zero paths from a negative node to a reviewed
+supported anchor. All 19 relationships remain quarantined from the safe graph
+and the canonical gate fails closed with an aggregate failure count of 19.
+This makes R1 a useful evidence inventory, not an accepted controller.
+
+The best current-pose-to-supported attempt was a rejected homography: 64
+inliers, inlier ratio `0.60377`, source zone counts `19/0/45` and target zone
+counts `17/0/47` for north_west/north_east/south_west, plus failed distortion
+checks. It authorizes no action. A rejected fit is not a transform authority,
+and even an accepted image homography would not supply the inverse RuneLite
+input Jacobian needed to choose yaw, pitch, zoom, axis, sign, or duration.
+Inverting this fit would therefore turn missing northeast evidence and mixed
+camera effects into a guess.
+
+The receipt inventory found no shorter proven bridge. Compass-north connects
+the current and corrected-north views but not a supported fixture. The wheel
+endpoint, legacy ladders, and shorter compass/pitch/reset endpoints provide no
+verified action path; the fixed horizontal `+4/-4` probe was non-reversible and
+retired, the vertical equivalent was intentionally never run, and a one-detent
+wheel observation has no receipt proving a live effect. The strongest repeated
+endpoint *family* available for designing R2 is the frozen
+`north-up-p610-y043-reset` sequence:
+
+1. compass click at `(608, 49)`;
+2. no-input settle for `0.5 s`;
+3. Right key hold for `0.043 s`;
+4. Up key hold for `3.0 s`;
+5. Down key hold for `0.61 s`; and
+6. Control reset-zoom key hold for `0.1 s`.
+
+Two prior executions on Git head
+`fa9975da946da8b5272d81b540f99acd3fca63b4` recorded focused,
+geometry-supported `1005x1078` preflight, a complete `2/2` compass-click
+receipt, and complete `1/1` key-down and `1/1` key-up receipts for every key
+action:
+
+- `issue31-dev-fa9975da-p610-y043-reset1.camera.json`, plan
+  `issue31-dev-north-up-p610-y043-reset@0.0.0`: report SHA-256
+  `1925996eb4f431f44a71abc6a33d5198707fc6173f0c81ec91ee4b350241547f`,
+  endpoint raw SHA-256
+  `e07973034c261a836549ccbac535fdc8401aa084e478dffd8cb27b79d5b431c6`,
+  production rejected at 4/6 landmarks across two zones.
+- `issue31-dev-fa9975da-p610-y043-reset3.camera.json`, plan
+  `issue31-dev-north-up-p610-y043-reset-repeat@0.0.0`: report SHA-256
+  `a9a75ac611789b9f4d900261c63ad03210764b6db34d55ac883d700546de1dc5`,
+  endpoint raw SHA-256
+  `0e21d3506705e2771dee188c8db9657705d910edc6ecb4a26ed607e0d50ffeee`,
+  production rejected at 2/6 landmarks across two zones.
+
+The two endpoint pixels have an accepted all-zone pairwise affine fit (331
+mutual matches, 282 inliers, ratio `0.851964`, median/p90 residual
+`0.4965/0.9287 px`). That direct fit has **zero supporting graph cycles**. All
+five reset/reset/anchor triangles exceed at least one frozen graph-cycle bound;
+their median/p90 cycle errors are `1.528/3.906`, `0.946/1.452`,
+`1.281/2.985`, `0.946/1.452`, and `1.055/1.527 px`. The safe graph therefore
+cannot call the two observations a repeatable endpoint family even though
+each endpoint separately has verified all-zone links to the five anchors.
+Pairwise forward/reverse cycle error is not a substitute for graph-cycle
+verification.
+
+R2 consequently returns `no_safe_endpoint_evidence`, with no ranked family,
+no selected experiment, and no input authorization. It does **not** select the
+Right `0.043 s` step. The smallest additional evidence is one more exact,
+receipt-bound execution of the same frozen `north-up-p610-y043-reset` plan
+whose post frame earns cycle-verified all-three-zone edges to both existing
+family endpoints and every reviewed supported anchor. Collecting that evidence
+requires a separate lead decision; this document does not authorize it.
+
+The development-only fixed Right `0.043 s` capture wrapper is retained as an
+inert reviewed design for a possible future qualified planner result. If later
+authorized, it must start from an authenticated fresh compass-north state and:
+
+1. allow at most one input primitive between captures;
+2. obtain fresh decision, arm, no-input platform preflight, commit, and
+   post-action observations, with exact-head provenance, input lease,
+   focus/HWND, geometry, pointer ownership, and released-input checks intact;
+3. evaluate every observation with the unchanged production detector, which
+   remains the sole scene-acceptance and resource-exposure authority;
+4. release the Right key, record the exact receipt, settle, and capture the
+   post-action frame; and
+5. use robust registration before input only as a no-authority consistency
+   veto against the exact planner source, then run read-only post-capture
+   registration to evaluate the new edge's all-zone, cycle, and
+   negative-corpus evidence.
+
+Registration may reject or characterize the saved edge, but it may not
+validate the scene, expose resources, authorize another primitive, or override
+production. The current canonical planner result cannot satisfy the wrapper's
+authorization loader, so it stops before the input lease and capture backend.
+No live input from this design is authorized, and this section makes no
+reacquisition-success claim.
+
 ## Repeated trial protocol
 
 A complete run applies three distinct deliberate perturbations. The current

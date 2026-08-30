@@ -35,6 +35,7 @@ __all__ = [
     "CAMERA_BRIDGE_PLANNER_VERSION",
     "FROZEN_ENDPOINT_FAMILY_ID",
     "FROZEN_ENDPOINT_OBJECTIVE_ID",
+    "FROZEN_ENDPOINT_SOURCE_SHA256",
     "FROZEN_ENDPOINT_OBJECTIVE",
     "FROZEN_PRIMITIVE_INVENTORY",
     "BridgeExperimentRecommendation",
@@ -55,6 +56,9 @@ CAMERA_BRIDGE_PLANNER_VERSION: Final[str] = "2.0.0"
 FROZEN_ENDPOINT_FAMILY_ID: Final[str] = "north-up-p610-y043-reset"
 FROZEN_ENDPOINT_OBJECTIVE_ID: Final[str] = (
     "north-up-p610-y043-reset:right-key-hold-0.043s"
+)
+FROZEN_ENDPOINT_SOURCE_SHA256: Final[str] = (
+    "c1cb6fe144600ce153b1ceb2e90d6e375d42babea1eda6a08120efbc7ed2a4cd"
 )
 _FROZEN_REPEAT_RECEIPTS: Final[tuple[str, str]] = (
     "1925996eb4f431f44a71abc6a33d5198707fc6173f0c81ec91ee4b350241547f",
@@ -118,6 +122,7 @@ class FrozenPrimitiveExperiment:
     ordinal: int
     key: CameraHoldKey
     duration_s: float
+    required_source_sha256: str
     selection_backing_report_sha256s: tuple[str, ...]
     minimum_distinct_receipt_endpoints: int = 2
 
@@ -136,6 +141,7 @@ class FrozenPrimitiveExperiment:
             raise ValueError("ordinal must be a positive integer")
         if not isinstance(self.key, CameraHoldKey):
             raise TypeError("key must be a CameraHoldKey")
+        _validate_digest(self.required_source_sha256, "required_source_sha256")
         if (
             isinstance(self.duration_s, bool)
             or not isinstance(self.duration_s, (int, float))
@@ -172,6 +178,7 @@ class FrozenPrimitiveExperiment:
                 self.minimum_distinct_receipt_endpoints
             ),
             "ordinal": self.ordinal,
+            "required_source_sha256": self.required_source_sha256,
             "selection_backing_report_sha256s": sorted(
                 self.selection_backing_report_sha256s
             ),
@@ -222,6 +229,7 @@ FROZEN_ENDPOINT_OBJECTIVE: Final[FrozenPrimitiveExperiment] = (
         ordinal=1,
         key=CameraHoldKey.RIGHT,
         duration_s=CAMERA_BRIDGE_CAPTURE_HOLD_SECONDS,
+        required_source_sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
         selection_backing_report_sha256s=_FROZEN_REPEAT_RECEIPTS,
     )
 )
@@ -236,7 +244,12 @@ FROZEN_PRIMITIVE_INVENTORY: Final[FrozenPrimitiveInventory] = (
 
 @dataclass(frozen=True, slots=True)
 class MeasuredEndpointEvidence:
-    """Caller-supplied scalar endpoint evidence; matrices are unrepresentable."""
+    """Receipt endpoint identity plus legacy claims that the planner ignores.
+
+    ``target_sha256``, the receipt report digest, and receipt authentication are
+    the only caller fields used by planning. Roles, readiness, production, and
+    registration evidence are always read from the exact graph node and edges.
+    """
 
     evidence_id: str
     family_id: str
@@ -322,6 +335,12 @@ class MeasuredEndpointEvidence:
     def registration_all_required_zones(self) -> bool:
         return _REQUIRED_ZONES.issubset(self.registration_matched_zones)
 
+    @property
+    def endpoint_sha256(self) -> str:
+        """Return the exact graph-node identity bound by this record."""
+
+        return self.target_sha256
+
     def as_dict(self) -> dict[str, object]:
         return {
             "cycle_p90_px": _rounded_optional(self.cycle_p90_px),
@@ -357,21 +376,110 @@ class MeasuredEndpointEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class GraphDerivedEndpointEvidence:
+    """Trusted endpoint facts derived exclusively from one graph node."""
+
+    evidence_id: str
+    family_id: str
+    endpoint_sha256: str
+    receipt_report_sha256: str
+    labels: tuple[str, ...]
+    roles: tuple[ViewRole, ...]
+    readiness_safe: bool
+    production_passed: bool
+    production_scene_validated: bool
+    production_matched_landmarks: int
+    production_matched_zones: tuple[MacroZone, ...]
+    production_definitive_target_ids: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "endpoint_sha256": self.endpoint_sha256,
+            "evidence_id": self.evidence_id,
+            "family_id": self.family_id,
+            "graph_node": {
+                "labels": list(self.labels),
+                "production": {
+                    "definitive_target_ids": list(
+                        self.production_definitive_target_ids
+                    ),
+                    "matched_landmarks": self.production_matched_landmarks,
+                    "matched_zones": sorted(
+                        zone.value for zone in self.production_matched_zones
+                    ),
+                    "passed": self.production_passed,
+                    "scene_validated": self.production_scene_validated,
+                },
+                "readiness_safe": self.readiness_safe,
+                "roles": sorted(role.value for role in self.roles),
+            },
+            "receipt_report_sha256": self.receipt_report_sha256,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class EndpointExclusion:
+    """Fail-closed exclusion of one supplied endpoint record."""
+
+    evidence_id: str
+    reason: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {"evidence_id": self.evidence_id, "reason": self.reason}
+
+
+@dataclass(frozen=True, slots=True)
+class EndpointFamilyEvaluation:
+    """Graph-derived qualification of one repeated endpoint family."""
+
+    family_id: str
+    required_distinct_endpoints: int
+    endpoints: tuple[GraphDerivedEndpointEvidence, ...]
+    distinct_endpoint_sha256s: tuple[str, ...]
+    distinct_receipt_report_sha256s: tuple[str, ...]
+    frozen_anchor_sha256s: tuple[str, ...]
+    repeat_edge_ids: tuple[str, ...]
+    anchor_edge_ids: tuple[str, ...]
+    complete: bool
+    failure_reasons: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "anchor_edge_ids": list(self.anchor_edge_ids),
+            "complete": self.complete,
+            "distinct_endpoint_sha256s": list(self.distinct_endpoint_sha256s),
+            "distinct_receipt_report_sha256s": list(
+                self.distinct_receipt_report_sha256s
+            ),
+            "endpoints": [item.as_dict() for item in self.endpoints],
+            "failure_reasons": list(self.failure_reasons),
+            "family_id": self.family_id,
+            "frozen_anchor_sha256s": list(self.frozen_anchor_sha256s),
+            "repeat_edge_ids": list(self.repeat_edge_ids),
+            "required_distinct_endpoints": self.required_distinct_endpoints,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class RankedEndpointFamily:
-    """Stable family rank using only scalar measured endpoint evidence."""
+    """Stable rank of a fully graph-qualified repeated endpoint family."""
 
     rank: int
     family_id: str
     evidence_ids: tuple[str, ...]
-    best_evidence: MeasuredEndpointEvidence
+    evaluation: EndpointFamilyEvaluation
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "best_evidence": self.best_evidence.as_dict(),
             "evidence_count": len(self.evidence_ids),
             "evidence_ids": list(self.evidence_ids),
+            "evaluation": self.evaluation.as_dict(),
             "family_id": self.family_id,
             "rank": self.rank,
+            "ranking_basis": (
+                "verified endpoint count then deterministic family id; "
+                "caller registration metrics are ignored"
+            ),
         }
 
 
@@ -381,6 +489,7 @@ class BridgeExperimentRecommendation:
 
     experiment_id: str
     family_id: str
+    action_id: str
     source_sha256: str
     key: CameraHoldKey
     duration_s: float
@@ -391,6 +500,7 @@ class BridgeExperimentRecommendation:
 
     def as_dict(self) -> dict[str, object]:
         return {
+            "action_id": self.action_id,
             "can_execute_input": self.can_execute_input,
             "duration_s": round(float(self.duration_s), 12),
             "experiment_id": self.experiment_id,
@@ -419,10 +529,13 @@ class CameraBridgePlannerEvidence:
     frozen_anchor_sha256s: tuple[str, ...]
     quarantined_sha256s: tuple[str, ...]
     inventory: FrozenPrimitiveInventory
+    family_evaluations: tuple[EndpointFamilyEvaluation, ...]
     ranked_families: tuple[RankedEndpointFamily, ...]
     excluded_endpoint_evidence_ids: tuple[str, ...]
+    excluded_endpoints: tuple[EndpointExclusion, ...]
     bridge_node_path: tuple[str, ...] | None
     bridge_action_ids: tuple[str, ...]
+    bridge_report_sha256s: tuple[str, ...]
     missing_experiment: BridgeExperimentRecommendation | None
     can_accept: bool = field(default=False, init=False)
     can_validate_scene: bool = field(default=False, init=False)
@@ -455,6 +568,7 @@ class CameraBridgePlannerEvidence:
                     if self.bridge_node_path is None
                     else list(self.bridge_node_path)
                 ),
+                "report_sha256s": list(self.bridge_report_sha256s),
             },
             "current_safe_component": list(self.current_safe_component),
             "current_sha256": self.current_sha256,
@@ -462,10 +576,17 @@ class CameraBridgePlannerEvidence:
             "excluded_endpoint_evidence_ids": list(
                 self.excluded_endpoint_evidence_ids
             ),
+            "excluded_endpoints": [
+                item.as_dict() for item in self.excluded_endpoints
+            ],
+            "family_evaluations": [
+                item.as_dict() for item in self.family_evaluations
+            ],
             "frozen_anchor_sha256s": list(self.frozen_anchor_sha256s),
             "inventory": self.inventory.as_dict(),
             "matrix_policy": {
                 "rejected_registration_matrices_used_for_control": False,
+                "rejected_registration_metrics_used_for_ranking": False,
             },
             "missing_experiment": (
                 None
@@ -477,6 +598,176 @@ class CameraBridgePlannerEvidence:
             "quarantined_sha256s": list(self.quarantined_sha256s),
             "ranked_families": [item.as_dict() for item in self.ranked_families],
         }
+
+
+def _experiments_by_family(
+    inventory: FrozenPrimitiveInventory,
+) -> dict[str, tuple[FrozenPrimitiveExperiment, ...]]:
+    result: dict[str, tuple[FrozenPrimitiveExperiment, ...]] = {}
+    for family_id in sorted({item.family_id for item in inventory.experiments}):
+        result[family_id] = tuple(
+            sorted(
+                (
+                    item
+                    for item in inventory.experiments
+                    if item.family_id == family_id
+                ),
+                key=lambda item: (item.ordinal, item.experiment_id),
+            )
+        )
+    return result
+
+
+def _derive_endpoint(
+    record: MeasuredEndpointEvidence,
+    node: GraphNodeEvidence,
+) -> GraphDerivedEndpointEvidence:
+    production = node.production
+    return GraphDerivedEndpointEvidence(
+        evidence_id=record.evidence_id,
+        family_id=record.family_id,
+        endpoint_sha256=node.sha256,
+        receipt_report_sha256=record.receipt_report_sha256,
+        labels=tuple(sorted(node.labels)),
+        roles=tuple(sorted(node.roles, key=str)),
+        readiness_safe=node.registration_eligible,
+        production_passed=production.passed,
+        production_scene_validated=production.scene_validated,
+        production_matched_landmarks=production.matched_landmark_count,
+        production_matched_zones=tuple(sorted(production.matched_zones, key=str)),
+        production_definitive_target_ids=tuple(
+            sorted(production.definitive_target_ids)
+        ),
+    )
+
+
+def _bind_endpoint_records(
+    records: tuple[MeasuredEndpointEvidence, ...],
+    *,
+    node_by_sha: dict[str, GraphNodeEvidence],
+    experiments_by_family: dict[str, tuple[FrozenPrimitiveExperiment, ...]],
+    quarantined: frozenset[str],
+) -> tuple[tuple[GraphDerivedEndpointEvidence, ...], tuple[EndpointExclusion, ...]]:
+    derived: list[GraphDerivedEndpointEvidence] = []
+    excluded: list[EndpointExclusion] = []
+    for record in sorted(records, key=lambda item: item.evidence_id):
+        experiments = experiments_by_family.get(record.family_id)
+        node = node_by_sha.get(record.endpoint_sha256)
+        reason = None
+        if experiments is None:
+            reason = "unknown_family"
+        elif not record.receipt_verified:
+            reason = "receipt_not_verified"
+        elif record.receipt_report_sha256 not in {
+            digest
+            for experiment in experiments
+            for digest in experiment.selection_backing_report_sha256s
+        }:
+            reason = "receipt_not_frozen_selection_backing"
+        elif node is None:
+            reason = "endpoint_not_in_graph"
+        elif record.endpoint_sha256 in quarantined:
+            reason = "endpoint_negative_graph_role"
+        elif not node.registration_eligible:
+            reason = "endpoint_readiness_veto"
+        elif (
+            node.production.passed
+            or node.production.scene_validated
+            or bool(node.production.definitive_target_ids)
+        ):
+            reason = "endpoint_not_production_fail_closed"
+        if reason is not None:
+            excluded.append(EndpointExclusion(record.evidence_id, reason))
+            continue
+        if node is None:
+            raise AssertionError("accepted endpoint must bind an exact graph node")
+        derived.append(_derive_endpoint(record, node))
+    return tuple(derived), tuple(excluded)
+
+
+def _evaluate_endpoint_families(
+    experiments_by_family: dict[str, tuple[FrozenPrimitiveExperiment, ...]],
+    derived: tuple[GraphDerivedEndpointEvidence, ...],
+    *,
+    anchors: frozenset[str],
+    edge_by_id: dict[str, GraphEdgeEvidence],
+    graph: ReadOnlyViewGraph,
+) -> tuple[EndpointFamilyEvaluation, ...]:
+    records_by_family: dict[str, list[GraphDerivedEndpointEvidence]] = defaultdict(
+        list
+    )
+    for item in derived:
+        records_by_family[item.family_id].append(item)
+    evaluations: list[EndpointFamilyEvaluation] = []
+    for family_id, experiments in sorted(experiments_by_family.items()):
+        records = tuple(
+            sorted(
+                records_by_family.get(family_id, ()),
+                key=lambda item: (
+                    item.endpoint_sha256,
+                    item.receipt_report_sha256,
+                    item.evidence_id,
+                ),
+            )
+        )
+        endpoint_sha256s = tuple(sorted({item.endpoint_sha256 for item in records}))
+        report_sha256s = tuple(
+            sorted({item.receipt_report_sha256 for item in records})
+        )
+        minimum = max(
+            item.minimum_distinct_receipt_endpoints for item in experiments
+        )
+        failures: list[str] = []
+        if len(endpoint_sha256s) < minimum:
+            failures.append(
+                f"insufficient_distinct_endpoint_nodes:{len(endpoint_sha256s)}/{minimum}"
+            )
+        if len(report_sha256s) < minimum:
+            failures.append(
+                f"insufficient_distinct_receipt_reports:{len(report_sha256s)}/{minimum}"
+            )
+        if not anchors:
+            failures.append("no_frozen_supported_anchors")
+        repeat_edges: list[str] = []
+        for first, second in combinations(endpoint_sha256s, 2):
+            edge_id = _edge_id(first, second)
+            edge = edge_by_id.get(edge_id)
+            if edge is None or not _edge_is_all_zone_bridge(edge, graph):
+                failures.append(f"repeat_edge_not_verified_all_zones:{edge_id}")
+            else:
+                repeat_edges.append(edge_id)
+        anchor_edges: list[str] = []
+        for endpoint_sha256 in endpoint_sha256s:
+            for anchor_sha256 in sorted(anchors):
+                if endpoint_sha256 == anchor_sha256:
+                    failures.append(
+                        f"endpoint_is_frozen_supported_anchor:{endpoint_sha256}"
+                    )
+                    continue
+                edge_id = _edge_id(endpoint_sha256, anchor_sha256)
+                edge = edge_by_id.get(edge_id)
+                if edge is None or not _edge_is_all_zone_bridge(edge, graph):
+                    failures.append(
+                        f"anchor_edge_not_verified_all_zones:{edge_id}"
+                    )
+                else:
+                    anchor_edges.append(edge_id)
+        unique_failures = tuple(sorted(set(failures)))
+        evaluations.append(
+            EndpointFamilyEvaluation(
+                family_id=family_id,
+                required_distinct_endpoints=minimum,
+                endpoints=records,
+                distinct_endpoint_sha256s=endpoint_sha256s,
+                distinct_receipt_report_sha256s=report_sha256s,
+                frozen_anchor_sha256s=tuple(sorted(anchors)),
+                repeat_edge_ids=tuple(sorted(repeat_edges)),
+                anchor_edge_ids=tuple(sorted(anchor_edges)),
+                complete=not unique_failures,
+                failure_reasons=unique_failures,
+            )
+        )
+    return tuple(evaluations)
 
 
 def plan_camera_bridge(
@@ -513,84 +804,60 @@ def plan_camera_bridge(
         and node.registration_eligible
         and node.sha256 not in quarantined
     )
-    bridge_path, bridge_actions = _receipt_backed_bridge_path(
+    family_experiments = _experiments_by_family(inventory)
+    derived, excluded = _bind_endpoint_records(
+        endpoint_evidence,
+        node_by_sha=node_by_sha,
+        experiments_by_family=family_experiments,
+        quarantined=quarantined,
+    )
+    edge_by_id = {edge.edge_id: edge for edge in graph.edges}
+    family_evaluations = _evaluate_endpoint_families(
+        family_experiments,
+        derived,
+        anchors=anchors,
+        edge_by_id=edge_by_id,
+        graph=graph,
+    )
+    complete = [item for item in family_evaluations if item.complete]
+    complete.sort(
+        key=lambda item: (-len(item.distinct_endpoint_sha256s), item.family_id)
+    )
+    ranked = tuple(
+        RankedEndpointFamily(
+            rank=index,
+            family_id=evaluation.family_id,
+            evidence_ids=tuple(
+                sorted(item.evidence_id for item in evaluation.endpoints)
+            ),
+            evaluation=evaluation,
+        )
+        for index, evaluation in enumerate(complete, start=1)
+    )
+    bridge_path, bridge_actions, bridge_reports = _receipt_backed_bridge_path(
         graph,
         current_component=frozenset(current_component),
         anchors=anchors,
         quarantined=quarantined,
         inventory=inventory,
     )
-
-    family_experiments: dict[str, tuple[FrozenPrimitiveExperiment, ...]] = {}
-    for family_id in sorted({item.family_id for item in inventory.experiments}):
-        family_experiments[family_id] = tuple(
-            sorted(
-                (
-                    item
-                    for item in inventory.experiments
-                    if item.family_id == family_id
-                ),
-                key=lambda item: (item.ordinal, item.experiment_id),
-            )
-        )
-    safe_evidence: list[MeasuredEndpointEvidence] = []
-    excluded: list[str] = []
-    for item in endpoint_evidence:
-        objectives = family_experiments.get(item.family_id, ())
-        receipt_digests = {
-            digest
-            for objective in objectives
-            for digest in objective.receipt_report_sha256s
-        }
-        target_node = node_by_sha.get(item.target_sha256)
-        target_quarantined = (
-            item.target_sha256 in quarantined
-            or item.negative_target
-            or (
-                target_node is not None
-                and any(
-                    role in NEGATIVE_GRAPH_ROLES for role in target_node.roles
-                )
-            )
-        )
-        eligible = (
-            bool(objectives)
-            and item.source_sha256 in current_component
-            and item.receipt_verified
-            and item.readiness_safe
-            and item.receipt_report_sha256 in receipt_digests
-            and not target_quarantined
-        )
-        if eligible:
-            safe_evidence.append(item)
-        else:
-            excluded.append(item.evidence_id)
-
-    ranked = _rank_endpoint_families(tuple(safe_evidence))
     missing = None
-    if bridge_path is None:
-        for family in ranked:
-            objectives = family_experiments[family.family_id]
-            completed = {
-                item.experiment_id
-                for item in safe_evidence
-                if item.family_id == family.family_id
-            }
-            objective = next(
-                (item for item in objectives if item.experiment_id not in completed),
-                None,
+    if bridge_path is None and current_component and ranked:
+        family = ranked[0]
+        objective = family_experiments[family.family_id][0]
+        if graph.current_sha256 == objective.required_source_sha256:
+            missing = BridgeExperimentRecommendation(
+                experiment_id=objective.experiment_id,
+                family_id=objective.family_id,
+                action_id=objective.action_id,
+                source_sha256=graph.current_sha256,
+                key=objective.key,
+                duration_s=objective.duration_s,
+                receipt_backing_sha256s=(
+                    objective.selection_backing_report_sha256s
+                ),
+                ranked_endpoint_evidence_ids=family.evidence_ids,
             )
-            if objective is not None:
-                missing = BridgeExperimentRecommendation(
-                    experiment_id=objective.experiment_id,
-                    family_id=objective.family_id,
-                    source_sha256=graph.current_sha256,
-                    key=objective.key,
-                    duration_s=objective.duration_s,
-                    receipt_backing_sha256s=objective.receipt_report_sha256s,
-                    ranked_endpoint_evidence_ids=family.evidence_ids,
-                )
-                break
 
     if bridge_path is not None:
         disposition = BridgePlannerDisposition.BRIDGE_EVIDENCE_AVAILABLE
@@ -607,10 +874,15 @@ def plan_camera_bridge(
         frozen_anchor_sha256s=tuple(sorted(anchors)),
         quarantined_sha256s=tuple(sorted(quarantined)),
         inventory=inventory,
+        family_evaluations=family_evaluations,
         ranked_families=ranked,
-        excluded_endpoint_evidence_ids=tuple(sorted(excluded)),
+        excluded_endpoint_evidence_ids=tuple(
+            item.evidence_id for item in excluded
+        ),
+        excluded_endpoints=excluded,
         bridge_node_path=bridge_path,
         bridge_action_ids=bridge_actions,
+        bridge_report_sha256s=bridge_reports,
         missing_experiment=missing,
     )
 
@@ -639,24 +911,45 @@ def _receipt_backed_bridge_path(
     anchors: frozenset[str],
     quarantined: frozenset[str],
     inventory: FrozenPrimitiveInventory,
-) -> tuple[tuple[str, ...] | None, tuple[str, ...]]:
+) -> tuple[tuple[str, ...] | None, tuple[str, ...], tuple[str, ...]]:
     if graph.current_sha256 not in current_component:
-        return None, ()
-    objective_by_action = {item.action_id: item for item in inventory.experiments}
+        return None, (), ()
+    allowed_sources_by_action: dict[str, set[str]] = defaultdict(set)
+    for experiment in inventory.experiments:
+        allowed_sources_by_action[experiment.action_id].add(
+            experiment.required_source_sha256
+        )
     edge_by_id = {edge.edge_id: edge for edge in graph.edges}
-    adjacency: dict[str, list[tuple[str, str]]] = defaultdict(list)
-    for transition in graph.action_transitions:
-        objective = objective_by_action.get(transition.action_id)
-        if objective is None or (
-            transition.evidence_report_sha256
-            not in objective.receipt_report_sha256s
-        ):
-            continue
+    safe_nodes = frozenset(
+        node.sha256
+        for node in graph.nodes
+        if node.registration_eligible and node.sha256 not in quarantined
+    )
+    visual_adjacency = _verified_visual_adjacency(
+        graph,
+        edge_by_id=edge_by_id,
+        safe_nodes=safe_nodes,
+    )
+    candidates: list[
+        tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]
+    ] = []
+    for transition in sorted(
+        graph.action_transitions,
+        key=lambda item: (
+            item.source_sha256,
+            item.target_sha256,
+            item.action_id,
+            item.evidence_report_sha256,
+        ),
+    ):
+        allowed_sources = allowed_sources_by_action.get(transition.action_id, set())
         if (
-            transition.source_sha256 not in current_component
-            or transition.target_sha256 not in current_component
-            or transition.source_sha256 in quarantined
-            or transition.target_sha256 in quarantined
+            transition.source_sha256 not in allowed_sources
+            or not transition.receipt_verified
+            or transition.source_sha256 != graph.current_sha256
+            or transition.source_sha256 not in current_component
+            or transition.source_sha256 not in safe_nodes
+            or transition.target_sha256 not in safe_nodes
         ):
             continue
         edge = edge_by_id.get(
@@ -670,24 +963,72 @@ def _receipt_backed_bridge_path(
             or not _edge_is_all_zone_bridge(edge, graph)
         ):
             continue
-        adjacency[transition.source_sha256].append(
-            (transition.target_sha256, transition.action_id)
+        prefix = _shortest_visual_path(
+            visual_adjacency,
+            graph.current_sha256,
+            frozenset((transition.source_sha256,)),
         )
-    queue: deque[tuple[str, tuple[str, ...], tuple[str, ...]]] = deque(
-        ((graph.current_sha256, (graph.current_sha256,), ()),)
-    )
-    visited = {graph.current_sha256}
+        terminal = _shortest_visual_path(
+            visual_adjacency,
+            transition.target_sha256,
+            anchors,
+        )
+        if prefix is None or terminal is None:
+            continue
+        candidates.append(
+            (
+                (*prefix, transition.target_sha256, *terminal[1:]),
+                (transition.action_id,),
+                (transition.evidence_report_sha256,),
+            )
+        )
+    if not candidates:
+        return None, (), ()
+    candidates.sort(key=lambda item: (len(item[0]), item))
+    return candidates[0]
+
+
+def _verified_visual_adjacency(
+    graph: ReadOnlyViewGraph,
+    *,
+    edge_by_id: dict[str, GraphEdgeEvidence],
+    safe_nodes: frozenset[str],
+) -> dict[str, tuple[str, ...]]:
+    adjacency: dict[str, list[str]] = defaultdict(list)
+    for edge in edge_by_id.values():
+        if (
+            edge.source_sha256 in safe_nodes
+            and edge.target_sha256 in safe_nodes
+            and _edge_is_all_zone_bridge(edge, graph)
+        ):
+            adjacency[edge.source_sha256].append(edge.target_sha256)
+            adjacency[edge.target_sha256].append(edge.source_sha256)
+    return {
+        source: tuple(sorted(set(targets)))
+        for source, targets in sorted(adjacency.items())
+    }
+
+
+def _shortest_visual_path(
+    adjacency: dict[str, tuple[str, ...]],
+    source: str,
+    targets: frozenset[str],
+) -> tuple[str, ...] | None:
+    if source in targets:
+        return (source,)
+    queue: deque[tuple[str, tuple[str, ...]]] = deque(((source, (source,)),))
+    visited = {source}
     while queue:
-        node, node_path, action_path = queue.popleft()
-        if node in anchors:
-            return node_path, action_path
-        for target, action_id in sorted(adjacency.get(node, ())):
-            if target not in visited:
-                visited.add(target)
-                queue.append(
-                    (target, (*node_path, target), (*action_path, action_id))
-                )
-    return None, ()
+        node, path = queue.popleft()
+        for target in adjacency.get(node, ()):
+            if target in visited:
+                continue
+            next_path = (*path, target)
+            if target in targets:
+                return next_path
+            visited.add(target)
+            queue.append((target, next_path))
+    return None
 
 
 def _edge_is_all_zone_bridge(
@@ -714,60 +1055,6 @@ def _edge_is_all_zone_bridge(
         and target_cells.get(zone, 0) >= policy.minimum_spatial_cells_per_zone
         for zone in _REQUIRED_ZONES
     )
-
-
-def _rank_endpoint_families(
-    evidence: tuple[MeasuredEndpointEvidence, ...],
-) -> tuple[RankedEndpointFamily, ...]:
-    grouped: dict[str, list[MeasuredEndpointEvidence]] = defaultdict(list)
-    for item in evidence:
-        grouped[item.family_id].append(item)
-    families: list[tuple[MeasuredEndpointEvidence, tuple[MeasuredEndpointEvidence, ...]]] = []
-    for family_id in sorted(grouped):
-        ordered = tuple(
-            sorted(
-                grouped[family_id],
-                key=lambda item: (*_endpoint_quality_key(item), item.evidence_id),
-            )
-        )
-        families.append((ordered[0], ordered))
-    families.sort(
-        key=lambda item: (
-            *_endpoint_quality_key(item[0]),
-            -len(item[1]),
-            item[0].family_id,
-        )
-    )
-    return tuple(
-        RankedEndpointFamily(
-            rank=index,
-            family_id=best.family_id,
-            evidence_ids=tuple(sorted(item.evidence_id for item in records)),
-            best_evidence=best,
-        )
-        for index, (best, records) in enumerate(families, start=1)
-    )
-
-
-def _endpoint_quality_key(item: MeasuredEndpointEvidence) -> tuple[object, ...]:
-    return (
-        -int(item.production_passed),
-        -len(item.production_matched_zones),
-        -item.production_matched_landmarks,
-        -int(item.registration_cycle_verified),
-        -int(item.registration_accepted),
-        -len(_REQUIRED_ZONES.intersection(item.registration_matched_zones)),
-        -float(item.inlier_ratio),
-        -item.inliers,
-        -item.mutual_matches,
-        _none_last(item.p90_residual_px),
-        _none_last(item.median_residual_px),
-        _none_last(item.cycle_p90_px),
-    )
-
-
-def _none_last(value: float | None) -> float:
-    return math.inf if value is None else float(value)
 
 
 def _edge_id(first: str, second: str) -> str:

@@ -9,6 +9,7 @@ from mining_automation.validation import (
     EXPECTED_CLIENT_HEIGHT,
     EXPECTED_CLIENT_WIDTH,
     CameraHoldKey,
+    CameraInputNotAttemptedError,
     CameraInputOperation,
     CameraKeyHold,
     CameraPlan,
@@ -699,12 +700,59 @@ def test_key_down_rechecks_focus_and_geometry_after_key_state_query() -> None:
             error = "geometry changed"
         control = WindowsCameraControl(123, api)
 
-        with pytest.raises(WindowsCameraError, match=error):
+        with pytest.raises(WindowsCameraError, match=error) as exc_info:
             control.key_down("up")
 
+        assert isinstance(exc_info.value, CameraInputNotAttemptedError)
         assert not any(
             isinstance(item, tuple) and item[0] == "key" for item in api.calls
         )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("left", "left button is already held"),
+        ("middle", "middle button is already held"),
+        ("other-arrow", "global keys are held: 0x25"),
+        ("control", "global keys are held: 0x11"),
+    ],
+)
+def test_key_down_rechecks_every_control_input_after_preflight_and_readiness(
+    mutation: str,
+    message: str,
+) -> None:
+    class MutatingApi(FakeWindowsCameraApi):
+        armed = False
+        mutated = False
+
+        def key_is_down(self, virtual_key: int) -> bool:
+            result = super().key_is_down(virtual_key)
+            if self.armed and not self.mutated:
+                self.mutated = True
+                if mutation == "left":
+                    self.mouse_is_down = True
+                elif mutation == "middle":
+                    self.middle_mouse_is_down = True
+                elif mutation == "other-arrow":
+                    self.down_keys.add(0x25)
+                else:
+                    self.down_keys.add(0x11)
+            return result
+
+    api = MutatingApi()
+    control = WindowsCameraControl(123, api)
+    assert control.preflight().supported
+    api.armed = True
+
+    with pytest.raises(WindowsCameraError, match=message) as exc_info:
+        control.key_down("right")
+
+    assert isinstance(exc_info.value, CameraInputNotAttemptedError)
+    assert api.mutated
+    assert not any(
+        isinstance(item, tuple) and item[0] == "key" for item in api.calls
+    )
 
 
 def test_unowned_key_up_is_refused_without_releasing_external_state() -> None:
@@ -1555,7 +1603,8 @@ def test_lifecycle_cleanup_attempts_mouse_and_every_key_after_one_failure() -> N
     control = WindowsCameraControl(123, api)
     partial_click = control.click_compass(608, 49)
     assert not partial_click.complete
-    control.key_down("right")
+    control._held_keys[0x27] = True
+    api.down_keys.add(0x27)
 
     api.mouse_up_results = [0, 0, 0]
     with pytest.raises(WindowsCameraError, match="left mouse button"):

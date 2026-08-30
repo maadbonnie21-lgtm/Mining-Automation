@@ -20,6 +20,7 @@ from .camera_plan import (
     REVIEWED_CAMERA_WHEEL_POINT,
     REVIEWED_COMPASS_POINT,
     CameraDragAxis,
+    CameraInputNotAttemptedError,
     CameraInputOperation,
     CameraInputReceipt,
     CameraMiddleDrag,
@@ -40,6 +41,7 @@ __all__ = [
     "WindowsCameraApi",
     "WindowsCameraControl",
     "WindowsCameraError",
+    "WindowsCameraPreInputError",
 ]
 
 CAMERA_WHEEL_EVENT_INTERVAL_SECONDS = 0.025
@@ -84,6 +86,10 @@ def _require_complete_window_title_snapshot(
 
 class WindowsCameraError(RuntimeError):
     """The target window or Win32 input boundary is not safe to use."""
+
+
+class WindowsCameraPreInputError(WindowsCameraError, CameraInputNotAttemptedError):
+    """A Windows safety veto raised before any input API call."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -417,14 +423,23 @@ class WindowsCameraControl:
         )
 
     def key_down(self, key: str) -> CameraInputReceipt:
-        self._require_ready()
-        virtual_key, extended = _key_code(key)
-        if virtual_key in self._held_keys or self._api.key_is_down(virtual_key):
-            raise WindowsCameraError(f"refusing key-down because {key!r} is already held")
-        # GetAsyncKeyState and application callbacks can yield long enough for
-        # focus or geometry to change. Recheck at the last seam before global
-        # keyboard injection, just as pointer input rechecks after cursor move.
-        self._require_ready()
+        try:
+            self._require_ready()
+            virtual_key, extended = _key_code(key)
+            if virtual_key in self._held_keys or self._api.key_is_down(virtual_key):
+                raise WindowsCameraError(
+                    f"refusing key-down because {key!r} is already held"
+                )
+            # GetAsyncKeyState and application callbacks can yield long enough for
+            # focus or geometry to change. Recheck at the last seam before global
+            # keyboard injection, just as pointer input rechecks after cursor move.
+            self._require_ready()
+            self._require_all_control_inputs_released(operation=f"{key} key-down")
+        except Exception as exc:
+            # Everything above is strictly before ``send_key``. Preserve that
+            # distinction for canonical zero-input evidence without weakening
+            # the conservative handling of an exception from ``send_key``.
+            raise WindowsCameraPreInputError(str(exc)) from exc
         try:
             completed = self._api.send_key(
                 virtual_key,

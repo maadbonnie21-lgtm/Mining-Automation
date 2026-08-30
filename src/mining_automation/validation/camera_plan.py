@@ -45,6 +45,15 @@ class CameraPlanError(RuntimeError):
     """Base error raised while validating or executing a camera plan."""
 
 
+class CameraInputNotAttemptedError(CameraPlanError):
+    """A platform veto proved that no physical input call was attempted.
+
+    Adapters may raise this marker only before crossing their operating-system
+    input boundary.  Exceptions from an input API, including ambiguous calls
+    that may have inserted an event before raising, must not use this type.
+    """
+
+
 class CameraPreflightError(CameraPlanError):
     """The target window is not safe to operate."""
 
