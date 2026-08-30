@@ -36,6 +36,14 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--package", type=Path, required=True)
     evaluate.add_argument("--review", type=Path, required=True)
     evaluate.add_argument("--fixture-output", type=Path)
+    evaluate.add_argument(
+        "--candidate-fixture",
+        type=Path,
+        help=(
+            "verified prior non-activating sanitized candidate to replay when "
+            "the current reviewed calibration cannot independently derive geometry"
+        ),
+    )
     return parser
 
 
@@ -68,6 +76,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_head_sha=expected_head,
             fixture_output_directory=(
                 None if args.fixture_output is None else Path(args.fixture_output)
+            ),
+            candidate_fixture_directory=(
+                None
+                if args.candidate_fixture is None
+                else Path(args.candidate_fixture)
             ),
         )
         print("INVENTORY REVIEW/REPLAY GATE " + ("PASS" if report.passed else "BLOCKED"))

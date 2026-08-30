@@ -42,6 +42,10 @@ from .live_validation_session import (
     load_inventory_validation_session,
 )
 from .localization import InventoryFrameProfile
+from .sanitized_replay import (
+    InventorySanitizedReplayError,
+    replay_inventory_sanitized_fixture,
+)
 
 __all__ = [
     "CandidateInventoryProfile",
@@ -379,6 +383,13 @@ class CandidateInventoryProfile:
     reference_region_sha256: str
     package_manifest_sha256: str
     review_record_sha256: str
+    evaluation_package_manifest_sha256: str
+    evaluation_review_record_sha256: str
+    derivation_mode: str
+    source_fixture_dataset_id: str | None
+    source_fixture_manifest_sha256: str | None
+    source_fixture_schema_version: int | None
+    source_fixture_generator_head_sha: str | None
 
     def as_dict(self, detector: InventoryDetector) -> dict[str, object]:
         layout = self.profile.layout
@@ -399,6 +410,23 @@ class CandidateInventoryProfile:
                 "reference_payload_sha256": self.reference_payload_sha256,
                 "reference_region_sha256": self.reference_region_sha256,
                 "review_record_sha256": self.review_record_sha256,
+            },
+            "evaluation": {
+                "package_manifest_sha256": self.evaluation_package_manifest_sha256,
+                "review_record_sha256": self.evaluation_review_record_sha256,
+            },
+            "derivation": {
+                "mode": self.derivation_mode,
+                "source_fixture": (
+                    None
+                    if self.source_fixture_manifest_sha256 is None
+                    else {
+                        "dataset_id": self.source_fixture_dataset_id,
+                        "generator_head_sha": self.source_fixture_generator_head_sha,
+                        "manifest_sha256": self.source_fixture_manifest_sha256,
+                        "schema_version": self.source_fixture_schema_version,
+                    }
+                ),
             },
             "frame": {
                 "height": self.profile.frame_height,
@@ -655,6 +683,7 @@ def run_inventory_review_replay_gate(
     *,
     expected_head_sha: str,
     fixture_output_directory: Path | None = None,
+    candidate_fixture_directory: Path | None = None,
 ) -> InventoryReviewReplayReport:
     """Derive a candidate from reviewed evidence and run production replay.
 
@@ -702,61 +731,83 @@ def run_inventory_review_replay_gate(
     reference_key = (reference_review.session_id, reference_review.capture_id)
     geometry_key = (geometry_review.session_id, geometry_review.capture_id)
     _require_shared_profile_environment(package, reference_review, geometry_review)
-    reference_frame = frames[reference_key]
-    geometry_frame = frames[geometry_key]
-    region, column_stride, row_stride = _derive_unique_inventory_lattice(
-        reference_frame,
-        geometry_frame,
-    )
-    if row_stride <= INVENTORY_SLOT_SIZE:
-        raise InventoryReviewGateError(
-            "derived candidate has no horizontal row-gutter obstruction guard"
-        )
-    if not _contains(package.review_region, region):
-        raise InventoryReviewGateError(
-            "derived inventory region falls outside the privacy review crop"
-        )
-
     manifest_sha = review.package_manifest_sha256
     review_sha = _sha256(review_record_path.read_bytes())
-    reference_region = _crop_bgra(reference_frame, region)
-    reference_region_sha = _sha256(reference_region)
-    candidate_identity = _sha256(
-        _canonical_json(
-            {
-                "frame": {
-                    "height": reference_frame.height,
-                    "pixel_format": reference_frame.pixel_format.value,
-                    "width": reference_frame.width,
-                },
-                "geometry": [*region.as_tuple(), column_stride, row_stride],
-                "reference_region_sha256": reference_region_sha,
-            }
-        ).encode("utf-8")
-    )
-    profile_id = f"candidate-live-inventory-{candidate_identity[:16]}"
-    layout = InventoryGridLayout(
-        profile_id=profile_id,
-        column_stride=column_stride,
-        row_stride=row_stride,
-    )
-    profile = InventoryFrameProfile(
-        profile_id=profile_id,
-        frame_width=reference_frame.width,
-        frame_height=reference_frame.height,
-        region=region,
-        layout=layout,
-    )
-    detector = inventory_detector_from_profile(profile, reference_frame)
-    candidate = CandidateInventoryProfile(
-        profile=profile,
-        reference_session_id=reference_review.session_id,
-        reference_capture_id=reference_review.capture_id,
-        reference_payload_sha256=_sha256(reference_frame.payload),
-        reference_region_sha256=reference_region_sha,
-        package_manifest_sha256=manifest_sha,
-        review_record_sha256=review_sha,
-    )
+    imported_candidate_gap: str | None = None
+    if candidate_fixture_directory is None:
+        reference_frame = frames[reference_key]
+        geometry_frame = frames[geometry_key]
+        region, column_stride, row_stride = _derive_unique_inventory_lattice(
+            reference_frame,
+            geometry_frame,
+        )
+        if row_stride <= INVENTORY_SLOT_SIZE:
+            raise InventoryReviewGateError(
+                "derived candidate has no horizontal row-gutter obstruction guard"
+            )
+        if not _contains(package.review_region, region):
+            raise InventoryReviewGateError(
+                "derived inventory region falls outside the privacy review crop"
+            )
+        reference_region = _crop_bgra(reference_frame, region)
+        reference_region_sha = _sha256(reference_region)
+        candidate_identity = _sha256(
+            _canonical_json(
+                {
+                    "frame": {
+                        "height": reference_frame.height,
+                        "pixel_format": reference_frame.pixel_format.value,
+                        "width": reference_frame.width,
+                    },
+                    "geometry": [*region.as_tuple(), column_stride, row_stride],
+                    "reference_region_sha256": reference_region_sha,
+                }
+            ).encode("utf-8")
+        )
+        profile_id = f"candidate-live-inventory-{candidate_identity[:16]}"
+        layout = InventoryGridLayout(
+            profile_id=profile_id,
+            column_stride=column_stride,
+            row_stride=row_stride,
+        )
+        profile = InventoryFrameProfile(
+            profile_id=profile_id,
+            frame_width=reference_frame.width,
+            frame_height=reference_frame.height,
+            region=region,
+            layout=layout,
+        )
+        detector = inventory_detector_from_profile(profile, reference_frame)
+        candidate = CandidateInventoryProfile(
+            profile=profile,
+            reference_session_id=reference_review.session_id,
+            reference_capture_id=reference_review.capture_id,
+            reference_payload_sha256=_sha256(reference_frame.payload),
+            reference_region_sha256=reference_region_sha,
+            package_manifest_sha256=manifest_sha,
+            review_record_sha256=review_sha,
+            evaluation_package_manifest_sha256=manifest_sha,
+            evaluation_review_record_sha256=review_sha,
+            derivation_mode="current-reviewed-lattice",
+            source_fixture_dataset_id=None,
+            source_fixture_manifest_sha256=None,
+            source_fixture_schema_version=None,
+            source_fixture_generator_head_sha=None,
+        )
+    else:
+        candidate, detector = _load_reusable_candidate(
+            candidate_fixture_directory,
+            package,
+            review,
+            frames,
+            evaluation_package_manifest_sha256=manifest_sha,
+            evaluation_review_record_sha256=review_sha,
+        )
+        region = candidate.profile.region
+        imported_candidate_gap = (
+            "current review calibration did not independently derive candidate "
+            "geometry; a prior reviewed non-activating sanitized candidate was reused"
+        )
 
     if not isinstance(output_directory, Path):
         raise TypeError("output_directory must be pathlib.Path")
@@ -831,6 +882,7 @@ def run_inventory_review_replay_gate(
         review,
         results,
         candidate.reference_region_sha256,
+        imported_candidate_gap=imported_candidate_gap,
     )
     failed_cases = [
         f"{item['session_id']}/{item['capture_id']}"
@@ -877,6 +929,228 @@ def run_inventory_review_replay_gate(
             expected_head_sha,
         )
     return report
+
+
+def _load_reusable_candidate(
+    fixture_directory: Path,
+    package: InventoryReviewPackage,
+    review: InventoryReviewRecord,
+    frames: Mapping[tuple[str, str], Frame],
+    *,
+    evaluation_package_manifest_sha256: str,
+    evaluation_review_record_sha256: str,
+) -> tuple[CandidateInventoryProfile, InventoryDetector]:
+    """Load a prior non-activating candidate and bind it to exact new evidence.
+
+    Reuse is an evaluation convenience, never a new derivation or release
+    authority.  The source fixture must first pass its complete deterministic
+    replay contract.  Its original reference must then be present in the new
+    package, explicitly reviewer-approved as a clear empty inventory, and
+    byte-identical in both full-frame and detector-owned-region provenance.
+    """
+    if not isinstance(fixture_directory, Path):
+        raise TypeError("candidate_fixture_directory must be pathlib.Path")
+    try:
+        source_report = replay_inventory_sanitized_fixture(fixture_directory)
+    except InventorySanitizedReplayError as exc:
+        raise InventoryReviewGateError(
+            f"reusable candidate fixture is invalid: {exc}"
+        ) from exc
+    if not source_report.passed:
+        raise InventoryReviewGateError(
+            "reusable candidate fixture does not reproduce its frozen expectations"
+        )
+
+    manifest_path = fixture_directory / _FIXTURE_MANIFEST_NAME
+    manifest_bytes = _read_bytes(manifest_path, "reusable candidate manifest")
+    manifest_sha = _sha256(manifest_bytes)
+    if manifest_sha != source_report.fixture_manifest_sha256:
+        raise InventoryReviewGateError(
+            "reusable candidate manifest changed after source replay verification"
+        )
+    raw = _json_object(manifest_bytes, "reusable candidate manifest")
+    if raw.get("schema_version") != source_report.fixture_schema_version:
+        raise InventoryReviewGateError("reusable candidate fixture schema changed")
+    if _required_text(raw, "dataset_id") != source_report.dataset_id:
+        raise InventoryReviewGateError("reusable candidate dataset identity changed")
+    source_generator_head: str | None = None
+    if source_report.fixture_schema_version == SANITIZED_FIXTURE_SCHEMA_VERSION:
+        source_generator_head = _required_git_sha(
+            _required_object(raw, "generated"), "git_head_sha"
+        )
+        if source_generator_head != source_report.generator_head_sha:
+            raise InventoryReviewGateError(
+                "reusable candidate generator identity changed"
+            )
+
+    candidate_raw = _required_object(raw, "candidate")
+    evidence = _required_object(candidate_raw, "evidence")
+    reference_session_id = _required_text(evidence, "reference_session_id")
+    reference_capture_id = _required_text(evidence, "reference_capture_id")
+    reference_payload_sha = _required_sha256(evidence, "reference_payload_sha256")
+    reference_region_sha = _required_sha256(evidence, "reference_region_sha256")
+    source_package_sha = _required_sha256(evidence, "package_manifest_sha256")
+    source_review_sha = _required_sha256(evidence, "review_record_sha256")
+
+    frame_raw = _required_object(candidate_raw, "frame")
+    frame_width = _required_positive_int(frame_raw, "width")
+    frame_height = _required_positive_int(frame_raw, "height")
+    if frame_raw.get("pixel_format") != PixelFormat.BGRA8888.value:
+        raise InventoryReviewGateError("reusable candidate frame is not BGRA8888")
+    profile_raw = _required_object(candidate_raw, "profile")
+    profile_id = _required_text(profile_raw, "profile_id")
+    if profile_id != source_report.profile_id:
+        raise InventoryReviewGateError("reusable candidate profile identity changed")
+    region = _region_value(profile_raw.get("region"), "candidate profile region")
+    if not region.fits(frame_width, frame_height):
+        raise InventoryReviewGateError("reusable candidate region is outside its frame")
+    if not _contains(package.review_region, region):
+        raise InventoryReviewGateError(
+            "reusable candidate region falls outside the new privacy review crop"
+        )
+    if (
+        profile_raw.get("columns") != INVENTORY_COLUMNS
+        or profile_raw.get("rows") != INVENTORY_ROWS
+        or profile_raw.get("slot_size") != INVENTORY_SLOT_SIZE
+    ):
+        raise InventoryReviewGateError(
+            "reusable candidate does not use the authoritative inventory grid"
+        )
+    layout = InventoryGridLayout(
+        profile_id=profile_id,
+        column_stride=_required_positive_int(profile_raw, "column_stride"),
+        row_stride=_required_positive_int(profile_raw, "row_stride"),
+    )
+    if layout.row_stride <= INVENTORY_SLOT_SIZE:
+        raise InventoryReviewGateError(
+            "reusable candidate has no horizontal row-gutter obstruction guard"
+        )
+    if layout.region_at(region.x, region.y) != region:
+        raise InventoryReviewGateError(
+            "reusable candidate region differs from its declared grid"
+        )
+
+    reference_key = (reference_session_id, reference_capture_id)
+    try:
+        reference_frame = frames[reference_key]
+    except KeyError as exc:
+        raise InventoryReviewGateError(
+            "reusable candidate reference is absent from the new reviewed package"
+        ) from exc
+    if (
+        reference_frame.width != frame_width
+        or reference_frame.height != frame_height
+        or reference_frame.pixel_format is not PixelFormat.BGRA8888
+    ):
+        raise InventoryReviewGateError(
+            "reusable candidate frame geometry differs from its exact owned reference"
+        )
+    reviews = {
+        (item.session_id, item.capture_id): item for item in review.cases
+    }
+    reference_review = reviews[reference_key]
+    if (
+        reference_review.decision is not InventoryReviewDecision.APPROVED
+        or reference_review.visibility is not InventoryEvidenceVisibility.INVENTORY
+        or reference_review.validation_split
+        not in (InventoryValidationSplit.REFERENCE, InventoryValidationSplit.HELD_OUT)
+        or reference_review.occupied_slots != 0
+        or not reference_review.operator_intent_confirmed
+        or reference_review.hover_visible
+        or reference_review.selected_item_visible
+        or reference_review.drag_visible
+        or reference_review.quantity_text_visible
+    ):
+        raise InventoryReviewGateError(
+            "reusable candidate reference is not explicitly reviewed as a clear empty inventory"
+        )
+    package_cases = {
+        (item.session_id, item.capture_id): item for item in package.cases
+    }
+    package_reference = package_cases[reference_key]
+    if (
+        package_reference.source_payload_sha256 != reference_payload_sha
+        or _sha256(reference_frame.payload) != reference_payload_sha
+    ):
+        raise InventoryReviewGateError(
+            "reusable candidate reference full-payload provenance differs from the owned frame"
+        )
+
+    fixture_references: list[dict[str, object]] = []
+    for value in _required_list(raw, "cases"):
+        case = _object_value(value, "reusable candidate case")
+        if case.get("case_id") == f"{reference_session_id}/{reference_capture_id}":
+            fixture_references.append(case)
+    if len(fixture_references) != 1:
+        raise InventoryReviewGateError(
+            "reusable candidate fixture does not contain its unique reference case"
+        )
+    fixture_reference = fixture_references[0]
+    source = _required_object(fixture_reference, "source")
+    source_session = next(
+        item for item in package.source_sessions if item.session_id == reference_session_id
+    )
+    if (
+        _required_sha256(source, "payload_sha256") != reference_payload_sha
+        or _required_sha256(source, "report_sha256")
+        != package_reference.source_report_sha256
+        or _required_sha256(source, "session_report_sha256")
+        != source_session.session_report_sha256
+    ):
+        raise InventoryReviewGateError(
+            "reusable candidate source provenance differs from the new reviewed package"
+        )
+    fixture_region_path, fixture_region_sha = _verified_relative_artifact(
+        fixture_directory,
+        _required_object(fixture_reference, "frame_region"),
+        "reusable candidate reference region",
+    )
+    owned_reference_region = _crop_bgra(reference_frame, region)
+    if (
+        fixture_region_sha != reference_region_sha
+        or _sha256(owned_reference_region) != reference_region_sha
+        or _read_bytes(fixture_region_path, "reusable candidate reference region")
+        != owned_reference_region
+    ):
+        raise InventoryReviewGateError(
+            "reusable candidate reference region differs from the exact owned frame"
+        )
+
+    profile = InventoryFrameProfile(
+        profile_id=profile_id,
+        frame_width=frame_width,
+        frame_height=frame_height,
+        region=region,
+        layout=layout,
+    )
+    detector = inventory_detector_from_profile(profile, reference_frame)
+    if (
+        detector.metadata.detector_id != source_report.detector_id
+        or detector.metadata.version != source_report.detector_version
+        or detector.configuration_id != source_report.configuration_id
+    ):
+        raise InventoryReviewGateError(
+            "reusable candidate differs from unchanged production detector defaults"
+        )
+    return (
+        CandidateInventoryProfile(
+            profile=profile,
+            reference_session_id=reference_session_id,
+            reference_capture_id=reference_capture_id,
+            reference_payload_sha256=reference_payload_sha,
+            reference_region_sha256=reference_region_sha,
+            package_manifest_sha256=source_package_sha,
+            review_record_sha256=source_review_sha,
+            evaluation_package_manifest_sha256=evaluation_package_manifest_sha256,
+            evaluation_review_record_sha256=evaluation_review_record_sha256,
+            derivation_mode="imported-reviewed-sanitized-fixture",
+            source_fixture_dataset_id=source_report.dataset_id,
+            source_fixture_manifest_sha256=manifest_sha,
+            source_fixture_schema_version=source_report.fixture_schema_version,
+            source_fixture_generator_head_sha=source_generator_head,
+        ),
+        detector,
+    )
 
 
 def _review_agreement(
@@ -1605,8 +1879,12 @@ def _remaining_release_gaps(
     review: InventoryReviewRecord,
     results: Sequence[Mapping[str, object]],
     reference_region_sha256: str,
+    *,
+    imported_candidate_gap: str | None = None,
 ) -> list[str]:
     gaps: list[str] = []
+    if imported_candidate_gap is not None:
+        gaps.append(imported_candidate_gap)
     for source in package.source_sessions:
         if source.capture_build is None or not _is_git_sha(source.capture_build):
             gaps.append(

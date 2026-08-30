@@ -63,6 +63,7 @@ class InventorySanitizedReplayReport:
     cases: tuple[InventorySanitizedReplayCaseResult, ...]
     fixture_schema_version: int
     generator_head_sha: str | None
+    fixture_manifest_sha256: str
 
     @property
     def passed(self) -> bool:
@@ -264,6 +265,7 @@ def replay_inventory_sanitized_fixture(
         cases=tuple(results),
         fixture_schema_version=schema_version,
         generator_head_sha=generator_head_sha,
+        fixture_manifest_sha256=_sha256(manifest_bytes),
     )
 
 

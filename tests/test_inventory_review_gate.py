@@ -269,6 +269,23 @@ def _rewrite_package_manifest(
     return load_inventory_review_package(package_directory)
 
 
+def _rewrite_sanitized_manifest(
+    fixture_directory: Path,
+    mutate: Callable[[dict[str, object]], None],
+) -> None:
+    manifest_path = fixture_directory / "manifest.json"
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert isinstance(raw, dict)
+    mutate(raw)
+    manifest = _canonical_json_bytes(raw)
+    manifest_path.write_bytes(manifest)
+    digest = hashlib.sha256(manifest).hexdigest()
+    (fixture_directory / "manifest.json.sha256").write_text(
+        f"{digest}  manifest.json\n",
+        encoding="utf-8",
+    )
+
+
 def _review_for_package(package: InventoryReviewPackage) -> InventoryReviewRecord:
     manifest_sha = hashlib.sha256(package.manifest_path.read_bytes()).hexdigest()
     reviews: list[InventoryCaseReview] = []
@@ -779,6 +796,16 @@ def test_gate_uses_unchanged_detector_and_publishes_only_nonactivating_candidate
     assert isinstance(candidate, dict)
     assert candidate["activation_allowed"] is False
     assert candidate["review_status"] == "candidate-awaiting-release-approval"
+    assert candidate["derivation"] == {
+        "mode": "current-reviewed-lattice",
+        "source_fixture": None,
+    }
+    assert candidate["evaluation"] == {
+        "package_manifest_sha256": candidate["evidence"][
+            "package_manifest_sha256"
+        ],
+        "review_record_sha256": candidate["evidence"]["review_record_sha256"],
+    }
     detector = candidate["detector"]
     assert isinstance(detector, dict)
     assert detector["detector_id"] == "inventory-baseline"
@@ -842,6 +869,138 @@ def test_gate_uses_unchanged_detector_and_publishes_only_nonactivating_candidate
     )
     with pytest.raises(InventorySanitizedReplayError, match="dataset identity"):
         replay_inventory_sanitized_fixture(tmp_path / "sanitized-fixture")
+
+
+def test_gate_reuses_verified_nonactivating_candidate_without_rederiving_geometry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _session(tmp_path)
+    package = _prepare(tmp_path, session)
+    review_path = _write_review(
+        tmp_path / "review.json",
+        _review_record(package.package_directory),
+    )
+    source_fixture = tmp_path / "source-fixture"
+    original = run_inventory_review_replay_gate(
+        (session.session_directory,),
+        package.package_directory,
+        review_path,
+        tmp_path / "original-output",
+        expected_head_sha=_HEAD_SHA,
+        fixture_output_directory=source_fixture,
+    )
+
+    def must_not_derive(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("imported candidate must not rederive geometry")
+
+    monkeypatch.setattr(
+        "mining_automation.perception.inventory.review_gate._derive_unique_inventory_lattice",
+        must_not_derive,
+    )
+    imported_fixture = tmp_path / "imported-fixture"
+    report = run_inventory_review_replay_gate(
+        (session.session_directory,),
+        package.package_directory,
+        review_path,
+        tmp_path / "imported-output",
+        expected_head_sha=_HEAD_SHA,
+        fixture_output_directory=imported_fixture,
+        candidate_fixture_directory=source_fixture,
+    )
+
+    candidate = report.payload["candidate"]
+    assert isinstance(candidate, dict)
+    original_candidate = original.payload["candidate"]
+    assert isinstance(original_candidate, dict)
+    assert candidate["activation_allowed"] is False
+    assert candidate["evidence"] == original_candidate["evidence"]
+    assert candidate["evaluation"] == {
+        "package_manifest_sha256": original_candidate["evidence"][
+            "package_manifest_sha256"
+        ],
+        "review_record_sha256": original_candidate["evidence"][
+            "review_record_sha256"
+        ],
+    }
+    source_manifest = source_fixture / "manifest.json"
+    assert candidate["derivation"] == {
+        "mode": "imported-reviewed-sanitized-fixture",
+        "source_fixture": {
+            "dataset_id": json.loads(source_manifest.read_text(encoding="utf-8"))[
+                "dataset_id"
+            ],
+            "generator_head_sha": _HEAD_SHA,
+            "manifest_sha256": hashlib.sha256(source_manifest.read_bytes()).hexdigest(),
+            "schema_version": 2,
+        },
+    }
+    assert report.passed is False
+    assert (
+        "current review calibration did not independently derive candidate geometry; "
+        "a prior reviewed non-activating sanitized candidate was reused"
+        in report.payload["remaining_release_gaps"]
+    )
+    results = report.payload["results"]
+    assert isinstance(results, list)
+    assert all(item["sanitized_observation_equals_exact_owned"] is True for item in results)
+    replay = replay_inventory_sanitized_fixture(imported_fixture)
+    assert replay.passed
+    assert replay.fixture_schema_version == 2
+    assert replay.generator_head_sha == _HEAD_SHA
+
+
+def test_reused_candidate_rejects_rebound_full_payload_provenance(
+    tmp_path: Path,
+) -> None:
+    session = _session(tmp_path)
+    package = _prepare(tmp_path, session)
+    review_path = _write_review(
+        tmp_path / "review.json",
+        _review_record(package.package_directory),
+    )
+    source_fixture = tmp_path / "source-fixture"
+    run_inventory_review_replay_gate(
+        (session.session_directory,),
+        package.package_directory,
+        review_path,
+        tmp_path / "original-output",
+        expected_head_sha=_HEAD_SHA,
+        fixture_output_directory=source_fixture,
+    )
+
+    def rebind_source_payload(raw: dict[str, object]) -> None:
+        raw["schema_version"] = 1
+        raw.pop("generated")
+        candidate = raw["candidate"]
+        cases = raw["cases"]
+        assert isinstance(candidate, dict)
+        assert isinstance(cases, list)
+        evidence = candidate["evidence"]
+        first = cases[0]
+        assert isinstance(evidence, dict)
+        assert isinstance(first, dict)
+        source = first["source"]
+        assert isinstance(source, dict)
+        evidence["reference_payload_sha256"] = "0" * 64
+        source["payload_sha256"] = "0" * 64
+
+    _rewrite_sanitized_manifest(source_fixture, rebind_source_payload)
+    assert replay_inventory_sanitized_fixture(source_fixture).passed
+
+    with pytest.raises(
+        InventoryReviewGateError,
+        match="full-payload provenance differs from the owned frame",
+    ):
+        run_inventory_review_replay_gate(
+            (session.session_directory,),
+            package.package_directory,
+            review_path,
+            tmp_path / "must-not-exist",
+            expected_head_sha=_HEAD_SHA,
+            candidate_fixture_directory=source_fixture,
+        )
+    assert not (tmp_path / "must-not-exist").exists()
 
 
 def test_release_gate_reports_every_required_semantic_evidence_gap(

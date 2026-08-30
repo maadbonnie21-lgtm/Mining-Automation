@@ -133,6 +133,36 @@ exactly one 4-by-7 lattice with the authoritative 32-by-32 slot ownership and a
 non-empty row gutter. No operator label supplies an anchor or stride. Ambiguous,
 missing, out-of-frame, or review-crop-escaping geometry fails the gate.
 
+When a newer explicitly reviewed campaign cannot independently reproduce a
+unique lattice, the gate may evaluate an existing verified non-activating
+candidate without changing reviewer roles:
+
+```powershell
+python tools/review_inventory_session.py evaluate `
+  --session diagnostics/inventory-validation-sessions/<SESSION-1> `
+  --session diagnostics/inventory-validation-sessions/<SESSION-2> `
+  --package diagnostics/inventory-review/<PACKAGE> `
+  --review diagnostics/inventory-review/<REVIEW>.json `
+  --candidate-fixture tests/fixtures/perception/inventory-live-candidate-safety-v1 `
+  --output diagnostics/inventory-review-results/<RUN> `
+  --fixture-output diagnostics/inventory-sanitized-fixtures/<RUN> `
+  --expected-head <EXACT_40_CHARACTER_HEAD>
+```
+
+Imported-candidate mode first replays and verifies the complete source fixture.
+Its original empty reference must also occur in the new package, be explicitly
+reviewed as a clear empty inventory, and match the durable owned full-frame,
+capture-report, session-report, and detector-owned-region bytes. The unchanged
+production detector is then rebuilt from that exact owned frame. The report and
+new schema-v2 fixture bind the source fixture manifest SHA-256, schema,
+generator head when available, and dataset ID while preserving the original
+candidate package/review provenance.
+
+Reuse can never make the release gate pass. It adds an explicit gap saying that
+the current selected calibration did not independently derive geometry. This
+mode exists to turn all newly reviewed frames into permanent deterministic
+regressions without rewriting reviewer truth or inventing a synthetic profile.
+
 The gate constructs the candidate with `inventory_detector_from_profile` and
 the normal production defaults. It runs that detector twice per case:
 
@@ -175,6 +205,9 @@ is missing. The gate explicitly reports gaps for:
 - no reviewer-confirmed held/drag evidence;
 - no reviewed wide-sprite evidence;
 - fewer than three byte-distinct varied-art positive evidence sets.
+
+An imported prior candidate also reports the current-review independent
+geometry-derivation gap described above.
 
 An operator-intent mismatch remains visible in the review record, but it is not
 itself release truth and does not invalidate an otherwise useful case. For
@@ -225,6 +258,9 @@ Evaluation writes:
 The canonical report records the exact Git head, detector ID/version and
 configuration ID, package and review hashes, source payload identity, reviewer
 truth, current detector result, agreement rule, and remaining release gaps.
+For imported candidates it separately records original derivation provenance
+and current evaluation-package/review bindings; the two authorities are never
+collapsed into one hash.
 Every path and hash is verified on load. A changed package, review record,
 source session, report, or artifact is rejected rather than silently replayed.
 
