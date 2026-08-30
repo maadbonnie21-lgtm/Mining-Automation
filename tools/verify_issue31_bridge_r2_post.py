@@ -639,7 +639,7 @@ def _authenticate_capture_one_shot_authorization(
     north: _AuthenticatedNorthHandoff,
     commit_sha256: str,
 ) -> CameraBridgeAuthorizationReservation:
-    """Re-read the fixed common-Git sentinel and bind its exact report object."""
+    """Re-read the fixed host-global sentinel and bind its exact report object."""
 
     authorization_value = _object(value, "capture one-shot authorization")
     authorization_sha256 = authorization_value.get("sentinel_sha256")

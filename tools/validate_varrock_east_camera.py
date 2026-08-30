@@ -1007,7 +1007,7 @@ def _require_bridge_capture_runtime_identities() -> None:
             "issue31-r2-north-up-p610-y043-reset-right-0043-v1"
         ),
         "authorization_id": "issue31-r2-one-shot-bridge-authorization",
-        "authorization_version": "2.2.0",
+        "authorization_version": "2.2.1",
         "bridge_id": "issue31-fixed-camera-bridge-capture-r2",
         "bridge_version": "1.1.0",
         "detector_id": _EXPECTED_DETECTOR_ID,

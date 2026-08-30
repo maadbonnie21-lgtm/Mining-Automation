@@ -739,7 +739,7 @@ still the canonical evidence. The machine planner disposition is
 The development-only fixed Right `0.043 s` capture wrapper is retained as an
 inert reviewed design for a possible future qualified planner result. Its
 same-transaction evidence protocol remains version `1.1.0`; the separate
-source-owned one-shot authorization protocol is R2.2 version `2.2.0`. The
+source-owned one-shot authorization protocol is R2.2 version `2.2.1`. The
 physical gate is still `False`. If later authorized on a separately reviewed
 exact head, it must start from an authenticated fresh compass-north state and:
 
@@ -768,10 +768,18 @@ exact head, it must start from an authenticated fresh compass-north state and:
 R2.2 gives the possible future capture exactly one source-owned campaign slot.
 The campaign ID, action family, Right key, `0.043 s` hold, one-primitive limit,
 `1005x1078` geometry, target-title policy, camera adapter, input lease, and
-reviewed pointer point are compile-time values. The sentinel path is a fixed
-child of the repository's physical **common Git directory**, so a different
-worktree, `--case-prefix`, `--output`, environment variable, report path, or
-caller-provided head cannot create another slot. The path is not a CLI value.
+reviewed pointer point and repository identity are compile-time values. On
+Windows the authoritative namespace is resolved from `FOLDERID_LocalAppData`
+through `SHGetKnownFolderPath`, then extended only with fixed source-owned path
+components. It does not read `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`, `HOME`,
+Git variables, `PATH`, the current directory, or any CLI value. Namespace
+location does not depend on the repository path. Every linked worktree and
+every independent clone for the same Windows
+user and host therefore resolves the same campaign slot. The fixed namespace
+must be a non-reparse directory on a local fixed volume with hard-link support;
+resolution, inspection, or access ambiguity fails closed before backend or
+input construction. The physical common Git directory remains relevant only
+to clean-head provenance and is not authorization authority or a fallback.
 
 After the fresh decision/arm/preflight/commit sequence and after the existing
 clean-head, exact-window, registration, geometry, pointer, freshness, and
@@ -792,7 +800,7 @@ precheck can reject an already consumed campaign before the lease/backend; the
 exclusive create at the final seam remains the authoritative race-safe
 operation.
 
-A different fixed file in the same common-Git namespace seals completion. It
+A different fixed file in the same host-global namespace seals completion. It
 is created only after the exact capture report and sidecar exist, the
 machine-global input lease has released successfully, and the clean head has
 been rechecked. The canonical bytes are first written and `fsync`ed to a fixed,
@@ -861,7 +869,7 @@ and its four explicit semantic states. It pins the one-second arm maximum,
 requires the exact north/decision/arm/arm-origin/commit/input/receipt/post
 ordering, keeps north-to-input below 30 seconds, requires at least the frozen
 `0.043 s` delivery interval, and authenticates the one-second post settle. It
-also reopens the one fixed common-Git campaign sentinel, exact-compares its
+also reopens the one fixed host-global campaign sentinel, exact-compares its
 canonical bytes and digest, and requires the capture report's one-shot object
 to match the authenticated sentinel. Finally it reopens and exact-compares the
 separate completion seal described above. A missing, partial, stale, or

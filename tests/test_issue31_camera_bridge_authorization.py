@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +14,7 @@ import pytest
 from mining_automation.validation import camera_bridge_authorization as authorization
 from mining_automation.validation.camera_bridge_authorization import (
     CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID,
+    CAMERA_BRIDGE_AUTHORIZATION_VERSION,
     CameraBridgeAuthorizationConsumedError,
     CameraBridgeAuthorizationError,
     CameraBridgeAuthorizationEvidence,
@@ -29,6 +31,20 @@ from mining_automation.validation.camera_bridge_authorization import (
 )
 
 _HEAD = "a" * 40
+
+
+@pytest.fixture(autouse=True)
+def host_authority_base(
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    """Keep host-global tests deterministic without adding a product override."""
+
+    # Keep the host root short enough that the fixed production namespace and
+    # campaign filename remain below the legacy Win32 MAX_PATH boundary.
+    root = tmp_path_factory.mktemp("h")
+    monkeypatch.setattr(authorization, "_host_authority_base", lambda: root)
+    return root
 
 
 def _evidence(seed: str = "baseline") -> CameraBridgeAuthorizationEvidence:
@@ -49,10 +65,17 @@ def _evidence(seed: str = "baseline") -> CameraBridgeAuthorizationEvidence:
     )
 
 
-def _ordinary_repository(tmp_path: Path) -> Path:
-    repository = tmp_path / "repository"
+def _ordinary_repository(tmp_path: Path, name: str = "repository") -> Path:
+    repository = tmp_path / name
     (repository / ".git").mkdir(parents=True)
     return repository
+
+
+def _independent_repositories(tmp_path: Path) -> tuple[Path, Path]:
+    return (
+        _ordinary_repository(tmp_path, "independent-clone-a"),
+        _ordinary_repository(tmp_path, "independent-clone-b"),
+    )
 
 
 def _completion(
@@ -92,6 +115,7 @@ def _linked_worktree(tmp_path: Path, name: str) -> tuple[Path, Path]:
 def test_campaign_path_is_source_owned_and_shared_across_worktrees(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    host_authority_base: Path,
 ) -> None:
     first, common = _linked_worktree(tmp_path, "first")
     second, _ = _linked_worktree(tmp_path, "second")
@@ -103,8 +127,62 @@ def test_campaign_path_is_source_owned_and_shared_across_worktrees(
 
     assert repository_common_git_dir(first) == common.resolve()
     assert first_path == second_path
+    assert first_path.is_relative_to(host_authority_base)
     assert first_path.name == f"{CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID}.consumed.json"
     assert str(tmp_path / "forged-git-dir") not in str(first_path)
+
+
+def test_campaign_path_is_shared_across_independent_clones(
+    tmp_path: Path,
+    host_authority_base: Path,
+) -> None:
+    first, second = _independent_repositories(tmp_path)
+
+    first_path = camera_bridge_authorization_sentinel_path(first)
+    second_path = camera_bridge_authorization_sentinel_path(second)
+
+    assert repository_common_git_dir(first) != repository_common_git_dir(second)
+    assert first_path == second_path
+    assert first_path.is_relative_to(host_authority_base)
+    assert not first_path.is_relative_to(first)
+    assert not first_path.is_relative_to(second)
+    assert first_path.name == f"{CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID}.consumed.json"
+
+
+def test_host_authority_path_cannot_be_redirected_by_environment_or_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    host_authority_base: Path,
+) -> None:
+    first, second = _independent_repositories(tmp_path)
+    expected = camera_bridge_authorization_sentinel_path(first)
+    hostile_root = tmp_path / "hostile"
+    hostile_root.mkdir()
+    for name in (
+        "APPDATA",
+        "GIT_COMMON_DIR",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "HOME",
+        "LOCALAPPDATA",
+        "PATH",
+        "PROGRAMDATA",
+        "PYTHONPATH",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "XDG_CONFIG_HOME",
+        "XDG_STATE_HOME",
+    ):
+        monkeypatch.setenv(name, str(hostile_root / name.lower()))
+    alternate_cwd = tmp_path / "alternate-cwd"
+    alternate_cwd.mkdir()
+    monkeypatch.chdir(alternate_cwd)
+
+    assert camera_bridge_authorization_sentinel_path(second) == expected
+    assert expected.is_relative_to(host_authority_base)
+    assert not expected.is_relative_to(hostile_root)
+    assert list(hostile_root.rglob("*.consumed.json")) == []
 
 
 def test_disabled_source_gate_cannot_create_reservation(tmp_path: Path) -> None:
@@ -141,6 +219,16 @@ def test_reservation_is_canonical_and_authenticates_exact_evidence(
     )
 
     assert authenticated.as_dict() == reservation.as_dict()
+    assert reservation.as_dict()["schema_version"] == 2
+    assert reservation.as_dict()["authorization_version"] == (
+        CAMERA_BRIDGE_AUTHORIZATION_VERSION
+    )
+    assert reservation.as_dict()["authority_scope"] == (
+        "persistent_per_user_host_global"
+    )
+    assert reservation.as_dict()["independent_repository_clone_can_bypass"] is False
+    assert "sentinel_relative_to_host_authority_root" in reservation.as_dict()
+    assert "sentinel_relative_to_common_git_dir" not in reservation.as_dict()
     assert reservation.as_dict()["state"] == "consumed_at_final_pre_input_seam"
     assert reservation.as_dict()["maximum_physical_primitives"] == 1
     assert reservation.as_dict()["hold_seconds"] == 0.043
@@ -160,11 +248,11 @@ def test_reservation_is_canonical_and_authenticates_exact_evidence(
     }
 
 
-def test_sequential_and_alternate_worktree_second_reservations_are_refused(
+def test_sequential_independent_clone_and_linked_worktree_reservations_are_refused(
     tmp_path: Path,
 ) -> None:
-    first, _ = _linked_worktree(tmp_path, "first")
-    second, _ = _linked_worktree(tmp_path, "second")
+    first, second = _independent_repositories(tmp_path)
+    linked, _ = _linked_worktree(tmp_path, "linked")
     reserve_camera_bridge_authorization(
         first,
         git_head_sha=_HEAD,
@@ -172,7 +260,7 @@ def test_sequential_and_alternate_worktree_second_reservations_are_refused(
         evidence=_evidence(),
     )
 
-    for repository in (first, second):
+    for repository in (first, second, linked):
         with pytest.raises(
             CameraBridgeAuthorizationConsumedError,
             match="already been consumed",
@@ -190,32 +278,37 @@ def test_precreated_partial_or_tampered_sentinel_is_permanently_consumed(
     tmp_path: Path,
     contents: bytes,
 ) -> None:
-    repository = _ordinary_repository(tmp_path)
-    sentinel = camera_bridge_authorization_sentinel_path(repository)
+    first, second = _independent_repositories(tmp_path)
+    sentinel = camera_bridge_authorization_sentinel_path(first)
     sentinel.parent.mkdir(parents=True)
     sentinel.write_bytes(contents)
 
-    with pytest.raises(CameraBridgeAuthorizationConsumedError):
-        reserve_camera_bridge_authorization(
-            repository,
-            git_head_sha=_HEAD,
-            source_gate_enabled=True,
-            evidence=_evidence(),
-        )
-    with pytest.raises(CameraBridgeAuthorizationError, match="partial, stale, or tampered"):
-        authenticate_camera_bridge_authorization(
-            repository,
-            git_head_sha=_HEAD,
-            expected_sentinel_sha256="0" * 64,
-            evidence=_evidence(),
-        )
+    for repository in (first, second):
+        assert camera_bridge_authorization_consumed(repository)
+        with pytest.raises(CameraBridgeAuthorizationConsumedError):
+            reserve_camera_bridge_authorization(
+                repository,
+                git_head_sha=_HEAD,
+                source_gate_enabled=True,
+                evidence=_evidence(),
+            )
+        with pytest.raises(
+            CameraBridgeAuthorizationError,
+            match="partial, stale, or tampered",
+        ):
+            authenticate_camera_bridge_authorization(
+                repository,
+                git_head_sha=_HEAD,
+                expected_sentinel_sha256="0" * 64,
+                evidence=_evidence(),
+            )
 
 
 def test_interruption_after_exclusive_create_leaves_campaign_consumed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repository = _ordinary_repository(tmp_path)
+    first, second = _independent_repositories(tmp_path)
 
     def fail_fsync(_descriptor: int) -> None:
         raise OSError("simulated durable-write interruption")
@@ -223,31 +316,33 @@ def test_interruption_after_exclusive_create_leaves_campaign_consumed(
     monkeypatch.setattr(authorization.os, "fsync", fail_fsync)
     with pytest.raises(OSError, match="simulated durable-write interruption"):
         reserve_camera_bridge_authorization(
-            repository,
+            first,
             git_head_sha=_HEAD,
             source_gate_enabled=True,
             evidence=_evidence(),
         )
 
-    assert camera_bridge_authorization_consumed(repository)
-    with pytest.raises(CameraBridgeAuthorizationConsumedError):
-        reserve_camera_bridge_authorization(
-            repository,
-            git_head_sha=_HEAD,
-            source_gate_enabled=True,
-            evidence=_evidence(),
-        )
+    for repository in (first, second):
+        assert camera_bridge_authorization_consumed(repository)
+        with pytest.raises(CameraBridgeAuthorizationConsumedError):
+            reserve_camera_bridge_authorization(
+                repository,
+                git_head_sha=_HEAD,
+                source_gate_enabled=True,
+                evidence=_evidence(),
+            )
 
 
 def test_concurrent_reservation_has_exactly_one_atomic_winner(
     tmp_path: Path,
 ) -> None:
-    repository = _ordinary_repository(tmp_path)
+    first, second = _independent_repositories(tmp_path)
+    repositories = (first, second)
 
-    def attempt() -> str:
+    def attempt(index: int) -> str:
         try:
             reserve_camera_bridge_authorization(
-                repository,
+                repositories[index % len(repositories)],
                 git_head_sha=_HEAD,
                 source_gate_enabled=True,
                 evidence=_evidence(),
@@ -257,7 +352,7 @@ def test_concurrent_reservation_has_exactly_one_atomic_winner(
         return "reserved"
 
     with ThreadPoolExecutor(max_workers=8) as executor:
-        outcomes = list(executor.map(lambda _index: attempt(), range(8)))
+        outcomes = list(executor.map(attempt, range(8)))
 
     assert outcomes.count("reserved") == 1
     assert outcomes.count("consumed") == 7
@@ -265,12 +360,16 @@ def test_concurrent_reservation_has_exactly_one_atomic_winner(
 
 def test_separate_processes_share_one_reservation_and_restart_stays_consumed(
     tmp_path: Path,
+    host_authority_base: Path,
 ) -> None:
-    repository = _ordinary_repository(tmp_path)
+    first, second = _independent_repositories(tmp_path)
+    third = _ordinary_repository(tmp_path, "independent-clone-c")
+    physical_boundary = tmp_path / "physical-boundary.marker"
     script = """
 import hashlib
 import sys
 from pathlib import Path
+from mining_automation.validation import camera_bridge_authorization as authorization
 from mining_automation.validation.camera_bridge_authorization import (
     CameraBridgeAuthorizationConsumedError,
     CameraBridgeAuthorizationEvidence,
@@ -292,6 +391,7 @@ evidence = CameraBridgeAuthorizationEvidence(
     target_class_name="SunAwtFrame",
     target_title_sha256=digest("title"),
 )
+authorization._host_authority_base = lambda: Path(sys.argv[2])
 sys.stdin.readline()
 try:
     reserve_camera_bridge_authorization(
@@ -303,18 +403,49 @@ try:
 except CameraBridgeAuthorizationConsumedError:
     print("consumed", flush=True)
 else:
+    Path(sys.argv[3]).write_text("physical-boundary\\n", encoding="utf-8")
     print("reserved", flush=True)
 """
 
+    def hostile_environment(label: str) -> dict[str, str]:
+        environment = dict(os.environ)
+        hostile_root = tmp_path / f"hostile-{label}"
+        for name in (
+            "APPDATA",
+            "GIT_COMMON_DIR",
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "HOME",
+            "LOCALAPPDATA",
+            "PATH",
+            "PROGRAMDATA",
+            "PYTHONPATH",
+            "TEMP",
+            "TMP",
+            "USERPROFILE",
+            "XDG_STATE_HOME",
+        ):
+            environment[name] = str(hostile_root / name.lower())
+        return environment
+
     processes = [
         subprocess.Popen(
-            [sys.executable, "-c", script, str(repository)],
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(repository),
+                str(host_authority_base),
+                str(physical_boundary),
+            ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            cwd=repository,
+            env=hostile_environment(str(index)),
         )
-        for _index in range(2)
+        for index, repository in enumerate((first, second), start=1)
     ]
     for process in processes:
         assert process.stdin is not None
@@ -327,25 +458,36 @@ else:
         results.append(stdout.strip())
 
     assert sorted(results) == ["consumed", "reserved"]
+    assert physical_boundary.read_text(encoding="utf-8") == "physical-boundary\n"
 
     restarted = subprocess.run(
-        [sys.executable, "-c", script, str(repository)],
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(third),
+            str(host_authority_base),
+            str(physical_boundary),
+        ],
         input="start\n",
         check=True,
         capture_output=True,
         text=True,
         timeout=15.0,
+        cwd=third,
+        env=hostile_environment("restart"),
     )
     assert restarted.stdout.strip() == "consumed"
+    assert physical_boundary.read_text(encoding="utf-8") == "physical-boundary\n"
 
 
 def test_authentication_rejects_changed_head_or_dynamic_evidence(
     tmp_path: Path,
 ) -> None:
-    repository = _ordinary_repository(tmp_path)
+    first, second = _independent_repositories(tmp_path)
     evidence = _evidence()
     reservation = reserve_camera_bridge_authorization(
-        repository,
+        first,
         git_head_sha=_HEAD,
         source_gate_enabled=True,
         evidence=evidence,
@@ -357,7 +499,7 @@ def test_authentication_rejects_changed_head_or_dynamic_evidence(
     ):
         with pytest.raises(CameraBridgeAuthorizationError):
             authenticate_camera_bridge_authorization(
-                repository,
+                second,
                 git_head_sha=head,
                 expected_sentinel_sha256=reservation.sentinel_sha256,
                 evidence=observed_evidence,
@@ -367,9 +509,9 @@ def test_authentication_rejects_changed_head_or_dynamic_evidence(
 def test_completion_requires_and_authenticates_exact_full_transaction(
     tmp_path: Path,
 ) -> None:
-    repository = _ordinary_repository(tmp_path)
+    first, second = _independent_repositories(tmp_path)
     reservation = reserve_camera_bridge_authorization(
-        repository,
+        first,
         git_head_sha=_HEAD,
         source_gate_enabled=True,
         evidence=_evidence(),
@@ -377,19 +519,28 @@ def test_completion_requires_and_authenticates_exact_full_transaction(
     evidence = _completion(reservation.sentinel_sha256)
 
     completion = seal_camera_bridge_completion(
-        repository,
+        second,
         git_head_sha=_HEAD,
         reservation=reservation,
         evidence=evidence,
     )
     authenticated = authenticate_camera_bridge_completion(
-        repository,
+        first,
         git_head_sha=_HEAD,
         expected_seal_sha256=completion.seal_sha256,
         evidence=evidence,
     )
 
     assert completion.as_dict() == authenticated.as_dict()
+    assert completion.as_dict()["schema_version"] == 2
+    assert completion.as_dict()["authorization_version"] == (
+        CAMERA_BRIDGE_AUTHORIZATION_VERSION
+    )
+    assert completion.as_dict()["authority_scope"] == (
+        "persistent_per_user_host_global"
+    )
+    assert "seal_relative_to_host_authority_root" in completion.as_dict()
+    assert "seal_relative_to_common_git_dir" not in completion.as_dict()
     assert completion.as_dict()["state"] == "complete_post_input_transaction_sealed"
     assert completion.as_dict()[
         "reservation_without_this_seal_is_not_an_action_transition"
@@ -399,9 +550,10 @@ def test_completion_requires_and_authenticates_exact_full_transaction(
 def test_concurrent_completion_seal_has_one_immutable_winner(
     tmp_path: Path,
 ) -> None:
-    repository = _ordinary_repository(tmp_path)
+    first, second = _independent_repositories(tmp_path)
+    repositories = (first, second)
     reservation = reserve_camera_bridge_authorization(
-        repository,
+        first,
         git_head_sha=_HEAD,
         source_gate_enabled=True,
         evidence=_evidence(),
@@ -411,10 +563,13 @@ def test_concurrent_completion_seal_has_one_immutable_winner(
         for index in range(8)
     )
 
-    def attempt(evidence: CameraBridgeCompletionEvidence) -> tuple[str, str]:
+    def attempt(
+        indexed: tuple[int, CameraBridgeCompletionEvidence],
+    ) -> tuple[str, str]:
+        index, evidence = indexed
         try:
             completion = seal_camera_bridge_completion(
-                repository,
+                repositories[index % len(repositories)],
                 git_head_sha=_HEAD,
                 reservation=reservation,
                 evidence=evidence,
@@ -424,7 +579,7 @@ def test_concurrent_completion_seal_has_one_immutable_winner(
         return "sealed", completion.seal_sha256
 
     with ThreadPoolExecutor(max_workers=8) as executor:
-        outcomes = list(executor.map(attempt, candidates))
+        outcomes = list(executor.map(attempt, enumerate(candidates)))
 
     winners = [outcome for outcome in outcomes if outcome[0] == "sealed"]
     assert len(winners) == 1
@@ -432,7 +587,7 @@ def test_concurrent_completion_seal_has_one_immutable_winner(
     winner_index = outcomes.index(winners[0])
     winner_evidence = candidates[winner_index]
     authenticated = authenticate_camera_bridge_completion(
-        repository,
+        second,
         git_head_sha=_HEAD,
         expected_seal_sha256=winners[0][1],
         evidence=winner_evidence,
@@ -443,7 +598,7 @@ def test_concurrent_completion_seal_has_one_immutable_winner(
             continue
         with pytest.raises(CameraBridgeAuthorizationError, match="partial, stale"):
             authenticate_camera_bridge_completion(
-                repository,
+                first,
                 git_head_sha=_HEAD,
                 expected_seal_sha256=winners[0][1],
                 evidence=evidence,
@@ -453,42 +608,160 @@ def test_concurrent_completion_seal_has_one_immutable_winner(
 def test_reservation_without_completion_cannot_authenticate_action_transition(
     tmp_path: Path,
 ) -> None:
-    repository = _ordinary_repository(tmp_path)
+    first, second = _independent_repositories(tmp_path)
     reservation = reserve_camera_bridge_authorization(
-        repository,
+        first,
         git_head_sha=_HEAD,
         source_gate_enabled=True,
         evidence=_evidence(),
     )
 
-    assert not camera_bridge_completion_seal_path(repository).exists()
+    assert not camera_bridge_completion_seal_path(second).exists()
     with pytest.raises(CameraBridgeAuthorizationError, match="completion seal"):
         authenticate_camera_bridge_completion(
-            repository,
+            second,
             git_head_sha=_HEAD,
             expected_seal_sha256="0" * 64,
             evidence=_completion(reservation.sentinel_sha256),
         )
 
 
+@pytest.mark.parametrize("artifact", ["pending", "final"])
 @pytest.mark.parametrize("contents", [b"", b"interrupted", b"{}\n"])
 def test_partial_or_tampered_completion_is_permanently_fail_closed(
     tmp_path: Path,
+    artifact: str,
     contents: bytes,
 ) -> None:
-    repository = _ordinary_repository(tmp_path)
-    completion_path = camera_bridge_completion_seal_path(repository)
+    first, second = _independent_repositories(tmp_path)
+    completion_path = (
+        authorization._completion_pending_path(first)
+        if artifact == "pending"
+        else camera_bridge_completion_seal_path(first)
+    )
     completion_path.parent.mkdir(parents=True)
     completion_path.write_bytes(contents)
 
-    assert camera_bridge_authorization_consumed(repository)
-    with pytest.raises(CameraBridgeAuthorizationConsumedError):
-        reserve_camera_bridge_authorization(
-            repository,
+    for repository in (first, second):
+        assert camera_bridge_authorization_consumed(repository)
+        with pytest.raises(CameraBridgeAuthorizationConsumedError):
+            reserve_camera_bridge_authorization(
+                repository,
+                git_head_sha=_HEAD,
+                source_gate_enabled=True,
+                evidence=_evidence(),
+            )
+        with pytest.raises(CameraBridgeAuthorizationError):
+            authenticate_camera_bridge_completion(
+                repository,
+                git_head_sha=_HEAD,
+                expected_seal_sha256="0" * 64,
+                evidence=_completion("1" * 64),
+            )
+
+
+def test_interrupted_completion_pending_consumes_every_independent_clone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first, second = _independent_repositories(tmp_path)
+    reservation = reserve_camera_bridge_authorization(
+        first,
+        git_head_sha=_HEAD,
+        source_gate_enabled=True,
+        evidence=_evidence(),
+    )
+    evidence = _completion(reservation.sentinel_sha256)
+
+    def fail_fsync(_descriptor: int) -> None:
+        raise OSError("simulated host-global completion interruption")
+
+    monkeypatch.setattr(authorization.os, "fsync", fail_fsync)
+    with pytest.raises(OSError, match="host-global completion interruption"):
+        seal_camera_bridge_completion(
+            first,
             git_head_sha=_HEAD,
-            source_gate_enabled=True,
-            evidence=_evidence(),
+            reservation=reservation,
+            evidence=evidence,
         )
+
+    for repository in (first, second):
+        assert authorization._completion_pending_path(repository).exists()
+        assert not camera_bridge_completion_seal_path(repository).exists()
+        assert camera_bridge_authorization_consumed(repository)
+        with pytest.raises(CameraBridgeAuthorizationConsumedError):
+            seal_camera_bridge_completion(
+                repository,
+                git_head_sha=_HEAD,
+                reservation=reservation,
+                evidence=evidence,
+            )
+        with pytest.raises(CameraBridgeAuthorizationError, match="completion seal"):
+            authenticate_camera_bridge_completion(
+                repository,
+                git_head_sha=_HEAD,
+                expected_seal_sha256="0" * 64,
+                evidence=evidence,
+            )
+
+
+def test_broken_host_namespace_fails_closed_without_repository_fallback(
+    tmp_path: Path,
+    host_authority_base: Path,
+) -> None:
+    first, second = _independent_repositories(tmp_path)
+    namespace_blocker = host_authority_base / "Mining-Automation"
+    namespace_blocker.write_text("not a directory\n", encoding="utf-8")
+
+    for repository in (first, second):
+        with pytest.raises(
+            CameraBridgeAuthorizationError,
+            match="redirect or non-directory",
+        ):
+            camera_bridge_authorization_consumed(repository)
+        with pytest.raises(
+            CameraBridgeAuthorizationError,
+            match="redirect or non-directory",
+        ):
+            reserve_camera_bridge_authorization(
+                repository,
+                git_head_sha=_HEAD,
+                source_gate_enabled=True,
+                evidence=_evidence(),
+            )
+        assert not (repository / ".git" / "mining-automation-authorizations").exists()
+
+
+def test_redirected_known_folder_root_fails_closed_without_repository_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    host_authority_base: Path,
+) -> None:
+    first, second = _independent_repositories(tmp_path)
+    real_redirect_check = authorization._is_link_or_reparse
+
+    def redirected_root(path: Path) -> bool:
+        return path == host_authority_base or real_redirect_check(path)
+
+    monkeypatch.setattr(authorization, "_is_link_or_reparse", redirected_root)
+
+    for repository in (first, second):
+        with pytest.raises(
+            CameraBridgeAuthorizationError,
+            match="Known Folder contains a redirect",
+        ):
+            camera_bridge_authorization_consumed(repository)
+        with pytest.raises(
+            CameraBridgeAuthorizationError,
+            match="Known Folder contains a redirect",
+        ):
+            reserve_camera_bridge_authorization(
+                repository,
+                git_head_sha=_HEAD,
+                source_gate_enabled=True,
+                evidence=_evidence(),
+            )
+        assert not (repository / ".git" / "mining-automation-authorizations").exists()
 
 
 def test_component_hash_is_canonical_and_rejects_non_json_values() -> None:

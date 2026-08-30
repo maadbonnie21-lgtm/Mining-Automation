@@ -518,7 +518,7 @@ def test_post_ingestion_reauthenticates_fixed_one_shot_sentinel(
     )
     reservation = CameraBridgeAuthorizationReservation(
         git_head_sha=_HEAD,
-        common_git_dir=tmp_path,
+        host_authority_root=tmp_path,
         sentinel_path=tmp_path / "fixed.consumed.json",
         sentinel_sha256="6" * 64,
         evidence=dynamic,
@@ -536,6 +536,53 @@ def test_post_ingestion_reauthenticates_fixed_one_shot_sentinel(
 
     monkeypatch.setattr(tool, "authenticate_camera_bridge_authorization", authenticate)
     report_value = reservation.as_dict()
+    assert report_value == {
+        "schema_version": 2,
+        "authorization_id": "issue31-r2-one-shot-bridge-authorization",
+        "authorization_version": "2.2.1",
+        "campaign_id": "issue31-r2-north-up-p610-y043-reset-right-0043-v1",
+        "repository_id": "maadbonnie21-lgtm/Mining-Automation",
+        "authority_scope": "persistent_per_user_host_global",
+        "authority_provider_id": "windows-known-folder-localappdata-v1",
+        "state": "consumed_at_final_pre_input_seam",
+        "authorization_authority": "source_literal_gate_only",
+        "source_gate_enabled_at_consumption": True,
+        "git_head_sha": _HEAD,
+        "objective_id": "north-up-p610-y043-reset:right-key-hold-0.043s",
+        "required_source_sha256": (
+            "c1cb6fe144600ce153b1ceb2e90d6e375d42babea1eda6a08120efbc7ed2a4cd"
+        ),
+        "action_id": "issue31-fixed-camera-bridge-capture-r2",
+        "action_family": "north-up-p610-y043-reset",
+        "key": "right",
+        "hold_seconds": 0.043,
+        "maximum_physical_primitives": 1,
+        "target_policy": {
+            "camera_adapter": (
+                "mining_automation.validation.windows_camera.WindowsCameraControl"
+            ),
+            "client_height": 1078,
+            "client_width": 1005,
+            "input_lease": (
+                "mining_automation.validation.camera_input_lease."
+                "WindowsCameraInputLease"
+            ),
+            "reviewed_pointer_logical_client": [400, 50],
+            "title_substring": "runelite",
+        },
+        "authenticated_evidence_not_authority": dynamic.as_dict(),
+        "owner": "Mining-Automation Issue #31 R2 bridge launcher",
+        "sentinel_relative_to_host_authority_root": "fixed.consumed.json",
+        "sentinel_sha256": "6" * 64,
+        "source_owned_namespace": True,
+        "persistent_per_user_host_global_authority": True,
+        "independent_repository_clone_can_bypass": False,
+        "caller_can_select_campaign": False,
+        "caller_can_select_action_or_target": False,
+        "alternate_output_or_case_prefix_can_bypass": False,
+        "second_invocation_can_send_input": False,
+    }
+    assert "sentinel_relative_to_common_git_dir" not in report_value
     tool._authenticate_capture_one_shot_authorization(
         report_value,
         expected_head=_HEAD,
@@ -558,6 +605,38 @@ def test_post_ingestion_reauthenticates_fixed_one_shot_sentinel(
             commit_sha256="5" * 64,
         )
 
+    tampered_bindings = (
+        ("sentinel_relative_to_host_authority_root", "other.consumed.json"),
+        ("authority_provider_id", "repository-common-git-v1"),
+        ("repository_id", "attacker/other-repository"),
+    )
+    for field_name, field_value in tampered_bindings:
+        forged = dict(report_value)
+        forged[field_name] = field_value
+        with pytest.raises(ValueError, match="does not bind the fixed sentinel"):
+            tool._authenticate_capture_one_shot_authorization(
+                forged,
+                expected_head=_HEAD,
+                expected_r1_sha256=_R1_SHA,
+                expected_r2_sha256=_R2_SHA,
+                north=north,
+                commit_sha256="5" * 64,
+            )
+
+    retained_common_git_authority = dict(report_value)
+    retained_common_git_authority["sentinel_relative_to_common_git_dir"] = (
+        "mining-automation-authorizations/issue31-camera-bridge/fixed.consumed.json"
+    )
+    with pytest.raises(ValueError, match="does not bind the fixed sentinel"):
+        tool._authenticate_capture_one_shot_authorization(
+            retained_common_git_authority,
+            expected_head=_HEAD,
+            expected_r1_sha256=_R1_SHA,
+            expected_r2_sha256=_R2_SHA,
+            north=north,
+            commit_sha256="5" * 64,
+        )
+
 
 def test_post_ingestion_requires_exact_completion_seal(
     tool: ModuleType,
@@ -566,7 +645,7 @@ def test_post_ingestion_requires_exact_completion_seal(
 ) -> None:
     authorization = CameraBridgeAuthorizationReservation(
         git_head_sha=_HEAD,
-        common_git_dir=tmp_path,
+        host_authority_root=tmp_path,
         sentinel_path=tmp_path / "fixed.consumed.json",
         sentinel_sha256="6" * 64,
         evidence=CameraBridgeAuthorizationEvidence(
@@ -639,7 +718,7 @@ def test_missing_completion_seal_rejects_offline_ingestion(
 ) -> None:
     authorization = CameraBridgeAuthorizationReservation(
         git_head_sha=_HEAD,
-        common_git_dir=tmp_path,
+        host_authority_root=tmp_path,
         sentinel_path=tmp_path / "fixed.consumed.json",
         sentinel_sha256="6" * 64,
         evidence=CameraBridgeAuthorizationEvidence(

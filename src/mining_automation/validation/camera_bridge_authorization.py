@@ -9,13 +9,16 @@ checks.
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import os
 import re
+import stat
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Any, Final, cast
 
 from mining_automation.validation.camera_bridge_capture import (
     CAMERA_BRIDGE_CAPTURE_HOLD_SECONDS,
@@ -35,12 +38,15 @@ from mining_automation.validation.camera_plan import (
 CAMERA_BRIDGE_AUTHORIZATION_ID: Final[str] = (
     "issue31-r2-one-shot-bridge-authorization"
 )
-CAMERA_BRIDGE_AUTHORIZATION_VERSION: Final[str] = "2.2.0"
+CAMERA_BRIDGE_AUTHORIZATION_VERSION: Final[str] = "2.2.1"
 CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID: Final[str] = (
     "issue31-r2-north-up-p610-y043-reset-right-0043-v1"
 )
+CAMERA_BRIDGE_AUTHORIZATION_REPOSITORY_ID: Final[str] = (
+    "maadbonnie21-lgtm/Mining-Automation"
+)
 
-_AUTHORIZATION_SCHEMA_VERSION: Final[int] = 1
+_AUTHORIZATION_SCHEMA_VERSION: Final[int] = 2
 _AUTHORIZATION_STATE: Final[str] = "consumed_at_final_pre_input_seam"
 _AUTHORIZATION_ACTION_FAMILY: Final[str] = "north-up-p610-y043-reset"
 _AUTHORIZATION_KEY: Final[str] = "right"
@@ -51,9 +57,12 @@ _AUTHORIZATION_CAMERA_ADAPTER: Final[str] = (
 _AUTHORIZATION_INPUT_LEASE: Final[str] = (
     "mining_automation.validation.camera_input_lease.WindowsCameraInputLease"
 )
-_AUTHORIZATION_NAMESPACE: Final[Path] = Path(
-    "mining-automation-authorizations"
-) / "issue31-camera-bridge"
+_HOST_AUTHORIZATION_NAMESPACE: Final[Path] = (
+    Path("Mining-Automation")
+    / "host-authorizations"
+    / "maadbonnie21-lgtm-Mining-Automation"
+    / "issue31-camera-bridge"
+)
 _AUTHORIZATION_SENTINEL_NAME: Final[str] = (
     f"{CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID}.consumed.json"
 )
@@ -65,6 +74,10 @@ _COMPLETION_PENDING_NAME: Final[str] = (
 )
 _SHA256_PATTERN: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
 _HEAD_PATTERN: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{40}")
+_HOST_AUTHORITY_PROVIDER_ID: Final[str] = "windows-known-folder-localappdata-v1"
+_LOCAL_APP_DATA_FOLDER_ID: Final[uuid.UUID] = uuid.UUID(
+    "f1b32785-6fba-4fcf-9d55-7b8e7f157091"
+)
 
 
 class CameraBridgeAuthorizationError(RuntimeError):
@@ -73,6 +86,40 @@ class CameraBridgeAuthorizationError(RuntimeError):
 
 class CameraBridgeAuthorizationConsumedError(CameraBridgeAuthorizationError):
     """Raised whenever the one-shot campaign sentinel already exists."""
+
+
+class _WindowsGuid(ctypes.Structure):
+    """ctypes representation of a Windows KNOWNFOLDERID."""
+
+    _fields_ = (
+        ("data1", ctypes.c_uint32),
+        ("data2", ctypes.c_uint16),
+        ("data3", ctypes.c_uint16),
+        ("data4", ctypes.c_ubyte * 8),
+    )
+
+    @classmethod
+    def from_uuid(cls, value: uuid.UUID) -> _WindowsGuid:
+        fields = value.fields
+        node = int(fields[5]).to_bytes(6, "big")
+        return cls(
+            fields[0],
+            fields[1],
+            fields[2],
+            (ctypes.c_ubyte * 8)(fields[3], fields[4], *node),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _HostAuthorizationStore:
+    """Fixed host-global paths for the one source-owned campaign."""
+
+    root: Path
+    namespace: Path
+    namespace_identity: tuple[int, int] | None
+    sentinel_path: Path
+    completion_pending_path: Path
+    completion_seal_path: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,20 +183,23 @@ class CameraBridgeAuthorizationReservation:
     """Authenticated receipt for the permanently consumed campaign slot."""
 
     git_head_sha: str
-    common_git_dir: Path
+    host_authority_root: Path
     sentinel_path: Path
     sentinel_sha256: str
     evidence: CameraBridgeAuthorizationEvidence
+    authority_namespace_identity: tuple[int, int] = (0, 0)
 
     def as_dict(self) -> dict[str, object]:
         """Return canonical report evidence without exposing an absolute path."""
 
-        relative_path = self.sentinel_path.relative_to(self.common_git_dir)
+        relative_path = self.sentinel_path.relative_to(self.host_authority_root)
         return {
             **_authorization_payload(self.git_head_sha, self.evidence),
-            "sentinel_relative_to_common_git_dir": relative_path.as_posix(),
+            "sentinel_relative_to_host_authority_root": relative_path.as_posix(),
             "sentinel_sha256": self.sentinel_sha256,
             "source_owned_namespace": True,
+            "persistent_per_user_host_global_authority": True,
+            "independent_repository_clone_can_bypass": False,
             "caller_can_select_campaign": False,
             "caller_can_select_action_or_target": False,
             "alternate_output_or_case_prefix_can_bypass": False,
@@ -207,18 +257,20 @@ class CameraBridgeCompletionSeal:
     """Authenticated receipt for a fully sealed bridge capture report."""
 
     git_head_sha: str
-    common_git_dir: Path
+    host_authority_root: Path
     seal_path: Path
     seal_sha256: str
     evidence: CameraBridgeCompletionEvidence
+    authority_namespace_identity: tuple[int, int] = (0, 0)
 
     def as_dict(self) -> dict[str, object]:
-        relative_path = self.seal_path.relative_to(self.common_git_dir)
+        relative_path = self.seal_path.relative_to(self.host_authority_root)
         return {
             **_completion_payload(self.git_head_sha, self.evidence),
-            "seal_relative_to_common_git_dir": relative_path.as_posix(),
+            "seal_relative_to_host_authority_root": relative_path.as_posix(),
             "seal_sha256": self.seal_sha256,
             "source_owned_namespace": True,
+            "persistent_per_user_host_global_authority": True,
         }
 
 
@@ -290,41 +342,370 @@ def repository_common_git_dir(repository_root: Path) -> Path:
     return resolved
 
 
+def _host_authority_base() -> Path:
+    """Resolve per-user LocalAppData through the Windows Known Folder API."""
+
+    if os.name != "nt":
+        raise CameraBridgeAuthorizationError(
+            "host-global bridge authorization requires Windows LocalAppData"
+        )
+    win_dll = getattr(ctypes, "WinDLL", None)
+    if win_dll is None:  # pragma: no cover - defensive Windows runtime guard
+        raise CameraBridgeAuthorizationError("Windows DLL loading is unavailable")
+    shell32 = cast(Any, win_dll("shell32", use_last_error=True))
+    ole32 = cast(Any, win_dll("ole32", use_last_error=True))
+    known_folder = shell32.SHGetKnownFolderPath
+    known_folder.argtypes = (
+        ctypes.POINTER(_WindowsGuid),
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    )
+    known_folder.restype = ctypes.c_long
+    free_memory = ole32.CoTaskMemFree
+    free_memory.argtypes = (ctypes.c_void_p,)
+    free_memory.restype = None
+    folder_id = _WindowsGuid.from_uuid(_LOCAL_APP_DATA_FOLDER_ID)
+    raw_path = ctypes.c_void_p()
+    result = cast(
+        int,
+        known_folder(
+            ctypes.byref(folder_id),
+            0,
+            None,
+            ctypes.byref(raw_path),
+        ),
+    )
+    if result != 0 or raw_path.value is None:
+        raise CameraBridgeAuthorizationError(
+            "SHGetKnownFolderPath(FOLDERID_LocalAppData) failed "
+            f"with HRESULT 0x{result & 0xFFFFFFFF:08x}"
+        )
+    try:
+        value = ctypes.wstring_at(raw_path.value)
+    finally:
+        free_memory(raw_path)
+    if not value or "\x00" in value:
+        raise CameraBridgeAuthorizationError(
+            "Windows LocalAppData Known Folder returned an invalid path"
+        )
+    return Path(value)
+
+
+def _is_link_or_reparse(path: Path) -> bool:
+    """Return whether an existing path can redirect fixed namespace lookup."""
+
+    metadata = os.lstat(path)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    return stat.S_ISLNK(metadata.st_mode) or bool(attributes & reparse_flag)
+
+
+def _path_exists_no_follow(path: Path, *, label: str) -> bool:
+    """Return false only for a proven absence; every ambiguity fails closed."""
+
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise CameraBridgeAuthorizationError(f"cannot inspect {label}: {path}") from exc
+    return True
+
+
+def _namespace_identity(namespace: Path) -> tuple[int, int]:
+    """Return a stable directory identity after rejecting path redirects."""
+
+    try:
+        metadata = os.lstat(namespace)
+    except OSError as exc:
+        raise CameraBridgeAuthorizationError(
+            f"cannot inspect host authorization namespace: {namespace}"
+        ) from exc
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or bool(attributes & reparse_flag)
+        or not stat.S_ISDIR(metadata.st_mode)
+    ):
+        raise CameraBridgeAuthorizationError(
+            "host authorization namespace is not a fixed directory"
+        )
+    return metadata.st_dev, metadata.st_ino
+
+
+def _validate_windows_host_volume(root: Path) -> None:
+    """Require a fixed local volume with hard-link support on Windows."""
+
+    if os.name != "nt":
+        return
+    win_dll = getattr(ctypes, "WinDLL", None)
+    if win_dll is None:  # pragma: no cover - defensive Windows runtime guard
+        raise CameraBridgeAuthorizationError("Windows DLL loading is unavailable")
+    kernel32 = cast(Any, win_dll("kernel32", use_last_error=True))
+    volume_path = ctypes.create_unicode_buffer(32768)
+    get_volume_path = kernel32.GetVolumePathNameW
+    get_volume_path.argtypes = (
+        ctypes.c_wchar_p,
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+    )
+    get_volume_path.restype = ctypes.c_int
+    if not get_volume_path(str(root), volume_path, len(volume_path)):
+        raise CameraBridgeAuthorizationError(
+            "cannot resolve host authorization volume"
+        )
+    get_drive_type = kernel32.GetDriveTypeW
+    get_drive_type.argtypes = (ctypes.c_wchar_p,)
+    get_drive_type.restype = ctypes.c_uint32
+    if cast(int, get_drive_type(volume_path.value)) != 3:
+        raise CameraBridgeAuthorizationError(
+            "host authorization volume must be a fixed local drive"
+        )
+    filesystem_flags = ctypes.c_uint32()
+    get_volume_information = kernel32.GetVolumeInformationW
+    get_volume_information.argtypes = (
+        ctypes.c_wchar_p,
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+    )
+    get_volume_information.restype = ctypes.c_int
+    if not get_volume_information(
+        volume_path.value,
+        None,
+        0,
+        None,
+        None,
+        ctypes.byref(filesystem_flags),
+        None,
+        0,
+    ):
+        raise CameraBridgeAuthorizationError(
+            "cannot inspect host authorization filesystem capabilities"
+        )
+    if not filesystem_flags.value & 0x00400000:
+        raise CameraBridgeAuthorizationError(
+            "host authorization filesystem does not support hard links"
+        )
+
+
+def _resolved_host_authority_root() -> Path:
+    """Resolve the source-owned host trust anchor without environment fallback."""
+
+    candidate = _host_authority_base()
+    if not candidate.is_absolute():
+        raise CameraBridgeAuthorizationError(
+            "host authorization Known Folder path is not absolute"
+        )
+    if os.name == "nt" and str(candidate).startswith(("\\\\", "//")):
+        raise CameraBridgeAuthorizationError(
+            "host authorization Known Folder may not be a network path"
+        )
+    cursor = Path(candidate.anchor)
+    for component in candidate.parts[1:]:
+        cursor /= component
+        if not _path_exists_no_follow(
+            cursor,
+            label="host authorization Known Folder component",
+        ):
+            raise CameraBridgeAuthorizationError(
+                f"host authorization Known Folder component is missing: {cursor}"
+            )
+        try:
+            if _is_link_or_reparse(cursor) or not cursor.is_dir():
+                raise CameraBridgeAuthorizationError(
+                    "host authorization Known Folder contains a redirect or "
+                    f"non-directory component: {cursor}"
+                )
+        except OSError as exc:
+            raise CameraBridgeAuthorizationError(
+                f"cannot inspect host authorization Known Folder: {cursor}"
+            ) from exc
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise CameraBridgeAuthorizationError(
+            f"cannot resolve host authorization root: {candidate}"
+        ) from exc
+    if not resolved.is_dir():
+        raise CameraBridgeAuthorizationError(
+            f"host authorization root is not a directory: {resolved}"
+        )
+    _validate_windows_host_volume(resolved)
+    return resolved
+
+
+def _host_authorization_store(
+    repository_root: Path,
+    *,
+    create_namespace: bool,
+) -> _HostAuthorizationStore:
+    """Resolve the same fixed host store from every valid repository clone."""
+
+    repository_worktree_git_dir(repository_root)
+    root = _resolved_host_authority_root()
+    cursor = root
+    namespace_missing = False
+    for component in _HOST_AUTHORIZATION_NAMESPACE.parts:
+        cursor = cursor / component
+        if namespace_missing:
+            if create_namespace:
+                try:
+                    cursor.mkdir()
+                except FileExistsError:
+                    pass
+            else:
+                continue
+        if not _path_exists_no_follow(
+            cursor,
+            label="host authorization namespace component",
+        ):
+            namespace_missing = True
+            if not create_namespace:
+                continue
+            try:
+                cursor.mkdir()
+            except FileExistsError:
+                pass
+        if not _path_exists_no_follow(
+            cursor,
+            label="host authorization namespace component",
+        ):
+            raise CameraBridgeAuthorizationError(
+                f"cannot create host authorization namespace: {cursor}"
+            )
+        try:
+            if _is_link_or_reparse(cursor) or not cursor.is_dir():
+                raise CameraBridgeAuthorizationError(
+                    "host authorization namespace contains a redirect or "
+                    f"non-directory component: {cursor}"
+                )
+        except OSError as exc:
+            raise CameraBridgeAuthorizationError(
+                f"cannot inspect host authorization namespace: {cursor}"
+            ) from exc
+    namespace = root / _HOST_AUTHORIZATION_NAMESPACE
+    try:
+        resolved_namespace = namespace.resolve(strict=create_namespace)
+        resolved_namespace.relative_to(root)
+    except (OSError, ValueError) as exc:
+        raise CameraBridgeAuthorizationError(
+            "host authorization namespace escaped its Known Folder root"
+        ) from exc
+    namespace_identity = (
+        _namespace_identity(namespace)
+        if _path_exists_no_follow(
+            namespace,
+            label="host authorization namespace",
+        )
+        else None
+    )
+    return _HostAuthorizationStore(
+        root=root,
+        namespace=namespace,
+        namespace_identity=namespace_identity,
+        sentinel_path=namespace / _AUTHORIZATION_SENTINEL_NAME,
+        completion_pending_path=namespace / _COMPLETION_PENDING_NAME,
+        completion_seal_path=namespace / _COMPLETION_SEAL_NAME,
+    )
+
+
 def camera_bridge_authorization_sentinel_path(repository_root: Path) -> Path:
-    """Return the sole source-owned sentinel path for this campaign."""
+    """Return the per-user host-global sentinel path for this campaign."""
 
-    common_git_dir = repository_common_git_dir(repository_root)
-    return _authorization_sentinel_from_common_git_dir(common_git_dir)
-
-
-def _authorization_sentinel_from_common_git_dir(common_git_dir: Path) -> Path:
-    return common_git_dir / _AUTHORIZATION_NAMESPACE / _AUTHORIZATION_SENTINEL_NAME
+    return _host_authorization_store(
+        repository_root,
+        create_namespace=False,
+    ).sentinel_path
 
 
 def camera_bridge_completion_seal_path(repository_root: Path) -> Path:
-    """Return the sole source-owned completion-seal path for this campaign."""
+    """Return the per-user host-global completion-seal path."""
 
-    common_git_dir = repository_common_git_dir(repository_root)
-    return _completion_seal_from_common_git_dir(common_git_dir)
-
-
-def _completion_seal_from_common_git_dir(common_git_dir: Path) -> Path:
-    return common_git_dir / _AUTHORIZATION_NAMESPACE / _COMPLETION_SEAL_NAME
+    return _host_authorization_store(
+        repository_root,
+        create_namespace=False,
+    ).completion_seal_path
 
 
-def _completion_pending_from_common_git_dir(common_git_dir: Path) -> Path:
-    return common_git_dir / _AUTHORIZATION_NAMESPACE / _COMPLETION_PENDING_NAME
+def _completion_pending_path(repository_root: Path) -> Path:
+    return _host_authorization_store(
+        repository_root,
+        create_namespace=False,
+    ).completion_pending_path
 
 
 def camera_bridge_authorization_consumed(repository_root: Path) -> bool:
-    """Return whether any reservation or completion artifact consumes R2.2."""
+    """Return whether any host-global artifact consumes the R2.2 campaign."""
 
-    common_git_dir = repository_common_git_dir(repository_root)
-    return os.path.lexists(
-        _authorization_sentinel_from_common_git_dir(common_git_dir)
-    ) or os.path.lexists(
-        _completion_pending_from_common_git_dir(common_git_dir)
-    ) or os.path.lexists(_completion_seal_from_common_git_dir(common_git_dir))
+    store = _host_authorization_store(
+        repository_root,
+        create_namespace=False,
+    )
+    return any(
+        _path_exists_no_follow(path, label="host authorization artifact")
+        for path in (
+            store.sentinel_path,
+            store.completion_pending_path,
+            store.completion_seal_path,
+        )
+    )
+
+
+def _read_regular_artifact(path: Path, *, label: str) -> bytes:
+    """Read one fixed artifact without accepting links or non-regular files."""
+
+    try:
+        before = os.lstat(path)
+    except OSError as exc:
+        raise CameraBridgeAuthorizationError(f"cannot inspect {label}: {path}") from exc
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+    attributes = getattr(before, "st_file_attributes", 0)
+    if (
+        stat.S_ISLNK(before.st_mode)
+        or bool(attributes & reparse_flag)
+        or not stat.S_ISREG(before.st_mode)
+    ):
+        raise CameraBridgeAuthorizationError(
+            f"{label} is not a fixed regular file: {path}"
+        )
+    try:
+        with path.open("rb") as artifact:
+            opened = os.fstat(artifact.fileno())
+            if (
+                opened.st_dev != before.st_dev
+                or opened.st_ino != before.st_ino
+                or not stat.S_ISREG(opened.st_mode)
+            ):
+                raise CameraBridgeAuthorizationError(
+                    f"{label} changed while it was opened"
+                )
+            observed = artifact.read()
+    except OSError as exc:
+        raise CameraBridgeAuthorizationError(f"cannot read {label}: {path}") from exc
+    try:
+        after = os.lstat(path)
+    except OSError as exc:
+        raise CameraBridgeAuthorizationError(
+            f"cannot re-inspect {label}: {path}"
+        ) from exc
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+    attributes = getattr(after, "st_file_attributes", 0)
+    if (
+        after.st_dev != opened.st_dev
+        or after.st_ino != opened.st_ino
+        or stat.S_ISLNK(after.st_mode)
+        or bool(attributes & reparse_flag)
+        or not stat.S_ISREG(after.st_mode)
+    ):
+        raise CameraBridgeAuthorizationError(f"{label} changed while it was read")
+    return observed
 
 
 def _authorization_payload(
@@ -340,6 +721,9 @@ def _authorization_payload(
         "authorization_id": CAMERA_BRIDGE_AUTHORIZATION_ID,
         "authorization_version": CAMERA_BRIDGE_AUTHORIZATION_VERSION,
         "campaign_id": CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID,
+        "repository_id": CAMERA_BRIDGE_AUTHORIZATION_REPOSITORY_ID,
+        "authority_scope": "persistent_per_user_host_global",
+        "authority_provider_id": _HOST_AUTHORITY_PROVIDER_ID,
         "state": _AUTHORIZATION_STATE,
         "authorization_authority": "source_literal_gate_only",
         "source_gate_enabled_at_consumption": True,
@@ -413,6 +797,9 @@ def _completion_payload(
         "authorization_id": CAMERA_BRIDGE_AUTHORIZATION_ID,
         "authorization_version": CAMERA_BRIDGE_AUTHORIZATION_VERSION,
         "campaign_id": CAMERA_BRIDGE_AUTHORIZATION_CAMPAIGN_ID,
+        "repository_id": CAMERA_BRIDGE_AUTHORIZATION_REPOSITORY_ID,
+        "authority_scope": "persistent_per_user_host_global",
+        "authority_provider_id": _HOST_AUTHORITY_PROVIDER_ID,
         "state": "complete_post_input_transaction_sealed",
         "git_head_sha": git_head_sha,
         "objective_id": FROZEN_ENDPOINT_OBJECTIVE_ID,
@@ -464,30 +851,26 @@ def reserve_camera_bridge_authorization(
             "source-literal bridge input gate is disabled"
         )
     payload = _authorization_bytes(git_head_sha, evidence)
-    common_git_dir = repository_common_git_dir(repository_root)
-    sentinel_path = _authorization_sentinel_from_common_git_dir(common_git_dir)
-    completion_path = _completion_seal_from_common_git_dir(common_git_dir)
-    pending_path = _completion_pending_from_common_git_dir(common_git_dir)
-    if os.path.lexists(completion_path) or os.path.lexists(pending_path):
+    store = _host_authorization_store(
+        repository_root,
+        create_namespace=True,
+    )
+    if store.namespace_identity is None:  # pragma: no cover - defensive
+        raise CameraBridgeAuthorizationError(
+            "host authorization namespace has no stable identity"
+        )
+    if _path_exists_no_follow(
+        store.completion_seal_path,
+        label="host-global bridge completion seal",
+    ) or _path_exists_no_follow(
+        store.completion_pending_path,
+        label="host-global bridge completion pending witness",
+    ):
         raise CameraBridgeAuthorizationConsumedError(
             "the source-owned R2 bridge campaign completion already exists"
         )
-    namespace = sentinel_path.parent
     try:
-        namespace.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise CameraBridgeAuthorizationError(
-            f"cannot create bridge authorization namespace: {namespace}"
-        ) from exc
-    resolved_namespace = namespace.resolve()
-    try:
-        resolved_namespace.relative_to(common_git_dir.resolve())
-    except ValueError as exc:
-        raise CameraBridgeAuthorizationError(
-            "bridge authorization namespace escaped the common Git directory"
-        ) from exc
-    try:
-        with sentinel_path.open("xb") as sentinel:
+        with store.sentinel_path.open("xb") as sentinel:
             if sentinel.write(payload) != len(payload):
                 raise OSError("short bridge authorization sentinel write")
             sentinel.flush()
@@ -496,13 +879,18 @@ def reserve_camera_bridge_authorization(
         raise CameraBridgeAuthorizationConsumedError(
             "the source-owned R2 bridge campaign has already been consumed"
         ) from exc
+    if _namespace_identity(store.namespace) != store.namespace_identity:
+        raise CameraBridgeAuthorizationError(
+            "host authorization namespace changed during reservation"
+        )
     digest = hashlib.sha256(payload).hexdigest()
     return CameraBridgeAuthorizationReservation(
         git_head_sha=git_head_sha,
-        common_git_dir=common_git_dir,
-        sentinel_path=sentinel_path,
+        host_authority_root=store.root,
+        sentinel_path=store.sentinel_path,
         sentinel_sha256=digest,
         evidence=evidence,
+        authority_namespace_identity=store.namespace_identity,
     )
 
 
@@ -520,14 +908,18 @@ def authenticate_camera_bridge_authorization(
             "expected authorization sentinel SHA-256 is malformed"
         )
     expected = _authorization_bytes(git_head_sha, evidence)
-    common_git_dir = repository_common_git_dir(repository_root)
-    sentinel_path = _authorization_sentinel_from_common_git_dir(common_git_dir)
-    try:
-        observed = sentinel_path.read_bytes()
-    except OSError as exc:
+    store = _host_authorization_store(
+        repository_root,
+        create_namespace=False,
+    )
+    if store.namespace_identity is None:
         raise CameraBridgeAuthorizationError(
-            f"cannot read source-owned bridge authorization sentinel: {sentinel_path}"
-        ) from exc
+            "host authorization namespace is missing"
+        )
+    observed = _read_regular_artifact(
+        store.sentinel_path,
+        label="source-owned host-global bridge authorization sentinel",
+    )
     if observed != expected:
         raise CameraBridgeAuthorizationError(
             "bridge authorization sentinel is partial, stale, or tampered"
@@ -539,10 +931,11 @@ def authenticate_camera_bridge_authorization(
         )
     return CameraBridgeAuthorizationReservation(
         git_head_sha=git_head_sha,
-        common_git_dir=common_git_dir,
-        sentinel_path=sentinel_path,
+        host_authority_root=store.root,
+        sentinel_path=store.sentinel_path,
         sentinel_sha256=observed_sha256,
         evidence=evidence,
+        authority_namespace_identity=store.namespace_identity,
     )
 
 
@@ -559,10 +952,17 @@ def seal_camera_bridge_completion(
     prevents this fixed campaign from yielding an authenticated transition.
     """
 
-    common_git_dir = repository_common_git_dir(repository_root)
-    if common_git_dir != reservation.common_git_dir:
+    store = _host_authorization_store(
+        repository_root,
+        create_namespace=False,
+    )
+    if store.root != reservation.host_authority_root:
         raise CameraBridgeAuthorizationError(
-            "authorization common Git directory changed before completion"
+            "host authorization root changed before completion"
+        )
+    if store.namespace_identity != reservation.authority_namespace_identity:
+        raise CameraBridgeAuthorizationError(
+            "host authorization namespace identity changed before completion"
         )
     authenticated = authenticate_camera_bridge_authorization(
         repository_root,
@@ -580,10 +980,8 @@ def seal_camera_bridge_completion(
         )
     payload = _completion_bytes(git_head_sha, evidence)
     digest = hashlib.sha256(payload).hexdigest()
-    seal_path = _completion_seal_from_common_git_dir(common_git_dir)
-    pending_path = _completion_pending_from_common_git_dir(common_git_dir)
     try:
-        with pending_path.open("xb") as pending:
+        with store.completion_pending_path.open("xb") as pending:
             if pending.write(payload) != len(payload):
                 raise OSError("short bridge completion seal write")
             pending.flush()
@@ -592,18 +990,31 @@ def seal_camera_bridge_completion(
         raise CameraBridgeAuthorizationConsumedError(
             "the source-owned R2 bridge completion attempt already exists"
         ) from exc
+    if _namespace_identity(store.namespace) != store.namespace_identity:
+        raise CameraBridgeAuthorizationError(
+            "host authorization namespace changed during completion write"
+        )
     try:
-        os.link(pending_path, seal_path)
+        os.link(
+            store.completion_pending_path,
+            store.completion_seal_path,
+            follow_symlinks=False,
+        )
     except FileExistsError as exc:
         raise CameraBridgeAuthorizationConsumedError(
             "the source-owned R2 bridge completion seal already exists"
         ) from exc
+    if _namespace_identity(store.namespace) != store.namespace_identity:
+        raise CameraBridgeAuthorizationError(
+            "host authorization namespace changed during completion seal"
+        )
     return CameraBridgeCompletionSeal(
         git_head_sha=git_head_sha,
-        common_git_dir=common_git_dir,
-        seal_path=seal_path,
+        host_authority_root=store.root,
+        seal_path=store.completion_seal_path,
         seal_sha256=digest,
         evidence=evidence,
+        authority_namespace_identity=store.namespace_identity,
     )
 
 
@@ -621,14 +1032,18 @@ def authenticate_camera_bridge_completion(
             "expected bridge completion seal SHA-256 is malformed"
         )
     expected = _completion_bytes(git_head_sha, evidence)
-    common_git_dir = repository_common_git_dir(repository_root)
-    seal_path = _completion_seal_from_common_git_dir(common_git_dir)
-    try:
-        observed = seal_path.read_bytes()
-    except OSError as exc:
+    store = _host_authorization_store(
+        repository_root,
+        create_namespace=False,
+    )
+    if store.namespace_identity is None:
         raise CameraBridgeAuthorizationError(
-            f"cannot read source-owned bridge completion seal: {seal_path}"
-        ) from exc
+            "host authorization namespace is missing"
+        )
+    observed = _read_regular_artifact(
+        store.completion_seal_path,
+        label="source-owned host-global bridge completion seal",
+    )
     if observed != expected:
         raise CameraBridgeAuthorizationError(
             "bridge completion seal is partial, stale, or tampered"
@@ -640,8 +1055,9 @@ def authenticate_camera_bridge_completion(
         )
     return CameraBridgeCompletionSeal(
         git_head_sha=git_head_sha,
-        common_git_dir=common_git_dir,
-        seal_path=seal_path,
+        host_authority_root=store.root,
+        seal_path=store.completion_seal_path,
         seal_sha256=observed_sha256,
         evidence=evidence,
+        authority_namespace_identity=store.namespace_identity,
     )

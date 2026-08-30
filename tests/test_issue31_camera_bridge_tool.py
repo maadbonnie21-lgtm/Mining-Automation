@@ -37,6 +37,23 @@ def tool() -> ModuleType:
     return _load_tool()
 
 
+@pytest.fixture(autouse=True)
+def isolated_host_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    """Keep real one-shot operations in one per-test host-global store."""
+
+    # Keep the injected Known Folder root short enough that the fixed campaign
+    # artifact names remain below legacy Win32 MAX_PATH during native tests.
+    root = tmp_path.parent / (
+        "h" + hashlib.sha256(str(tmp_path).encode()).hexdigest()[:12]
+    )
+    root.mkdir()
+    monkeypatch.setattr(authorization, "_host_authority_base", lambda: root)
+    return root
+
+
 class _Backend:
     constructed = 0
 
@@ -183,7 +200,7 @@ def _patch_reviewed_inputs(
         "reserve_camera_bridge_authorization",
         lambda *_args, **_kwargs: tool.CameraBridgeAuthorizationReservation(
             git_head_sha="a" * 40,
-            common_git_dir=tmp_path,
+            host_authority_root=tmp_path,
             sentinel_path=tmp_path / "authorization.json",
             sentinel_sha256="5" * 64,
             evidence=authorization_evidence,
@@ -1969,7 +1986,7 @@ def test_bridge_lease_spans_runner_cleanup_revalidation_and_publication(
         _Lease.events.append("authorization_consumed")
         return tool.CameraBridgeAuthorizationReservation(
             git_head_sha="a" * 40,
-            common_git_dir=tmp_path,
+            host_authority_root=tmp_path,
             sentinel_path=tmp_path / "never-written-authorization.json",
             sentinel_sha256="5" * 64,
             evidence=authorization_evidence,
@@ -2112,22 +2129,31 @@ def test_bridge_lease_spans_runner_cleanup_revalidation_and_publication(
     assert digest == hashlib.sha256(report.read_bytes()).hexdigest()
 
 
-@pytest.mark.parametrize("contents", [b"", b'{"tampered":true}\n'])
+@pytest.mark.parametrize("artifact", ["reservation", "completion-pending", "completion"])
+@pytest.mark.parametrize("contents", [b"", b"interrupted", b'{"tampered":true}\n'])
 def test_precreated_or_tampered_campaign_blocks_every_launcher_input(
     tool: ModuleType,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    artifact: str,
     contents: bytes,
 ) -> None:
-    repository = tmp_path / "repository"
-    (repository / ".git").mkdir(parents=True)
-    sentinel = authorization.camera_bridge_authorization_sentinel_path(repository)
-    sentinel.parent.mkdir(parents=True)
-    sentinel.write_bytes(contents)
+    first_repository = tmp_path / "clone-a"
+    second_repository = tmp_path / "clone-b"
+    (first_repository / ".git").mkdir(parents=True)
+    (second_repository / ".git").mkdir(parents=True)
+    artifact_path = {
+        "reservation": authorization.camera_bridge_authorization_sentinel_path(
+            first_repository
+        ),
+        "completion-pending": authorization._completion_pending_path(first_repository),
+        "completion": authorization.camera_bridge_completion_seal_path(first_repository),
+    }[artifact]
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_bytes(contents)
     _Backend.constructed = 0
     _Control.last = None
     _Lease.events = []
-    monkeypatch.setattr(tool, "_REPO_ROOT", repository)
     monkeypatch.setattr(tool, "_BRIDGE_LIVE_INPUT_ENABLED", True)
     monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
     monkeypatch.setattr(tool, "_resolve_private_output_root", lambda path: Path(path))
@@ -2155,7 +2181,11 @@ def test_precreated_or_tampered_campaign_blocks_every_launcher_input(
         ),
     )
 
-    for ordinal in (1, 2):
+    for ordinal, repository in enumerate(
+        (first_repository, second_repository),
+        start=1,
+    ):
+        monkeypatch.setattr(tool, "_REPO_ROOT", repository)
         result = tool.main(
             [
                 "bridge-capture-r2",
@@ -2170,7 +2200,7 @@ def test_precreated_or_tampered_campaign_blocks_every_launcher_input(
         )
         assert result == 2
 
-    assert sentinel.read_bytes() == contents
+    assert artifact_path.read_bytes() == contents
     assert _Backend.constructed == 0
     assert _Control.last is None
     assert _Lease.events == []
@@ -2181,8 +2211,10 @@ def test_interrupted_final_reservation_consumes_campaign_with_zero_retry_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repository = tmp_path / "repository"
-    (repository / ".git").mkdir(parents=True)
+    first_repository = tmp_path / "clone-a"
+    second_repository = tmp_path / "clone-b"
+    (first_repository / ".git").mkdir(parents=True)
+    (second_repository / ".git").mkdir(parents=True)
     first_output = tmp_path / "first-private"
     second_output = tmp_path / "second-private"
     real_consumed = tool.camera_bridge_authorization_consumed
@@ -2190,7 +2222,7 @@ def test_interrupted_final_reservation_consumes_campaign_with_zero_retry_input(
     _Backend.constructed = 0
     _Control.last = None
     _Lease.events = []
-    monkeypatch.setattr(tool, "_REPO_ROOT", repository)
+    monkeypatch.setattr(tool, "_REPO_ROOT", first_repository)
     monkeypatch.setattr(tool, "_resolve_private_output_root", lambda path: Path(path))
     monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
     monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
@@ -2255,6 +2287,7 @@ def test_interrupted_final_reservation_consumes_campaign_with_zero_retry_input(
     )
     first_backend_count = _Backend.constructed
     first_lease_events = tuple(_Lease.events)
+    monkeypatch.setattr(tool, "_REPO_ROOT", second_repository)
     second_result = tool.main(
         [
             "bridge-capture-r2",
@@ -2272,7 +2305,7 @@ def test_interrupted_final_reservation_consumes_campaign_with_zero_retry_input(
     assert second_result == 2
     assert runner_calls == 1
     assert physical_inputs == 0
-    assert authorization.camera_bridge_authorization_consumed(repository)
+    assert authorization.camera_bridge_authorization_consumed(second_repository)
     assert _Backend.constructed == first_backend_count
     assert tuple(_Lease.events) == first_lease_events
     assert not (
@@ -2285,8 +2318,10 @@ def test_interrupted_completion_seal_retracts_report_and_blocks_retry_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repository = tmp_path / "repository"
-    (repository / ".git").mkdir(parents=True)
+    first_repository = tmp_path / "clone-a"
+    second_repository = tmp_path / "clone-b"
+    (first_repository / ".git").mkdir(parents=True)
+    (second_repository / ".git").mkdir(parents=True)
     first_output = tmp_path / "first-private"
     second_output = tmp_path / "second-private"
     real_consumed = tool.camera_bridge_authorization_consumed
@@ -2295,7 +2330,7 @@ def test_interrupted_completion_seal_retracts_report_and_blocks_retry_input(
     _Backend.constructed = 0
     _Control.last = None
     _Lease.events = []
-    monkeypatch.setattr(tool, "_REPO_ROOT", repository)
+    monkeypatch.setattr(tool, "_REPO_ROOT", first_repository)
     monkeypatch.setattr(tool, "_resolve_private_output_root", lambda path: Path(path))
     monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
     monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
@@ -2364,6 +2399,7 @@ def test_interrupted_completion_seal_retracts_report_and_blocks_retry_input(
     first_report = (
         first_output / "reports" / "completion-interrupted.camera.json"
     )
+    monkeypatch.setattr(tool, "_REPO_ROOT", second_repository)
     second_result = tool.main(
         [
             "bridge-capture-r2",
@@ -2381,11 +2417,11 @@ def test_interrupted_completion_seal_retracts_report_and_blocks_retry_input(
     assert second_result == 2
     assert runner_calls == 1
     assert physical_inputs == 1
-    assert authorization.camera_bridge_authorization_consumed(repository)
-    assert not authorization.camera_bridge_completion_seal_path(repository).exists()
-    pending_path = authorization._completion_pending_from_common_git_dir(
-        authorization.repository_common_git_dir(repository)
-    )
+    assert authorization.camera_bridge_authorization_consumed(second_repository)
+    assert not authorization.camera_bridge_completion_seal_path(
+        second_repository
+    ).exists()
+    pending_path = authorization._completion_pending_path(second_repository)
     assert pending_path.exists()
     assert not first_report.exists()
     assert not first_report.with_name(f"{first_report.name}.sha256").exists()
@@ -2497,6 +2533,129 @@ def test_concurrent_launchers_can_cross_final_guard_only_once(
     assert _Backend.constructed == backend_count
 
 
+def test_completed_clone_a_launcher_blocks_clone_b_alternate_inputs_with_real_store(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_repository = tmp_path / "clone-a"
+    second_repository = tmp_path / "clone-b"
+    (first_repository / ".git").mkdir(parents=True)
+    (second_repository / ".git").mkdir(parents=True)
+    first_output = tmp_path / "first-private"
+    second_output = tmp_path / "alternate-private"
+    real_consumed = tool.camera_bridge_authorization_consumed
+    real_reserve = tool.reserve_camera_bridge_authorization
+    real_seal = tool.seal_camera_bridge_completion
+    _Backend.constructed = 0
+    _Control.last = None
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_REPO_ROOT", first_repository)
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda path: Path(path))
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "CaptureSource", _Source)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _Control)
+    monkeypatch.setattr(
+        tool,
+        "_EXPECTED_WINDOWS_CAMERA_ADAPTER",
+        f"{_Control.__module__}.{_Control.__qualname__}",
+    )
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    _patch_reviewed_inputs(tool, monkeypatch, tmp_path)
+    monkeypatch.setattr(tool, "camera_bridge_authorization_consumed", real_consumed)
+    monkeypatch.setattr(tool, "reserve_camera_bridge_authorization", real_reserve)
+    monkeypatch.setattr(tool, "seal_camera_bridge_completion", real_seal)
+
+    runner_calls = 0
+    physical_inputs = 0
+    unit_digest = hashlib.sha256(bytes((1, 2, 3, 255))).hexdigest()
+
+    def run(*_args: object, **kwargs: object) -> SimpleNamespace:
+        nonlocal runner_calls, physical_inputs
+        runner_calls += 1
+        evidence = SimpleNamespace(
+            artifact=SimpleNamespace(raw_sha256=unit_digest),
+            production=object(),
+        )
+        kwargs["pre_input_guard"](evidence, evidence, evidence)
+        kwargs["final_input_guard"](evidence, evidence, evidence)
+        physical_inputs += 1
+        return _capture_complete_result()
+
+    monkeypatch.setattr(tool, "run_fixed_camera_bridge_capture", run)
+    monkeypatch.setattr(
+        tool,
+        "_require_bridge_capture_result_identities",
+        lambda *_args, **_kwargs: None,
+    )
+
+    first_result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(first_output),
+            "--case-prefix",
+            "reviewed-first",
+            *_review_args(),
+        ]
+    )
+    first_backend_count = _Backend.constructed
+    first_lease_events = tuple(_Lease.events)
+    assert first_result == 0
+    assert runner_calls == 1
+    assert physical_inputs == 1
+    assert authorization.camera_bridge_authorization_consumed(first_repository)
+    assert authorization.camera_bridge_completion_seal_path(first_repository).exists()
+
+    monkeypatch.setattr(tool, "_REPO_ROOT", second_repository)
+    monkeypatch.setattr(
+        tool,
+        "_load_bridge_analysis_evidence",
+        lambda *_args, **_kwargs: pytest.fail(
+            "consumed clone B must stop before alternate analysis loading"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "_load_bridge_north_handoff",
+        lambda *_args, **_kwargs: pytest.fail(
+            "consumed clone B must stop before alternate north loading"
+        ),
+    )
+    second_result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--analysis-report",
+            str(tmp_path / "alternate-analysis.json"),
+            "--analysis-sha256",
+            "8" * 64,
+            "--north-report",
+            str(tmp_path / "alternate-north.json"),
+            "--north-sha256",
+            "9" * 64,
+            "--output",
+            str(second_output),
+            "--case-prefix",
+            "alternate-prefix",
+        ]
+    )
+
+    assert second_result == 2
+    assert runner_calls == 1
+    assert physical_inputs == 1
+    assert _Backend.constructed == first_backend_count
+    assert tuple(_Lease.events) == first_lease_events
+    assert authorization.camera_bridge_authorization_consumed(second_repository)
+    assert not (
+        second_output / "reports" / "alternate-prefix.camera.json"
+    ).exists()
+
+
 @pytest.mark.parametrize("fail_after_reservation", [False, True])
 @pytest.mark.parametrize(
     ("second_prefix", "reuse_first_output"),
@@ -2561,7 +2720,7 @@ def test_one_shot_consumption_blocks_alternate_prefix_and_output_invocation(
         consumed = True
         return tool.CameraBridgeAuthorizationReservation(
             git_head_sha="a" * 40,
-            common_git_dir=tmp_path,
+            host_authority_root=tmp_path,
             sentinel_path=tmp_path / "fixed-campaign.consumed.json",
             sentinel_sha256="5" * 64,
             evidence=authorization_evidence,
