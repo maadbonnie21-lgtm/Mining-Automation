@@ -166,6 +166,17 @@ either `offline controller path available` or one exact `missing graph link`.
 R1 has no live-input command; any controller built from it requires a separate
 review and fresh production-detector confirmation.
 
+The canonical negative-role contract is defined in
+[Camera reacquisition validation](CAMERA_REACQUISITION_VALIDATION.md#canonical-negative-graph-roles-and-gate).
+`DISCONNECTED` remains readiness-vetoed. `RISKY_STATE_CHANGE` may be
+gameplay-ready and analyzed, but remains explicit negative-corpus evidence;
+roles are never inferred from paths or filenames. The report enumerates
+accepted and cycle-verified edges touching either role, per-negative-node paths
+to reviewed supported anchors, and one aggregate gate count. Any prohibited
+negative edge or path makes the command fail. This role gate is separate from
+readiness and changes no detector, matching, residual, quorum, or zone
+threshold.
+
 All raw frames, BMP previews, unreviewed drafts, JSON reports, and report digest
 sidecars stay beneath ignored `diagnostics/`. The camera recipe remains pending
 until repeated real RuneLite trials and the complete 36-frame drift set both

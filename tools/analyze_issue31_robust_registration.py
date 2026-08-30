@@ -203,10 +203,19 @@ def main(argv: list[str] | None = None) -> int:
         "UNCERTAIN, "
         f"{drift_gate['false_definitive_target_count']} false definitive targets"
     )
-    print(f"False edges: {graph.false_edge_count}")
+    print(
+        "Negative-corpus failures: "
+        f"{graph.false_edge_count} accepted edges, "
+        f"{graph.false_path_count} supported paths, "
+        f"{graph.negative_failure_count} aggregate"
+    )
     print(f"Report: {written.report_path}")
     print(f"Report SHA-256: {written.sha256}")
-    return 0 if drift_gate["passed"] is True and graph.false_edge_count == 0 else 1
+    return (
+        0
+        if drift_gate["passed"] is True and graph.negative_failure_count == 0
+        else 1
+    )
 
 
 def load_canonical_corpus(repo_root: Path) -> CorpusEvidence:
@@ -386,7 +395,9 @@ def build_report_evidence(
         "result": {
             "conclusion": graph.conclusion,
             "false_edge_count": graph.false_edge_count,
+            "false_path_count": graph.false_path_count,
             "missing_link": graph.missing_link,
+            "negative_failure_count": graph.negative_failure_count,
             "offline_controller_path_available": (
                 graph.offline_controller_path_available
             ),

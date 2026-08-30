@@ -99,6 +99,19 @@ have exact saved input receipts. The only successful controller conclusion is
 validate a scene, expose resources, override production perception, or
 authorize live camera input.
 
+Negative graph roles follow the central contract in
+[`docs/CAMERA_REACQUISITION_VALIDATION.md`](../docs/CAMERA_REACQUISITION_VALIDATION.md#canonical-negative-graph-roles-and-gate).
+The canonical loader assigns `DISCONNECTED` and `RISKY_STATE_CHANGE`
+explicitly; the tool never derives either role from a filename. A disconnected
+node retains its readiness veto. A risky-state-change node may pass readiness
+and undergo read-only matching, but every resulting match remains
+negative-corpus evidence rather than graph authority. The report separately
+lists accepted pairwise and cycle-verified edges touching negative nodes,
+verified supported-anchor reachability for every negative node, and the
+aggregate negative-edge/path failure count. Any prohibited negative connection
+or path fails the command without changing registration thresholds, production
+quorum, macro-zone requirements, or scene authority.
+
 The current Track A real-frame diagnosis is intentionally separate from input
 authority. Production matched `0/6` landmarks. A wide diagnostic recovered
 only three local landmarks at noncoherent offsets, and the best shared offset

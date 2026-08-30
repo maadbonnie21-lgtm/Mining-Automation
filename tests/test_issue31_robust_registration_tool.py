@@ -99,6 +99,12 @@ class _Graph:
     edges: tuple[object, ...] = ()
     conclusion: str = "missing graph link: receipt-proven current-to-anchor edge"
     false_edge_count: int = 0
+    false_path_count: int = 0
+    negative_failure_count: int = 0
+    negative_nodes: tuple[dict[str, object], ...] = ()
+    negative_accepted_edge_ids: tuple[str, ...] = ()
+    negative_verified_edge_ids: tuple[str, ...] = ()
+    node_reports: tuple[dict[str, object], ...] = ()
     missing_link: str | None = "receipt-proven current-to-anchor edge"
     offline_controller_path_available: bool = False
     policy: object = None
@@ -111,6 +117,22 @@ class _Graph:
             },
             "conclusion": self.conclusion,
             "false_edge_count": self.false_edge_count,
+            "false_path_count": self.false_path_count,
+            "negative_corpus": {
+                "accepted_pairwise_edge_count": len(
+                    self.negative_accepted_edge_ids
+                ),
+                "accepted_pairwise_edge_ids": list(
+                    self.negative_accepted_edge_ids
+                ),
+                "aggregate_failure_count": self.negative_failure_count,
+                "cycle_verified_edge_count": len(self.negative_verified_edge_ids),
+                "cycle_verified_edge_ids": list(self.negative_verified_edge_ids),
+                "nodes": list(self.negative_nodes),
+                "policy_roles": ["disconnected", "risky_state_change"],
+                "supported_path_count": self.false_path_count,
+            },
+            "nodes": list(self.node_reports),
             "reachability": {
                 "offline_controller_path_available": (
                     self.offline_controller_path_available
@@ -234,7 +256,9 @@ def test_main_writes_canonical_report_and_matching_sha256_sidecar(
     assert payload["evidence"]["result"] == {
         "conclusion": graph.conclusion,
         "false_edge_count": 0,
+        "false_path_count": 0,
         "missing_link": graph.missing_link,
+        "negative_failure_count": 0,
         "offline_controller_path_available": False,
     }
     output = capsys.readouterr().out
@@ -270,6 +294,145 @@ def test_drift_gate_requires_exactly_36_uncertain_frames_and_zero_targets(
     assert definitive_result["false_definitive_target_count"] == 1
     assert tool._drift_gate(exposed_state)["passed"] is False
     assert tool._drift_gate(scene_pass)["passed"] is False
+
+
+def test_report_exposes_negative_roles_independently_from_readiness_and_paths(
+    tool: ModuleType,
+) -> None:
+    supported_sha = "a" * 64
+    disconnected_sha = "b" * 64
+    risky_sha = "c" * 64
+    disconnected_edge = f"{supported_sha}:{disconnected_sha}"
+    risky_edge = f"{supported_sha}:{risky_sha}"
+    graph = _Graph(
+        nodes=(),
+        false_edge_count=2,
+        false_path_count=1,
+        negative_failure_count=3,
+        negative_accepted_edge_ids=(disconnected_edge, risky_edge),
+        negative_verified_edge_ids=(risky_edge,),
+        negative_nodes=(
+            {
+                "accepted_edge_count": 1,
+                "accepted_edge_ids": [disconnected_edge],
+                "has_verified_path_to_supported": False,
+                "labels": ["disconnected:test"],
+                "registration_eligible": True,
+                "roles": ["disconnected"],
+                "sha256": disconnected_sha,
+                "verified_edge_count": 0,
+                "verified_edge_ids": [],
+                "verified_path_to_supported": None,
+            },
+            {
+                "accepted_edge_count": 1,
+                "accepted_edge_ids": [risky_edge],
+                "has_verified_path_to_supported": True,
+                "labels": ["risky:test"],
+                "registration_eligible": False,
+                "roles": ["risky_state_change"],
+                "sha256": risky_sha,
+                "verified_edge_count": 1,
+                "verified_edge_ids": [risky_edge],
+                "verified_path_to_supported": [risky_sha, supported_sha],
+            },
+        ),
+        node_reports=(
+            {
+                "readiness": {"safe_to_attempt_camera_input": True},
+                "roles": ["disconnected"],
+                "sha256": disconnected_sha,
+            },
+            {
+                "readiness": {"safe_to_attempt_camera_input": False},
+                "roles": ["risky_state_change"],
+                "sha256": risky_sha,
+            },
+        ),
+    )
+
+    evidence = tool.build_report_evidence(
+        graph,
+        _corpus(tool),
+        {
+            "expected_frames": 36,
+            "false_definitive_target_count": 0,
+            "passed": True,
+            "uncertain_frames": 36,
+        },
+        head_before=_HEAD,
+        clean_before=True,
+        head_after=_HEAD,
+        clean_after=True,
+    )
+
+    view_graph = cast(dict[str, object], evidence["view_graph"])
+    nodes = cast(list[dict[str, object]], view_graph["nodes"])
+    negative = cast(dict[str, object], view_graph["negative_corpus"])
+    assert nodes[0]["roles"] == ["disconnected"]
+    assert nodes[0]["readiness"] == {"safe_to_attempt_camera_input": True}
+    assert nodes[1]["roles"] == ["risky_state_change"]
+    assert nodes[1]["readiness"] == {"safe_to_attempt_camera_input": False}
+    assert negative == {
+        "accepted_pairwise_edge_count": 2,
+        "accepted_pairwise_edge_ids": [disconnected_edge, risky_edge],
+        "aggregate_failure_count": 3,
+        "cycle_verified_edge_count": 1,
+        "cycle_verified_edge_ids": [risky_edge],
+        "nodes": list(graph.negative_nodes),
+        "policy_roles": ["disconnected", "risky_state_change"],
+        "supported_path_count": 1,
+    }
+    assert cast(dict[str, object], evidence["result"]) == {
+        "conclusion": graph.conclusion,
+        "false_edge_count": 2,
+        "false_path_count": 1,
+        "missing_link": graph.missing_link,
+        "negative_failure_count": 3,
+        "offline_controller_path_available": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("false_edges", "false_paths"),
+    [(1, 0), (0, 1)],
+)
+def test_main_returns_failure_for_any_prohibited_negative_connection(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    false_edges: int,
+    false_paths: int,
+) -> None:
+    report = tmp_path / "negative-r1.json"
+    graph = _graph_with_exact_drift_gate()
+    graph.false_edge_count = false_edges
+    graph.false_path_count = false_paths
+    graph.negative_failure_count = false_edges + false_paths
+    monkeypatch.setattr(tool, "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(tool, "_git_state", lambda _root: (_HEAD, True))
+    monkeypatch.setattr(tool, "load_canonical_corpus", lambda _root: _corpus(tool))
+    monkeypatch.setattr(tool, "RobustRegistrationEngine", object)
+    monkeypatch.setattr(
+        tool,
+        "build_read_only_view_graph",
+        lambda *_args, **_kwargs: graph,
+    )
+    monkeypatch.setattr(tool, "robust_registration_algorithm_settings", lambda: {})
+    monkeypatch.setattr(tool, "robust_registration_environment", lambda: {})
+
+    result = tool.main(
+        ["--expected-head", _HEAD, "--report", str(report)]
+    )
+
+    payload = json.loads(report.read_bytes())
+    assert result == 1
+    assert payload["evidence"]["drift_safety"]["passed"] is True
+    assert payload["evidence"]["result"]["false_edge_count"] == false_edges
+    assert payload["evidence"]["result"]["false_path_count"] == false_paths
+    assert payload["evidence"]["result"]["negative_failure_count"] == (
+        false_edges + false_paths
+    )
 
 
 def test_action_receipts_bind_exact_corpus_endpoints_and_report_digest(
@@ -516,6 +679,8 @@ def test_build_report_evidence_summarizes_models_rejections_and_authority(
     assert evidence["result"] == {
         "conclusion": graph.conclusion,
         "false_edge_count": 0,
+        "false_path_count": 0,
         "missing_link": graph.missing_link,
+        "negative_failure_count": 0,
         "offline_controller_path_available": False,
     }

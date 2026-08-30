@@ -29,8 +29,10 @@ __all__ = [
     "ActionTransition",
     "GraphCycleEvidence",
     "GraphEdgeEvidence",
+    "NegativeNodeGraphEvidence",
     "GraphNodeEvidence",
     "GraphPolicy",
+    "NEGATIVE_GRAPH_ROLES",
     "ReadOnlyViewGraph",
     "ViewNodeSpec",
     "ViewRole",
@@ -38,7 +40,7 @@ __all__ = [
 ]
 
 ROBUST_VIEW_GRAPH_ID: Final[str] = "issue31-read-only-view-graph-r1"
-ROBUST_VIEW_GRAPH_VERSION: Final[str] = "1.0.0"
+ROBUST_VIEW_GRAPH_VERSION: Final[str] = "1.1.0"
 
 
 class ViewRole(StrEnum):
@@ -50,6 +52,11 @@ class ViewRole(StrEnum):
     RISKY_STATE_CHANGE = "risky_state_change"
     DISCONNECTED = "disconnected"
     OTHER_UNSUPPORTED = "other_unsupported"
+
+
+NEGATIVE_GRAPH_ROLES: Final[frozenset[ViewRole]] = frozenset(
+    {ViewRole.DISCONNECTED, ViewRole.RISKY_STATE_CHANGE}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +174,14 @@ class GraphNodeEvidence:
     def explicitly_disconnected(self) -> bool:
         return ViewRole.DISCONNECTED in self.roles
 
+    @property
+    def negative_graph_roles(self) -> tuple[ViewRole, ...]:
+        return tuple(role for role in self.roles if role in NEGATIVE_GRAPH_ROLES)
+
+    @property
+    def negative_graph_case(self) -> bool:
+        return bool(self.negative_graph_roles)
+
     def as_dict(self) -> dict[str, object]:
         return {
             "current": self.current,
@@ -177,6 +192,10 @@ class GraphNodeEvidence:
                 "width": self.width,
             },
             "labels": list(self.labels),
+            "negative_graph_case": self.negative_graph_case,
+            "negative_graph_roles": [
+                role.value for role in self.negative_graph_roles
+            ],
             "production": _production_dict(self.production),
             "readiness": _readiness_dict(self.readiness),
             "registration_eligible": self.registration_eligible,
@@ -248,6 +267,41 @@ class GraphEdgeEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class NegativeNodeGraphEvidence:
+    """Observed graph connectivity for one explicitly labeled negative node."""
+
+    sha256: str
+    labels: tuple[str, ...]
+    roles: tuple[ViewRole, ...]
+    registration_eligible: bool
+    accepted_edge_ids: tuple[str, ...]
+    verified_edge_ids: tuple[str, ...]
+    verified_path_to_supported: tuple[str, ...] | None
+
+    @property
+    def has_verified_path_to_supported(self) -> bool:
+        return self.verified_path_to_supported is not None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "accepted_edge_count": len(self.accepted_edge_ids),
+            "accepted_edge_ids": list(self.accepted_edge_ids),
+            "has_verified_path_to_supported": self.has_verified_path_to_supported,
+            "labels": list(self.labels),
+            "registration_eligible": self.registration_eligible,
+            "roles": [role.value for role in self.roles],
+            "sha256": self.sha256,
+            "verified_edge_count": len(self.verified_edge_ids),
+            "verified_edge_ids": list(self.verified_edge_ids),
+            "verified_path_to_supported": (
+                None
+                if self.verified_path_to_supported is None
+                else list(self.verified_path_to_supported)
+            ),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ReadOnlyViewGraph:
     """Canonical graph result with no production or input authority."""
 
@@ -262,6 +316,9 @@ class ReadOnlyViewGraph:
     visual_path_to_supported: tuple[str, ...] | None
     action_path_to_supported: tuple[str, ...] | None
     action_transitions: tuple[ActionTransition, ...]
+    negative_nodes: tuple[NegativeNodeGraphEvidence, ...]
+    negative_accepted_edge_ids: tuple[str, ...]
+    negative_verified_edge_ids: tuple[str, ...]
     false_edge_count: int
     conclusion: str
     missing_link: str | None
@@ -277,6 +334,16 @@ class ReadOnlyViewGraph:
     @property
     def offline_controller_path_available(self) -> bool:
         return self.action_path_to_supported is not None
+
+    @property
+    def false_path_count(self) -> int:
+        return sum(
+            node.has_verified_path_to_supported for node in self.negative_nodes
+        )
+
+    @property
+    def negative_failure_count(self) -> int:
+        return self.false_edge_count + self.false_path_count
 
     def as_dict(self) -> dict[str, object]:
         verified_edges = sum(edge.verified(self.policy) for edge in self.edges)
@@ -298,10 +365,29 @@ class ReadOnlyViewGraph:
             "cycles": [cycle.as_dict() for cycle in self.cycles],
             "edges": [edge.as_dict(self.policy) for edge in self.edges],
             "false_edge_count": self.false_edge_count,
+            "false_path_count": self.false_path_count,
             "graph_id": self.graph_id,
             "graph_version": self.graph_version,
             "missing_link": self.missing_link,
             "nodes": [node.as_dict() for node in self.nodes],
+            "negative_corpus": {
+                "accepted_pairwise_edge_count": len(
+                    self.negative_accepted_edge_ids
+                ),
+                "accepted_pairwise_edge_ids": list(
+                    self.negative_accepted_edge_ids
+                ),
+                "aggregate_failure_count": self.negative_failure_count,
+                "cycle_verified_edge_count": len(
+                    self.negative_verified_edge_ids
+                ),
+                "cycle_verified_edge_ids": list(
+                    self.negative_verified_edge_ids
+                ),
+                "nodes": [node.as_dict() for node in self.negative_nodes],
+                "policy_roles": sorted(role.value for role in NEGATIVE_GRAPH_ROLES),
+                "supported_path_count": self.false_path_count,
+            },
             "policy": self.policy.as_dict(),
             "reachability": {
                 "action_path_to_supported": (
@@ -471,12 +557,24 @@ def build_read_only_view_graph(
         )
         for edge in provisional
     )
-    verified_adjacency: dict[str, set[str]] = defaultdict(set)
+    raw_verified_adjacency: dict[str, set[str]] = defaultdict(set)
     edge_by_id = {edge.edge_id: edge for edge in edges}
     for edge in edges:
         if edge.verified(policy):
-            verified_adjacency[edge.source_sha256].add(edge.target_sha256)
-            verified_adjacency[edge.target_sha256].add(edge.source_sha256)
+            raw_verified_adjacency[edge.source_sha256].add(edge.target_sha256)
+            raw_verified_adjacency[edge.target_sha256].add(edge.source_sha256)
+    negative_node_sha256s = frozenset(
+        node.sha256 for node in nodes if node.negative_graph_case
+    )
+    verified_adjacency: dict[str, set[str]] = defaultdict(set)
+    for source_sha256, targets in raw_verified_adjacency.items():
+        if source_sha256 in negative_node_sha256s:
+            continue
+        verified_adjacency[source_sha256].update(
+            neighbor_sha256
+            for neighbor_sha256 in targets
+            if neighbor_sha256 not in negative_node_sha256s
+        )
     components = _components(tuple(node_by_sha), verified_adjacency)
     anchors = frozenset(reviewed_anchor_sha256s)
     visual_path = _shortest_path(current_sha256, anchors, verified_adjacency)
@@ -484,17 +582,54 @@ def build_read_only_view_graph(
     action_adjacency: dict[str, set[str]] = defaultdict(set)
     for transition in action_transitions:
         edge = edge_by_id[_edge_id(transition.source_sha256, transition.target_sha256)]
-        if edge.verified(policy):
+        if edge.verified(policy) and not (
+            transition.source_sha256 in negative_node_sha256s
+            or transition.target_sha256 in negative_node_sha256s
+        ):
             action_adjacency[transition.source_sha256].add(transition.target_sha256)
     action_path = _shortest_path(current_sha256, anchors, action_adjacency)
-    false_edges = sum(
-        edge.registration_accepted
-        and (
-            node_by_sha[edge.source_sha256].explicitly_disconnected
-            or node_by_sha[edge.target_sha256].explicitly_disconnected
-        )
+    negative_accepted_edge_ids = tuple(
+        edge.edge_id
         for edge in edges
+        if edge.registration_accepted
+        and (
+            edge.source_sha256 in negative_node_sha256s
+            or edge.target_sha256 in negative_node_sha256s
+        )
     )
+    negative_verified_edge_ids = tuple(
+        edge.edge_id
+        for edge in edges
+        if edge.verified(policy)
+        and (
+            edge.source_sha256 in negative_node_sha256s
+            or edge.target_sha256 in negative_node_sha256s
+        )
+    )
+    negative_nodes = tuple(
+        NegativeNodeGraphEvidence(
+            sha256=node.sha256,
+            labels=node.labels,
+            roles=node.negative_graph_roles,
+            registration_eligible=node.registration_eligible,
+            accepted_edge_ids=tuple(
+                edge_id
+                for edge_id in negative_accepted_edge_ids
+                if node.sha256 in edge_id.split(":")
+            ),
+            verified_edge_ids=tuple(
+                edge_id
+                for edge_id in negative_verified_edge_ids
+                if node.sha256 in edge_id.split(":")
+            ),
+            verified_path_to_supported=_shortest_path(
+                node.sha256, anchors, raw_verified_adjacency
+            ),
+        )
+        for node in nodes
+        if node.negative_graph_case
+    )
+    false_edges = len(negative_accepted_edge_ids)
     if action_path is not None:
         conclusion = "offline controller path available"
         missing_link = None
@@ -518,6 +653,9 @@ def build_read_only_view_graph(
         visual_path_to_supported=visual_path,
         action_path_to_supported=action_path,
         action_transitions=tuple(sorted(action_transitions, key=lambda item: item.action_id)),
+        negative_nodes=negative_nodes,
+        negative_accepted_edge_ids=negative_accepted_edge_ids,
+        negative_verified_edge_ids=negative_verified_edge_ids,
         false_edge_count=false_edges,
         conclusion=conclusion,
         missing_link=missing_link,

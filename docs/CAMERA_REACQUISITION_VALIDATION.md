@@ -573,6 +573,43 @@ the current unsupported pose. It binds the run to the requested clean exact Git
 head. It writes deterministic JSON plus an adjacent `.sha256` sidecar beneath
 ignored `diagnostics/`; raw private pixels remain outside the report and Git.
 
+#### Canonical negative graph roles and gate
+
+Negative roles are explicit corpus metadata owned by the canonical loader.
+They are never inferred from a filename, directory name, image similarity,
+readiness result, or production verdict. R1 defines these negative roles:
+
+- `DISCONNECTED` identifies a view already reviewed as outside the graph's
+  admissible camera relationship. Its existing readiness veto remains in
+  force, so pairwise registration is not attempted for that endpoint.
+- `RISKY_STATE_CHANGE` identifies a saved frame whose world content changed
+  materially enough to make it unsafe as graph connectivity evidence. Such a
+  frame may still be gameplay-ready and therefore eligible for read-only
+  feature matching. That eligibility exists so the negative corpus can test
+  and report tempting visual similarities; it never changes the frame's
+  negative role or permits it to bridge the graph.
+
+Readiness and negative-role evaluation are independent gates. Readiness answers
+only whether an endpoint has analyzable gameplay geometry/chrome. A readiness
+PASS does not erase `RISKY_STATE_CHANGE`, and a readiness veto does not replace
+the explicit `DISCONNECTED` label.
+
+Canonical evidence reports all of the following separately:
+
+- accepted pairwise registrations touching a negative node;
+- cycle-verified edges touching a negative node;
+- whether each negative node has any verified path to an exact reviewed
+  production-supported anchor; and
+- the aggregate negative-edge/path failure count.
+
+The canonical command fails when any accepted pairwise edge, cycle-verified
+edge, or verified supported-anchor path violates that negative-role boundary.
+A negative node can therefore never contribute to
+`offline controller path available`, even if local appearance, readiness, or a
+low-residual fit looks convincing. This gate adds no detector or registration
+threshold change: it is a corpus-semantics veto layered above the unchanged
+robust evidence policy and unchanged production scene authority.
+
 Every feature and correspondence must lie in trusted world pixels. The mask
 excludes every resource/candidate region, fixed RuneLite UI and readiness
 chrome, and every sanitized or otherwise non-world area. Descriptor support

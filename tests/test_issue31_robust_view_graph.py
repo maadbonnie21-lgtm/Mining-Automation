@@ -45,6 +45,12 @@ _READY_POLICY = ClientReadinessAnchorPolicy(
 )
 
 
+def test_negative_graph_roles_are_explicit_and_central() -> None:
+    assert view_graph.NEGATIVE_GRAPH_ROLES == frozenset(
+        {ViewRole.DISCONNECTED, ViewRole.RISKY_STATE_CHANGE}
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _FakeModel:
     forward_matrix: Matrix3
@@ -260,12 +266,14 @@ def _build(
     anchor: Frame,
     engine: _DeterministicEngine,
     transitions: tuple[ActionTransition, ...] = (),
+    reviewed_anchors: tuple[Frame, ...] | None = None,
 ) -> ReadOnlyViewGraph:
+    anchors = (anchor,) if reviewed_anchors is None else reviewed_anchors
     return build_read_only_view_graph(
         specs,
         current_sha256=_sha256(current),
         reviewed_manifest_sha256=_MANIFEST_SHA256,
-        reviewed_anchor_sha256s=frozenset((_sha256(anchor),)),
+        reviewed_anchor_sha256s=frozenset(_sha256(item) for item in anchors),
         action_transitions=transitions,
         registration_engine=cast(RobustRegistrationEngine, engine),
     )
@@ -468,6 +476,206 @@ def test_readiness_veto_keeps_disconnected_pixels_out_of_registration(
     )
     assert all(disconnected_sha256 not in call for call in engine.calls)
     assert graph.false_edge_count == 0
+
+
+def test_risky_state_change_compatibility_is_surfaced_and_quarantined(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    anchor, supported_b, supported_c, risky = (
+        _frame(34),
+        _frame(35),
+        _frame(36),
+        _frame(37),
+    )
+    supported = (anchor, supported_b, supported_c)
+    frames = (*supported, risky)
+    digests = frozenset(_sha256(frame) for frame in frames)
+    supported_digests = frozenset(_sha256(frame) for frame in supported)
+    _install_evaluators(
+        monkeypatch,
+        ready_sha256s=digests,
+        supported_sha256s=supported_digests,
+    )
+    graph = _build(
+        (
+            ViewNodeSpec("anchor-a", anchor, ViewRole.REVIEWED_SUPPORTED),
+            ViewNodeSpec("anchor-b", supported_b, ViewRole.REVIEWED_SUPPORTED),
+            ViewNodeSpec("anchor-c", supported_c, ViewRole.REVIEWED_SUPPORTED),
+            ViewNodeSpec("risky-current", risky, ViewRole.RISKY_STATE_CHANGE),
+        ),
+        current=risky,
+        anchor=anchor,
+        reviewed_anchors=supported,
+        engine=_DeterministicEngine(_positions(*frames)),
+        transitions=(_transition("risky-to-anchor", risky, anchor),),
+    )
+
+    risky_sha256 = _sha256(risky)
+    risky_edges = tuple(
+        edge
+        for edge in graph.edges
+        if risky_sha256 in (edge.source_sha256, edge.target_sha256)
+    )
+    assert len(risky_edges) == 3
+    assert all(edge.registration_accepted for edge in risky_edges)
+    assert all(edge.supporting_cycle_ids for edge in risky_edges)
+    assert all(edge.verified(graph.policy) for edge in risky_edges)
+    risky_edge_ids = {edge.edge_id for edge in risky_edges}
+    assert len(graph.negative_nodes) == 1
+    negative_node = graph.negative_nodes[0]
+    assert negative_node.sha256 == risky_sha256
+    assert negative_node.verified_path_to_supported is not None
+    assert negative_node.verified_path_to_supported[0] == risky_sha256
+    assert negative_node.verified_path_to_supported[-1] in supported_digests
+    assert len(negative_node.verified_path_to_supported) == 2
+    assert set(graph.negative_accepted_edge_ids) == risky_edge_ids
+    assert set(graph.negative_verified_edge_ids) == risky_edge_ids
+    assert graph.false_edge_count == 3
+    assert graph.false_path_count == 1
+    assert graph.negative_failure_count == 4
+    assert len(graph.components) == 2
+    assert graph.visual_path_to_supported is None
+    assert graph.action_path_to_supported is None
+    assert not graph.offline_controller_path_available
+    assert graph.conclusion.startswith("missing graph link:")
+
+
+def test_risky_state_change_cannot_be_the_only_bridge_between_verified_components(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    anchor, supported_b, supported_c, current, current_b, current_c, risky = (
+        _frame(38),
+        _frame(39),
+        _frame(42),
+        _frame(43),
+        _frame(44),
+        _frame(45),
+        _frame(46),
+    )
+    supported = (anchor, supported_b, supported_c)
+    current_component = (current, current_b, current_c)
+    frames = (*supported, *current_component, risky)
+    digests = frozenset(_sha256(frame) for frame in frames)
+    supported_digests = frozenset(_sha256(frame) for frame in supported)
+    _install_evaluators(
+        monkeypatch,
+        ready_sha256s=digests,
+        supported_sha256s=supported_digests,
+    )
+    accepted_pairs = {
+        _pair(_sha256(first), _sha256(second))
+        for component in (supported, current_component)
+        for index, first in enumerate(component)
+        for second in component[index + 1 :]
+    }
+    accepted_pairs.update(
+        _pair(_sha256(risky), _sha256(frame))
+        for frame in (*supported, *current_component)
+    )
+    graph = _build(
+        (
+            ViewNodeSpec("anchor-a", anchor, ViewRole.REVIEWED_SUPPORTED),
+            ViewNodeSpec("anchor-b", supported_b, ViewRole.REVIEWED_SUPPORTED),
+            ViewNodeSpec("anchor-c", supported_c, ViewRole.REVIEWED_SUPPORTED),
+            ViewNodeSpec("current", current, ViewRole.SYSTEM_IDENTIFICATION),
+            ViewNodeSpec("current-b", current_b, ViewRole.OTHER_UNSUPPORTED),
+            ViewNodeSpec("current-c", current_c, ViewRole.OTHER_UNSUPPORTED),
+            ViewNodeSpec("risky-bridge", risky, ViewRole.RISKY_STATE_CHANGE),
+        ),
+        current=current,
+        anchor=anchor,
+        reviewed_anchors=supported,
+        engine=_DeterministicEngine(
+            _positions(*frames),
+            accepted_pairs=frozenset(accepted_pairs),
+        ),
+        transitions=(
+            _transition("current-to-risky", current, risky),
+            _transition("risky-to-anchor", risky, anchor),
+        ),
+    )
+
+    risky_sha256 = _sha256(risky)
+    risky_edges = tuple(
+        edge
+        for edge in graph.edges
+        if risky_sha256 in (edge.source_sha256, edge.target_sha256)
+    )
+    assert len(risky_edges) == 6
+    assert all(edge.registration_accepted for edge in risky_edges)
+    assert all(edge.verified(graph.policy) for edge in risky_edges)
+    risky_edge_ids = {edge.edge_id for edge in risky_edges}
+    assert len(graph.negative_nodes) == 1
+    negative_node = graph.negative_nodes[0]
+    assert negative_node.sha256 == risky_sha256
+    assert negative_node.verified_path_to_supported is not None
+    assert negative_node.verified_path_to_supported[0] == risky_sha256
+    assert negative_node.verified_path_to_supported[-1] in supported_digests
+    assert len(negative_node.verified_path_to_supported) == 2
+    assert set(graph.negative_accepted_edge_ids) == risky_edge_ids
+    assert set(graph.negative_verified_edge_ids) == risky_edge_ids
+    assert graph.false_edge_count == 6
+    assert graph.false_path_count == 1
+    assert graph.negative_failure_count == 7
+    assert sum(edge.verified(graph.policy) for edge in graph.edges) == 12
+    assert len(graph.components) == 3
+    assert graph.visual_path_to_supported is None
+    assert graph.action_path_to_supported is None
+    assert not graph.offline_controller_path_available
+
+
+def test_isolated_risky_state_change_has_no_false_supported_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    anchor, supported_b, supported_c, risky = (
+        _frame(47),
+        _frame(48),
+        _frame(49),
+        _frame(50),
+    )
+    supported = (anchor, supported_b, supported_c)
+    frames = (*supported, risky)
+    digests = frozenset(_sha256(frame) for frame in frames)
+    supported_digests = frozenset(_sha256(frame) for frame in supported)
+    _install_evaluators(
+        monkeypatch,
+        ready_sha256s=digests,
+        supported_sha256s=supported_digests,
+    )
+    supported_pairs = frozenset(
+        _pair(_sha256(first), _sha256(second))
+        for index, first in enumerate(supported)
+        for second in supported[index + 1 :]
+    )
+    graph = _build(
+        (
+            ViewNodeSpec("anchor-a", anchor, ViewRole.REVIEWED_SUPPORTED),
+            ViewNodeSpec("anchor-b", supported_b, ViewRole.REVIEWED_SUPPORTED),
+            ViewNodeSpec("anchor-c", supported_c, ViewRole.REVIEWED_SUPPORTED),
+            ViewNodeSpec("risky-isolated", risky, ViewRole.RISKY_STATE_CHANGE),
+        ),
+        current=risky,
+        anchor=anchor,
+        reviewed_anchors=supported,
+        engine=_DeterministicEngine(
+            _positions(*frames),
+            accepted_pairs=supported_pairs,
+        ),
+    )
+
+    assert len(graph.negative_nodes) == 1
+    negative_node = graph.negative_nodes[0]
+    assert negative_node.sha256 == _sha256(risky)
+    assert negative_node.accepted_edge_ids == ()
+    assert negative_node.verified_edge_ids == ()
+    assert negative_node.verified_path_to_supported is None
+    assert graph.negative_accepted_edge_ids == ()
+    assert graph.negative_verified_edge_ids == ()
+    assert graph.false_edge_count == 0
+    assert graph.false_path_count == 0
+    assert graph.negative_failure_count == 0
+    assert graph.visual_path_to_supported is None
+    assert graph.action_path_to_supported is None
 
 
 def test_receipt_label_cannot_promote_an_edge_without_cycle_evidence(
