@@ -718,8 +718,23 @@ no selected experiment, and no input authorization. It does **not** select the
 Right `0.043 s` step. The smallest additional evidence is one more exact,
 receipt-bound execution of the same frozen `north-up-p610-y043-reset` plan
 whose post frame earns cycle-verified all-three-zone edges to both existing
-family endpoints and every reviewed supported anchor. Collecting that evidence
-requires a separate lead decision; this document does not authorize it.
+family endpoints and at least one common reviewed supported anchor. Planner
+version `2.1.0` reports every per-anchor edge result and the exact qualifying
+common-anchor set. Endpoints that reach only different anchors do not qualify.
+Collecting that evidence requires a separate lead decision; this document does
+not authorize it.
+
+The canonical read-only R2 analysis is version `1.1.0` and is generated with:
+
+```powershell
+.\.venv\Scripts\python.exe tools\analyze_issue31_bridge_r2.py --expected-head <EXACT_HEAD> --r1-report diagnostics\issue31-robust-registration-r1\issue31-robust-registration-r1-<HEAD_PREFIX>.json --r1-sha256 <R1_REPORT_SHA256> --report diagnostics\issue31-camera-bridge-r2\issue31-camera-bridge-r2-<HEAD_PREFIX>.json
+```
+
+Exit status `1` is the expected fail-closed semantic result while the repeat
+edge lacks graph-cycle verification; the JSON and adjacent SHA-256 sidecar are
+still the canonical evidence. The machine planner disposition is
+`no_safe_endpoint_evidence`; the human-readable result conclusion is
+`no safe endpoint evidence`.
 
 The development-only fixed Right `0.043 s` capture wrapper is retained as an
 inert reviewed design for a possible future qualified planner result. Its
@@ -742,7 +757,8 @@ it must start from an authenticated fresh compass-north state and:
    after that registration attempt, even when registration rejects or raises;
    and
 7. seal the physical receipt, registration outcome, production outcome, exact
-   frame hashes, objective binding, and report sidecar together.
+   frame hashes, objective binding, and report sidecar together without a
+   second production-detector invocation.
 
 Registration may reject or characterize the saved edge, but it may not
 validate the scene, expose resources, authorize another primitive, or override
@@ -755,10 +771,14 @@ The live artifact is report-only: it never emits an `ActionTransition`, always
 marks transition-candidate eligibility false, and states that authenticated
 offline ingestion is still required. A future ingester must compute and verify
 the report/sidecar digest and rederive receipt, raw frame, registration, and
-production facts before constructing any graph edge. The current canonical
-planner result cannot satisfy the wrapper's authorization loader, so it stops
-before the input lease and capture backend. No live input from this design is
-authorized, and this section makes no reacquisition-success claim.
+production facts before constructing any graph edge. The command has a
+source-literal, caller-inaccessible disabled gate and stops before loading a
+live handoff, acquiring the input lease, or constructing the capture backend.
+A planner report is evidence only and can never satisfy or toggle that gate.
+Enabling one future sample therefore requires a new exact code head and
+explicit lead review; no CLI flag, report field, environment variable, or
+caller-selected value can do so. No live input from this design is authorized,
+and this section makes no reacquisition-success claim.
 
 ## Repeated trial protocol
 

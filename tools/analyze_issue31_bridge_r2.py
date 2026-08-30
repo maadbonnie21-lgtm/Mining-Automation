@@ -78,7 +78,7 @@ _NORTH_FRAME_SHA256: Final[str] = (
 _NORTH_REPORT_HEAD: Final[str] = "4abc5dbb00dee6daa167b79e45fb8f3551b90880"
 _RESET_REPORT_HEAD: Final[str] = "fa9975da946da8b5272d81b540f99acd3fca63b4"
 _R2_PLAN_ID: Final[str] = "issue31-read-only-bridge-analysis-r2"
-_R2_PLAN_VERSION: Final[str] = "1.0.0"
+_R2_PLAN_VERSION: Final[str] = "1.1.0"
 _MISSING_LINK: Final[str] = (
     "one receipt-proven, readiness-safe camera transition from the current "
     "cycle-verified component to any exact reviewed production-supported "
@@ -89,7 +89,8 @@ _R2_CONCLUSION: Final[str] = "no safe endpoint evidence"
 _R2_MISSING_EVIDENCE: Final[str] = (
     "one additional exact receipt-bound north-up-p610-y043-reset endpoint "
     "whose post frame earns cycle-verified all-three-zone edges to both "
-    "existing family endpoints and every frozen reviewed supported anchor"
+    "existing family endpoints and at least one common frozen reviewed "
+    "supported anchor"
 )
 _FULL_GIT_SHA = re.compile(r"[0-9a-f]{40}")
 

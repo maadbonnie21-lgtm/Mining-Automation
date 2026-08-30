@@ -118,12 +118,12 @@ def _patch_reviewed_inputs(
         frame_id=1,
         captured_monotonic_s=tool.time.monotonic(),
     )
-    analysis = tool._BridgeAnalysisAuthorization(
+    analysis = tool._BridgeAnalysisEvidence(
         report_path=tmp_path / "analysis.json",
         report_sha256="1" * 64,
         r1_report_sha256="3" * 64,
         planner_id="issue31-read-only-camera-bridge-planner-r2",
-        planner_version="2.0.0",
+        planner_version="2.1.0",
         objective_id=tool._BRIDGE_OBJECTIVE_ID,
         source_frame=frame,
         source_raw_path=tmp_path / "planner-source.raw",
@@ -137,9 +137,10 @@ def _patch_reviewed_inputs(
     )
     monkeypatch.setattr(
         tool,
-        "_load_bridge_analysis_authorization",
+        "_load_bridge_analysis_evidence",
         lambda *_args, **_kwargs: analysis,
     )
+    monkeypatch.setattr(tool, "_BRIDGE_LIVE_INPUT_ENABLED", True)
     monkeypatch.setattr(
         tool,
         "_load_bridge_north_handoff",
@@ -281,39 +282,69 @@ def _analysis_payload(tool: ModuleType) -> dict[str, object]:
             "bridge_planner": {
                 "authority": planner_authority,
                 "current_sha256": source_sha256,
-                "disposition": "missing_experiment",
+                "disposition": "no_safe_endpoint_evidence",
                 "family_evaluations": [
                     {
-                        "complete": True,
-                        "failure_reasons": [],
+                        "anchor_evaluations": [
+                            {
+                                "anchor_sha256": "6" * 64,
+                                "complete": True,
+                                "missing_edge_ids": [],
+                                "verified_edge_ids": ["8" * 64, "9" * 64],
+                            }
+                        ],
+                        "complete": False,
+                        "distinct_endpoint_sha256s": ["4" * 64, "5" * 64],
+                        "distinct_receipt_report_sha256s": list(
+                            sorted(tool._BRIDGE_OBJECTIVE_REPORT_SHA256S)
+                        ),
+                        "failure_reasons": [
+                            "repeat_edge_not_verified_all_zones:" + "7" * 64
+                        ],
                         "family_id": tool.FROZEN_ENDPOINT_OBJECTIVE.family_id,
+                        "frozen_anchor_sha256s": ["6" * 64],
+                        "qualifying_common_anchor_sha256s": ["6" * 64],
                     }
                 ],
+                "inventory": {
+                    "inventory_id": (
+                        "issue31-frozen-receipt-backed-camera-primitives-r2"
+                    ),
+                    "inventory_version": "2.0.0",
+                    "experiments": [
+                        {
+                            "action_id": tool.CAMERA_BRIDGE_CAPTURE_ID,
+                            "duration_s": tool.CAMERA_BRIDGE_CAPTURE_HOLD_SECONDS,
+                            "experiment_id": tool._BRIDGE_OBJECTIVE_ID,
+                            "family_id": tool.FROZEN_ENDPOINT_OBJECTIVE.family_id,
+                            "key": "right",
+                            "minimum_distinct_receipt_endpoints": 2,
+                            "ordinal": 1,
+                            "required_source_sha256": source_sha256,
+                            "selection_backing_report_sha256s": list(
+                                sorted(tool._BRIDGE_OBJECTIVE_REPORT_SHA256S)
+                            ),
+                        }
+                    ]
+                },
                 "matrix_policy": {
                     "rejected_registration_matrices_used_for_control": False,
                     "rejected_registration_metrics_used_for_ranking": False,
                 },
-                "missing_experiment": {
-                    "action_id": tool.CAMERA_BRIDGE_CAPTURE_ID,
-                    "can_execute_input": False,
-                    "duration_s": tool.CAMERA_BRIDGE_CAPTURE_HOLD_SECONDS,
-                    "experiment_id": tool._BRIDGE_OBJECTIVE_ID,
-                    "family_id": tool.FROZEN_ENDPOINT_OBJECTIVE.family_id,
-                    "key": "right",
-                    "receipt_backing_sha256s": list(
-                        sorted(tool._BRIDGE_OBJECTIVE_REPORT_SHA256S)
-                    ),
-                    "source_sha256": source_sha256,
-                    "uses_rejected_registration_matrix": False,
-                },
+                "missing_experiment": None,
                 "planner_id": tool.CAMERA_BRIDGE_PLANNER_ID,
                 "planner_version": tool.CAMERA_BRIDGE_PLANNER_VERSION,
+                "ranked_families": [],
             },
             "corpus": {"north": {"frame": {}}},
             "result": {
+                "conclusion": "no safe endpoint evidence",
                 "live_input_authorized": False,
                 "reacquisition_success_claimed": False,
-                "selected_experiment_id": tool._BRIDGE_OBJECTIVE_ID,
+                "selected_experiment_id": None,
+                "smallest_additional_evidence": (
+                    tool._BRIDGE_SMALLEST_ADDITIONAL_EVIDENCE
+                ),
             },
             "r1_source": {
                 "negative_corpus": {
@@ -754,6 +785,72 @@ def test_pending_post_identity_revalidation_does_not_run_production_early(
     tool._require_bridge_capture_result_identities(result, output_root=tmp_path)
 
 
+def test_seal_compares_the_ordered_post_production_without_a_second_call(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = bytes((1, 2, 3, 255))
+    raw = tmp_path / "r2-post.raw"
+    raw.write_bytes(payload)
+    readiness = SimpleNamespace(safe_to_attempt_camera_input=True)
+    production = SimpleNamespace(passed=False)
+    artifact = tool.CameraFrameArtifact(
+        label="r2-post",
+        frame_id=4,
+        width=1,
+        height=1,
+        pixel_format=PixelFormat.BGRA8888.value,
+        raw_sha256=hashlib.sha256(payload).hexdigest(),
+        files=(("raw", raw.name),),
+    )
+    post = tool.CameraServoFrameEvidence(
+        artifact=artifact,
+        captured_monotonic_s=4.0,
+        readiness=readiness,
+        production=production,
+    )
+    result = SimpleNamespace(
+        plan=tool.camera_bridge_capture_plan(),
+        can_accept=False,
+        can_authorize_camera_input=False,
+        can_expose_resources=False,
+        can_validate_scene=False,
+        diagnostic_registration_can_override_production=False,
+        decision=None,
+        arm=None,
+        commit=None,
+        post=post,
+        terminal_reason=tool.CameraBridgeCaptureTerminalReason.CAPTURE_COMPLETE,
+    )
+    detector_calls = 0
+
+    def detector(_frame: Frame) -> object:
+        nonlocal detector_calls
+        detector_calls += 1
+        return production
+
+    monkeypatch.setattr(tool, "evaluate_client_input_readiness", lambda _frame: readiness)
+    monkeypatch.setattr(tool, "evaluate_varrock_east_camera", detector)
+    monkeypatch.setattr(
+        tool,
+        "_require_north_bootstrap_production_identity",
+        lambda *_args, **_kwargs: None,
+    )
+
+    # This represents the sole ordered post-production call made immediately
+    # after registration; sealing must compare, not invoke the detector again.
+    assert detector(_unit_frame(tool)) is production
+    tool._require_bridge_capture_result_identities(
+        result,
+        output_root=tmp_path,
+        sealed_post_production=production,
+        post_production_already_bound=True,
+    )
+
+    assert detector_calls == 1
+
+
 def test_live_bridge_objective_exactly_matches_frozen_planner_objective(
     tool: ModuleType,
 ) -> None:
@@ -769,7 +866,7 @@ def test_live_bridge_objective_exactly_matches_frozen_planner_objective(
     )
 
 
-def test_analysis_authorization_binds_exact_complete_planner_result(
+def test_analysis_evidence_binds_exact_no_safe_replication_need(
     tool: ModuleType,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -787,7 +884,7 @@ def test_analysis_authorization_binds_exact_complete_planner_result(
         lambda *_args, **_kwargs: (frame, tmp_path / "north.raw"),
     )
 
-    result = tool._load_bridge_analysis_authorization(
+    result = tool._load_bridge_analysis_evidence(
         tmp_path / "analysis.json",
         expected_sha256="1" * 64,
         expected_head="a" * 40,
@@ -806,12 +903,13 @@ def test_analysis_authorization_binds_exact_complete_planner_result(
         "action_id",
         "receipt_backing",
         "family_incomplete",
+        "common_anchor",
         "source_mismatch",
         "source_not_frozen",
         "no_safe_disposition",
     ],
 )
-def test_analysis_authorization_rejects_forged_or_incomplete_planner_result(
+def test_analysis_evidence_rejects_forged_or_incomplete_planner_result(
     tool: ModuleType,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -822,8 +920,11 @@ def test_analysis_authorization_rejects_forged_or_incomplete_planner_result(
     assert isinstance(evidence, dict)
     planner = evidence["bridge_planner"]
     assert isinstance(planner, dict)
-    missing = planner["missing_experiment"]
-    assert isinstance(missing, dict)
+    inventory = planner["inventory"]
+    assert isinstance(inventory, dict)
+    experiments = inventory["experiments"]
+    assert isinstance(experiments, list) and isinstance(experiments[0], dict)
+    objective = experiments[0]
     if mutation == "authority_extra":
         authority = evidence["authority"]
         assert isinstance(authority, dict)
@@ -833,28 +934,32 @@ def test_analysis_authorization_rejects_forged_or_incomplete_planner_result(
         assert isinstance(matrix, dict)
         matrix["rejected_registration_metrics_used_for_ranking"] = True
     elif mutation == "action_id":
-        missing["action_id"] = "forged"
+        objective["action_id"] = "forged"
     elif mutation == "receipt_backing":
-        missing["receipt_backing_sha256s"] = ["9" * 64]
+        objective["selection_backing_report_sha256s"] = ["9" * 64]
     elif mutation == "family_incomplete":
         families = planner["family_evaluations"]
         assert isinstance(families, list) and isinstance(families[0], dict)
-        families[0]["complete"] = False
-        families[0]["failure_reasons"] = ["repeat_edge_not_verified"]
+        families[0]["complete"] = True
+        families[0]["failure_reasons"] = []
+    elif mutation == "common_anchor":
+        families = planner["family_evaluations"]
+        assert isinstance(families, list) and isinstance(families[0], dict)
+        families[0]["qualifying_common_anchor_sha256s"] = ["9" * 64]
     elif mutation == "source_mismatch":
         safe_graph = evidence["safe_view_graph"]
         assert isinstance(safe_graph, dict)
         safe_graph["current_sha256"] = "8" * 64
     elif mutation == "source_not_frozen":
         forged_source = "4" * 64
-        missing["source_sha256"] = forged_source
+        objective["required_source_sha256"] = forged_source
         planner["current_sha256"] = forged_source
         safe_graph = evidence["safe_view_graph"]
         assert isinstance(safe_graph, dict)
         safe_graph["current_sha256"] = forged_source
     else:
-        planner["disposition"] = "no_safe_endpoint_evidence"
-        planner["missing_experiment"] = None
+        planner["disposition"] = "missing_experiment"
+        planner["missing_experiment"] = {"can_execute_input": False}
     monkeypatch.setattr(
         tool,
         "_load_private_bound_report",
@@ -867,7 +972,7 @@ def test_analysis_authorization_rejects_forged_or_incomplete_planner_result(
     )
 
     with pytest.raises(ValueError):
-        tool._load_bridge_analysis_authorization(
+        tool._load_bridge_analysis_evidence(
             tmp_path / "analysis.json",
             expected_sha256="1" * 64,
             expected_head="a" * 40,
@@ -973,9 +1078,10 @@ def test_invalid_reviewed_report_stops_before_lease_backend_or_input(
             ),
         )
     else:
+        monkeypatch.setattr(tool, "_BRIDGE_LIVE_INPUT_ENABLED", True)
         monkeypatch.setattr(
             tool,
-            "_load_bridge_analysis_authorization",
+            "_load_bridge_analysis_evidence",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 ValueError("forged analysis")
             ),
@@ -995,6 +1101,52 @@ def test_invalid_reviewed_report_stops_before_lease_backend_or_input(
     )
 
     assert result == 2
+    assert _Backend.constructed == 0
+    assert _Lease.events == []
+
+
+def test_bridge_launcher_is_inert_without_exact_head_lead_enablement(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _Backend.constructed = 0
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda _path: output)
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    monkeypatch.setattr(
+        tool,
+        "_load_bridge_analysis_evidence",
+        lambda *_args, **_kwargs: pytest.fail(
+            "an input-disabled launcher must not convert analysis into authority"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "_load_bridge_north_handoff",
+        lambda *_args, **_kwargs: pytest.fail(
+            "an input-disabled launcher must not load live handoff state"
+        ),
+    )
+
+    result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(output),
+            "--case-prefix",
+            "lead-gate-refusal",
+            *_review_args(),
+        ]
+    )
+
+    assert result == 2
+    assert tool._BRIDGE_LIVE_INPUT_ENABLED is False
     assert _Backend.constructed == 0
     assert _Lease.events == []
 
@@ -1060,8 +1212,16 @@ def test_bridge_lease_spans_runner_cleanup_revalidation_and_publication(
         assert registration_events == ["analyze", "analyze"]
         return _capture_complete_result()
 
-    def revalidate(_result: object, *, output_root: Path) -> None:
+    def revalidate(
+        _result: object,
+        *,
+        output_root: Path,
+        sealed_post_production: object,
+        post_production_already_bound: bool,
+    ) -> None:
         assert output_root == output
+        assert sealed_post_production is None
+        assert post_production_already_bound is False
         _Lease.events.append("revalidate")
 
     original_write = tool.write_camera_validation_report
@@ -1509,12 +1669,12 @@ def test_bridge_report_truthfully_distinguishes_prearm_and_input_seam_checks(
     tmp_path: Path,
 ) -> None:
     frame = _unit_frame(tool)
-    analysis = tool._BridgeAnalysisAuthorization(
+    analysis = tool._BridgeAnalysisEvidence(
         report_path=tmp_path / "analysis.json",
         report_sha256="1" * 64,
         r1_report_sha256="3" * 64,
         planner_id="issue31-read-only-camera-bridge-planner-r2",
-        planner_version="2.0.0",
+        planner_version="2.1.0",
         objective_id=tool._BRIDGE_OBJECTIVE_ID,
         source_frame=frame,
         source_raw_path=tmp_path / "source.raw",
@@ -1534,7 +1694,7 @@ def test_bridge_report_truthfully_distinguishes_prearm_and_input_seam_checks(
 
     evidence = tool._bridge_capture_evidence(
         _capture_complete_result(input_attempted=False),
-        analysis_authorization=analysis,
+        analysis_evidence=analysis,
         adapter_identity="adapter",
         north_handoff=north,
         north_registration=None,

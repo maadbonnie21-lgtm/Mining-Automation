@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -197,7 +197,9 @@ class _ReportPublicationState:
 
 
 @dataclass(frozen=True, slots=True)
-class _BridgeAnalysisAuthorization:
+class _BridgeAnalysisEvidence:
+    """Authenticated read-only R2 analysis; never camera-input authority."""
+
     report_path: Path
     report_sha256: str
     r1_report_sha256: str
@@ -291,7 +293,14 @@ _BRIDGE_OBJECTIVE_REPORT_SHA256S = (
     FROZEN_ENDPOINT_OBJECTIVE.selection_backing_report_sha256s
 )
 _BRIDGE_ANALYSIS_PLAN_ID = "issue31-read-only-bridge-analysis-r2"
-_BRIDGE_ANALYSIS_PLAN_VERSION = "1.0.0"
+_BRIDGE_ANALYSIS_PLAN_VERSION = "1.1.0"
+_BRIDGE_SMALLEST_ADDITIONAL_EVIDENCE = (
+    "one additional exact receipt-bound north-up-p610-y043-reset endpoint "
+    "whose post frame earns cycle-verified all-three-zone edges to both "
+    "existing family endpoints and at least one common frozen reviewed "
+    "supported anchor"
+)
+_BRIDGE_LIVE_INPUT_ENABLED: Final[bool] = False
 _BRIDGE_NORTH_MAXIMUM_AGE_SECONDS = 30.0
 _EXPECTED_DETECTOR_ID = "profiled-resource:varrock-east-iron-v1"
 _EXPECTED_DETECTOR_VERSION = "2.1.0"
@@ -915,7 +924,7 @@ def _require_bridge_capture_runtime_identities() -> None:
         "hold_seconds": 0.043,
         "maximum_physical_primitives": 1,
         "planner_id": "issue31-read-only-camera-bridge-planner-r2",
-        "planner_version": "2.0.0",
+        "planner_version": "2.1.0",
         "objective_action_id": "issue31-fixed-camera-bridge-capture-r2",
         "objective_duration_seconds": 0.043,
         "objective_family_id": "north-up-p610-y043-reset",
@@ -1102,6 +1111,8 @@ def _require_bridge_capture_result_identities(
     result: CameraBridgeCaptureResult,
     *,
     output_root: Path,
+    sealed_post_production: CameraEvaluation | None = None,
+    post_production_already_bound: bool = False,
 ) -> None:
     """Re-evaluate every exact private R2 payload before publication."""
 
@@ -1168,11 +1179,19 @@ def _require_bridge_capture_result_identities(
                     f"{stage} retained pending evidence outside the closure seam"
                 )
             continue
-        production = (
-            evaluate_varrock_east_camera(frame)
-            if readiness.safe_to_attempt_camera_input
-            else None
-        )
+        if stage == "post" and post_production_already_bound:
+            # The exact post payload/readiness/time/identity was bound by
+            # _finalize_camera_bridge_post_production after registration.  A
+            # second detector call here would violate the required O3 order
+            # (capture -> registration -> production -> seal), so sealing is
+            # a comparison against that already-bound result only.
+            production = sealed_post_production
+        else:
+            production = (
+                evaluate_varrock_east_camera(frame)
+                if readiness.safe_to_attempt_camera_input
+                else None
+            )
         if production != evidence.production:
             raise RuntimeError(f"{stage} production does not bind its exact payload")
         if production is not None:
@@ -1380,13 +1399,13 @@ def _load_bridge_north_handoff(
     )
 
 
-def _load_bridge_analysis_authorization(
+def _load_bridge_analysis_evidence(
     report: Path,
     *,
     expected_sha256: str,
     expected_head: str,
-) -> _BridgeAnalysisAuthorization:
-    """Authenticate the reviewed no-input planner result for one experiment."""
+) -> _BridgeAnalysisEvidence:
+    """Load exact read-only planner evidence without granting input authority."""
 
     report_path, payload = _load_private_bound_report(
         report,
@@ -1438,8 +1457,8 @@ def _load_bridge_analysis_authorization(
     if (
         planner.get("planner_id")
         != "issue31-read-only-camera-bridge-planner-r2"
-        or planner.get("planner_version") != "2.0.0"
-        or planner.get("disposition") != "missing_experiment"
+        or planner.get("planner_version") != CAMERA_BRIDGE_PLANNER_VERSION
+        or planner.get("disposition") != "no_safe_endpoint_evidence"
         or _json_object(planner.get("authority"), "R2 planner authority")
         != {
             "can_accept": False,
@@ -1456,28 +1475,39 @@ def _load_bridge_analysis_authorization(
         "rejected_registration_metrics_used_for_ranking": False,
     }:
         raise ValueError("R2 planner used a rejected registration matrix")
-    missing = _json_object(
-        planner.get("missing_experiment"),
-        "R2 missing experiment",
-    )
-    source_sha256 = missing.get("source_sha256")
+    if planner.get("missing_experiment") is not None:
+        raise ValueError("R2 no-safe evidence must not invent a missing experiment")
+    if _json_list(planner.get("ranked_families"), "R2 ranked families"):
+        raise ValueError("R2 no-safe evidence must not rank an endpoint family")
+    inventory = _json_object(planner.get("inventory"), "R2 inventory")
     if (
-        missing.get("experiment_id") != _BRIDGE_OBJECTIVE_ID
-        or missing.get("action_id") != CAMERA_BRIDGE_CAPTURE_ID
-        or missing.get("family_id") != FROZEN_ENDPOINT_OBJECTIVE.family_id
-        or missing.get("key") != "right"
-        or missing.get("duration_s") != CAMERA_BRIDGE_CAPTURE_HOLD_SECONDS
-        or missing.get("can_execute_input") is not False
-        or missing.get("uses_rejected_registration_matrix") is not False
+        inventory.get("inventory_id")
+        != "issue31-frozen-receipt-backed-camera-primitives-r2"
+        or inventory.get("inventory_version") != "2.0.0"
+    ):
+        raise ValueError("R2 inventory identity is not canonical")
+    experiments = _json_list(inventory.get("experiments"), "R2 experiments")
+    if len(experiments) != 1:
+        raise ValueError("R2 inventory must retain exactly one frozen objective")
+    objective = _json_object(experiments[0], "R2 frozen objective")
+    source_sha256 = objective.get("required_source_sha256")
+    if (
+        objective.get("experiment_id") != _BRIDGE_OBJECTIVE_ID
+        or objective.get("action_id") != CAMERA_BRIDGE_CAPTURE_ID
+        or objective.get("family_id") != FROZEN_ENDPOINT_OBJECTIVE.family_id
+        or objective.get("key") != "right"
+        or objective.get("duration_s") != CAMERA_BRIDGE_CAPTURE_HOLD_SECONDS
+        or objective.get("minimum_distinct_receipt_endpoints") != 2
+        or objective.get("ordinal") != 1
         or not isinstance(source_sha256, str)
         or re.fullmatch(r"[0-9a-f]{64}", source_sha256) is None
         or source_sha256 != FROZEN_ENDPOINT_SOURCE_SHA256
     ):
-        raise ValueError("R2 planner did not select the frozen bridge objective")
-    if missing.get("receipt_backing_sha256s") != list(
+        raise ValueError("R2 inventory does not retain the frozen bridge objective")
+    if objective.get("selection_backing_report_sha256s") != list(
         sorted(_BRIDGE_OBJECTIVE_REPORT_SHA256S)
     ):
-        raise ValueError("R2 planner objective lacks the frozen selection receipts")
+        raise ValueError("R2 inventory objective lacks the frozen selection receipts")
     if (
         planner.get("current_sha256") != source_sha256
         or safe_graph.get("current_sha256") != source_sha256
@@ -1498,17 +1528,89 @@ def _load_bridge_analysis_authorization(
     )
     if (
         selected_family is None
-        or selected_family.get("complete") is not True
-        or selected_family.get("failure_reasons") != []
+        or selected_family.get("complete") is not False
+        or selected_family.get("distinct_receipt_report_sha256s")
+        != list(sorted(_BRIDGE_OBJECTIVE_REPORT_SHA256S))
     ):
-        raise ValueError("R2 planner endpoint family is not graph-complete")
+        raise ValueError("R2 planner does not retain the incomplete frozen family")
+    family_failures = _json_list(
+        selected_family.get("failure_reasons"),
+        "R2 family failures",
+    )
+    if len(family_failures) != 1 or not str(family_failures[0]).startswith(
+        "repeat_edge_not_verified_all_zones:"
+    ):
+        raise ValueError("R2 frozen family failure is not the reviewed repeat edge")
+    common_anchors = _json_list(
+        selected_family.get("qualifying_common_anchor_sha256s"),
+        "R2 qualifying common anchors",
+    )
+    frozen_anchors = _json_list(
+        selected_family.get("frozen_anchor_sha256s"),
+        "R2 frozen anchors",
+    )
+    endpoint_sha256s = _json_list(
+        selected_family.get("distinct_endpoint_sha256s"),
+        "R2 distinct endpoints",
+    )
+    if (
+        len(endpoint_sha256s) != 2
+        or any(
+            not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            for digest in endpoint_sha256s
+        )
+    ):
+        raise ValueError("R2 frozen family endpoint membership is not canonical")
+    anchor_evaluations = _json_list(
+        selected_family.get("anchor_evaluations"),
+        "R2 anchor evaluations",
+    )
+    completed_anchor_sha256s: list[str] = []
+    for raw_anchor_evaluation in anchor_evaluations:
+        anchor_evaluation = _json_object(
+            raw_anchor_evaluation,
+            "R2 anchor evaluation",
+        )
+        anchor_sha256 = anchor_evaluation.get("anchor_sha256")
+        verified_edges = _json_list(
+            anchor_evaluation.get("verified_edge_ids"),
+            "R2 verified anchor edges",
+        )
+        missing_edges = _json_list(
+            anchor_evaluation.get("missing_edge_ids"),
+            "R2 missing anchor edges",
+        )
+        if anchor_sha256 not in frozen_anchors:
+            raise ValueError("R2 anchor evaluation is not frozen")
+        if anchor_evaluation.get("complete") is True:
+            if missing_edges or len(verified_edges) != len(endpoint_sha256s):
+                raise ValueError("R2 complete common anchor is internally inconsistent")
+            assert isinstance(anchor_sha256, str)
+            completed_anchor_sha256s.append(anchor_sha256)
+        elif anchor_evaluation.get("complete") is not False:
+            raise ValueError("R2 anchor completion must be boolean")
+    if (
+        not common_anchors
+        or any(anchor not in frozen_anchors for anchor in common_anchors)
+        or not all(
+            isinstance(anchor, str)
+            and re.fullmatch(r"[0-9a-f]{64}", anchor) is not None
+            for anchor in common_anchors
+        )
+        or sorted(common_anchors) != sorted(completed_anchor_sha256s)
+    ):
+        raise ValueError("R2 frozen family lacks a reviewed common-anchor set")
     result = _json_object(evidence.get("result"), "R2 result")
     if (
         result.get("reacquisition_success_claimed") is not False
         or result.get("live_input_authorized") is not False
-        or result.get("selected_experiment_id") != _BRIDGE_OBJECTIVE_ID
+        or result.get("selected_experiment_id") is not None
+        or result.get("conclusion") != "no safe endpoint evidence"
+        or result.get("smallest_additional_evidence")
+        != _BRIDGE_SMALLEST_ADDITIONAL_EVIDENCE
     ):
-        raise ValueError("R2 result is not a review-required missing experiment")
+        raise ValueError("R2 result is not the reviewed no-safe replication need")
     r1_source = _json_object(evidence.get("r1_source"), "R2 R1 source")
     r1_report_sha256 = r1_source.get("report_sha256")
     negative = _json_object(
@@ -1527,12 +1629,12 @@ def _load_bridge_analysis_authorization(
         evidence,
         expected_sha256=source_sha256,
     )
-    return _BridgeAnalysisAuthorization(
+    return _BridgeAnalysisEvidence(
         report_path=report_path,
         report_sha256=expected_sha256,
         r1_report_sha256=r1_report_sha256,
         planner_id="issue31-read-only-camera-bridge-planner-r2",
-        planner_version="2.0.0",
+        planner_version=CAMERA_BRIDGE_PLANNER_VERSION,
         objective_id=_BRIDGE_OBJECTIVE_ID,
         source_frame=source_frame,
         source_raw_path=source_raw_path,
@@ -3887,7 +3989,7 @@ def _evaluate_bridge_post_transition(
 def _bridge_capture_evidence(
     result: CameraBridgeCaptureResult,
     *,
-    analysis_authorization: _BridgeAnalysisAuthorization,
+    analysis_evidence: _BridgeAnalysisEvidence,
     adapter_identity: str,
     north_handoff: _BridgeNorthHandoff,
     north_registration: RobustWorldRegistration | None,
@@ -3929,12 +4031,13 @@ def _bridge_capture_evidence(
                 ),
                 "selection_rule": (
                     "smallest receipt-proven step in the only repeated endpoint "
-                    "family with all-zone diagnostic links to every frozen anchor"
+                    "family with all-zone diagnostic links to one common frozen "
+                    "supported anchor"
                 ),
             },
             "command": _BRIDGE_CAPTURE_COMMAND,
             "development_only": True,
-            "analysis_authorization": analysis_authorization.as_dict(),
+            "analysis_evidence": analysis_evidence.as_dict(),
             "compass_north_handoff": north_handoff.as_dict(),
             "compass_north_registration": (
                 None
@@ -4024,7 +4127,7 @@ def _print_bridge_capture_summary(
 
 def _run_live_bridge_capture(
     *,
-    analysis_authorization: _BridgeAnalysisAuthorization,
+    analysis_evidence: _BridgeAnalysisEvidence,
     output_root: Path,
     report_path: Path,
     digest_path: Path,
@@ -4108,7 +4211,7 @@ def _run_live_bridge_capture(
         # stable link outside the one-second arm seam leaves only the fresh
         # north-to-commit relationship to compute after the arm observation.
         planner_source_registration = registration_engine.analyze(
-            analysis_authorization.source_frame,
+            analysis_evidence.source_frame,
             north_handoff.frame,
         )
         fresh_north_sha256 = hashlib.sha256(
@@ -4116,7 +4219,7 @@ def _run_live_bridge_capture(
         ).hexdigest()
         _require_bridge_starting_registration(
             planner_source_registration,
-            expected_source_sha256=analysis_authorization.source_sha256,
+            expected_source_sha256=analysis_evidence.source_sha256,
             expected_target_sha256=fresh_north_sha256,
             context="reviewed planner source to fresh compass-north handoff",
         )
@@ -4177,7 +4280,7 @@ def _run_live_bridge_capture(
                 raise RuntimeError("R2 planner-source registration was not precomputed")
             _require_bridge_starting_registration(
                 planner_source_registration,
-                expected_source_sha256=analysis_authorization.source_sha256,
+                expected_source_sha256=analysis_evidence.source_sha256,
                 expected_target_sha256=fresh_north_sha256,
                 context="reviewed planner source to fresh compass-north handoff",
             )
@@ -4298,6 +4401,15 @@ def _run_live_bridge_capture(
             _require_bridge_capture_result_identities(
                 result,
                 output_root=output_root,
+                sealed_post_production=post_transition_production,
+                post_production_already_bound=(
+                    isinstance(
+                        getattr(result, "post", None),
+                        CameraServoFrameEvidence,
+                    )
+                    and result.terminal_reason
+                    is not CameraBridgeCaptureTerminalReason.POST_CAPTURE_PENDING_CLOSURE
+                ),
             )
         except (OSError, RuntimeError, TypeError, ValueError) as identity_error:
             if not result.input_attempted:
@@ -4378,7 +4490,7 @@ def _run_live_bridge_capture(
             report_path,
             _bridge_capture_evidence(
                 result,
-                analysis_authorization=analysis_authorization,
+                analysis_evidence=analysis_evidence,
                 adapter_identity=adapter_identity,
                 north_handoff=north_handoff,
                 north_registration=north_registration,
@@ -4432,7 +4544,7 @@ def _run_live_bridge_capture(
 
 
 def _main_bridge_capture(command_args: list[str]) -> int:
-    """Validate and execute the exact-head, one-primitive R2 subcommand."""
+    """Keep the prepared one-primitive R2 launcher inert pending lead review."""
 
     args = _build_bridge_capture_parser().parse_args(command_args[1:])
     try:
@@ -4479,8 +4591,15 @@ def _main_bridge_capture(command_args: list[str]) -> int:
             file=sys.stderr,
         )
         return 2
+    if not _BRIDGE_LIVE_INPUT_ENABLED:
+        print(
+            "R2.1 bridge capture remains input-disabled pending a future "
+            "exact-head LEAD authorization; no report can grant input authority.",
+            file=sys.stderr,
+        )
+        return 2
     try:
-        analysis_authorization = _load_bridge_analysis_authorization(
+        analysis_evidence = _load_bridge_analysis_evidence(
             args.analysis_report,
             expected_sha256=analysis_sha256,
             expected_head=expected_head,
@@ -4501,7 +4620,7 @@ def _main_bridge_capture(command_args: list[str]) -> int:
         with lease:
             lease_entered = True
             return _run_live_bridge_capture(
-                analysis_authorization=analysis_authorization,
+                analysis_evidence=analysis_evidence,
                 output_root=output_root,
                 report_path=report_path,
                 digest_path=digest_path,

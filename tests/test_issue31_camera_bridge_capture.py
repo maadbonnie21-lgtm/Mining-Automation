@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import importlib.util
 import inspect
 import json
+import sys
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -287,6 +291,19 @@ def _happy_frames() -> list[Frame]:
     return [_frame(1), _frame(2), _frame(3), _frame(4, _post_payload())]
 
 
+def _load_composition_tool() -> ModuleType:
+    path = Path(__file__).resolve().parents[1] / "tools" / "validate_varrock_east_camera.py"
+    spec = importlib.util.spec_from_file_location(
+        "validate_varrock_east_camera_ordered_closure_test",
+        path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_fixed_public_policy_has_no_controller_or_perception_injection() -> None:
     plan = camera_bridge_capture_plan()
     signature = inspect.signature(run_fixed_camera_bridge_capture)
@@ -378,6 +395,85 @@ def test_exact_happy_path_records_one_receipted_primitive_and_stable_report(
     }
     assert set(payload["frames"]) == {"decision", "arm", "commit", "post"}
     json.dumps(payload, allow_nan=False, sort_keys=True)
+
+
+def test_real_closure_then_seal_evaluates_the_exact_post_only_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool = _load_composition_tool()
+    production_calls: list[int] = []
+
+    def evaluate(frame: Frame) -> CameraEvaluation:
+        production_calls.append(frame.frame_id)
+        return _production()
+
+    monkeypatch.setattr(
+        camera_bridge_capture,
+        "evaluate_client_input_readiness",
+        lambda _frame: _ready(),
+    )
+    monkeypatch.setattr(camera_bridge_capture, "evaluate_varrock_east_camera", evaluate)
+    monkeypatch.setattr(tool, "evaluate_client_input_readiness", lambda _frame: _ready())
+    monkeypatch.setattr(tool, "evaluate_varrock_east_camera", evaluate)
+    monkeypatch.setattr(
+        tool,
+        "_require_bridge_starting_registration",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        tool,
+        "_require_north_bootstrap_production_identity",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def recorder(label: str, frame: Frame) -> CameraFrameArtifact:
+        raw_path = tmp_path / f"{label}.raw"
+        raw_path.write_bytes(frame.payload)
+        return CameraFrameArtifact(
+            label=label,
+            frame_id=frame.frame_id,
+            width=frame.width,
+            height=frame.height,
+            pixel_format=frame.pixel_format.value,
+            raw_sha256=hashlib.sha256(frame.payload).hexdigest(),
+            files=(("raw", raw_path.name),),
+        )
+
+    result = _run(
+        SequenceSource(_happy_frames()),
+        CompleteControl(),
+        recorder=recorder,
+    )
+    assert result.input_attempted, result.as_dict()
+
+    class RegistrationEngine:
+        def analyze(self, _source: Frame, target: Frame) -> SimpleNamespace:
+                return SimpleNamespace(
+                target=SimpleNamespace(
+                    payload_sha256=hashlib.sha256(target.payload).hexdigest()
+                ),
+            )
+
+    finalized, closure, _registration, production = (
+        tool._evaluate_bridge_post_transition(
+            result,
+            output_root=tmp_path,
+            registration_engine=RegistrationEngine(),
+        )
+    )
+    assert closure.completed is True
+    assert production is not None
+    assert production_calls.count(4) == 1
+
+    tool._require_bridge_capture_result_identities(
+        finalized,
+        output_root=tmp_path,
+        sealed_post_production=production,
+        post_production_already_bound=True,
+    )
+
+    assert production_calls.count(4) == 1
 
 
 def test_physical_capture_is_report_only_until_authenticated_ingestion(

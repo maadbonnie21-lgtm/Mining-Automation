@@ -41,6 +41,7 @@ __all__ = [
     "BridgeExperimentRecommendation",
     "BridgePlannerDisposition",
     "CameraBridgePlannerEvidence",
+    "EndpointAnchorEvaluation",
     "EndpointExclusion",
     "EndpointFamilyEvaluation",
     "FrozenPrimitiveExperiment",
@@ -52,7 +53,7 @@ __all__ = [
 ]
 
 CAMERA_BRIDGE_PLANNER_ID: Final[str] = "issue31-read-only-camera-bridge-planner-r2"
-CAMERA_BRIDGE_PLANNER_VERSION: Final[str] = "2.0.0"
+CAMERA_BRIDGE_PLANNER_VERSION: Final[str] = "2.1.0"
 FROZEN_ENDPOINT_FAMILY_ID: Final[str] = "north-up-p610-y043-reset"
 FROZEN_ENDPOINT_OBJECTIVE_ID: Final[str] = (
     "north-up-p610-y043-reset:right-key-hold-0.043s"
@@ -429,6 +430,24 @@ class EndpointExclusion:
 
 
 @dataclass(frozen=True, slots=True)
+class EndpointAnchorEvaluation:
+    """Per-anchor audit of one endpoint family's all-zone graph coverage."""
+
+    anchor_sha256: str
+    verified_edge_ids: tuple[str, ...]
+    missing_edge_ids: tuple[str, ...]
+    complete: bool
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "anchor_sha256": self.anchor_sha256,
+            "complete": self.complete,
+            "missing_edge_ids": list(self.missing_edge_ids),
+            "verified_edge_ids": list(self.verified_edge_ids),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class EndpointFamilyEvaluation:
     """Graph-derived qualification of one repeated endpoint family."""
 
@@ -440,12 +459,17 @@ class EndpointFamilyEvaluation:
     frozen_anchor_sha256s: tuple[str, ...]
     repeat_edge_ids: tuple[str, ...]
     anchor_edge_ids: tuple[str, ...]
+    anchor_evaluations: tuple[EndpointAnchorEvaluation, ...]
+    qualifying_common_anchor_sha256s: tuple[str, ...]
     complete: bool
     failure_reasons: tuple[str, ...]
 
     def as_dict(self) -> dict[str, object]:
         return {
             "anchor_edge_ids": list(self.anchor_edge_ids),
+            "anchor_evaluations": [
+                item.as_dict() for item in self.anchor_evaluations
+            ],
             "complete": self.complete,
             "distinct_endpoint_sha256s": list(self.distinct_endpoint_sha256s),
             "distinct_receipt_report_sha256s": list(
@@ -456,6 +480,9 @@ class EndpointFamilyEvaluation:
             "family_id": self.family_id,
             "frozen_anchor_sha256s": list(self.frozen_anchor_sha256s),
             "repeat_edge_ids": list(self.repeat_edge_ids),
+            "qualifying_common_anchor_sha256s": list(
+                self.qualifying_common_anchor_sha256s
+            ),
             "required_distinct_endpoints": self.required_distinct_endpoints,
         }
 
@@ -737,21 +764,39 @@ def _evaluate_endpoint_families(
             else:
                 repeat_edges.append(edge_id)
         anchor_edges: list[str] = []
-        for endpoint_sha256 in endpoint_sha256s:
-            for anchor_sha256 in sorted(anchors):
+        anchor_evaluations: list[EndpointAnchorEvaluation] = []
+        qualifying_common_anchors: list[str] = []
+        for anchor_sha256 in sorted(anchors):
+            verified_for_anchor: list[str] = []
+            missing_for_anchor: list[str] = []
+            for endpoint_sha256 in endpoint_sha256s:
                 if endpoint_sha256 == anchor_sha256:
-                    failures.append(
+                    missing_for_anchor.append(
                         f"endpoint_is_frozen_supported_anchor:{endpoint_sha256}"
                     )
                     continue
                 edge_id = _edge_id(endpoint_sha256, anchor_sha256)
                 edge = edge_by_id.get(edge_id)
                 if edge is None or not _edge_is_all_zone_bridge(edge, graph):
-                    failures.append(
-                        f"anchor_edge_not_verified_all_zones:{edge_id}"
-                    )
+                    missing_for_anchor.append(edge_id)
                 else:
                     anchor_edges.append(edge_id)
+                    verified_for_anchor.append(edge_id)
+            anchor_complete = (
+                len(endpoint_sha256s) >= minimum and not missing_for_anchor
+            )
+            if anchor_complete:
+                qualifying_common_anchors.append(anchor_sha256)
+            anchor_evaluations.append(
+                EndpointAnchorEvaluation(
+                    anchor_sha256=anchor_sha256,
+                    verified_edge_ids=tuple(sorted(verified_for_anchor)),
+                    missing_edge_ids=tuple(sorted(missing_for_anchor)),
+                    complete=anchor_complete,
+                )
+            )
+        if anchors and not qualifying_common_anchors:
+            failures.append("no_common_supported_anchor_all_zones")
         unique_failures = tuple(sorted(set(failures)))
         evaluations.append(
             EndpointFamilyEvaluation(
@@ -763,6 +808,10 @@ def _evaluate_endpoint_families(
                 frozen_anchor_sha256s=tuple(sorted(anchors)),
                 repeat_edge_ids=tuple(sorted(repeat_edges)),
                 anchor_edge_ids=tuple(sorted(anchor_edges)),
+                anchor_evaluations=tuple(anchor_evaluations),
+                qualifying_common_anchor_sha256s=tuple(
+                    qualifying_common_anchors
+                ),
                 complete=not unique_failures,
                 failure_reasons=unique_failures,
             )

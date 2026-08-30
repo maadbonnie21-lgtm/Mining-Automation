@@ -1223,12 +1223,182 @@ def test_missing_endpoint_to_anchor_edge_keeps_family_incomplete() -> None:
 
     result = plan_camera_bridge(graph, records)
 
-    missing_edge_id = ":".join(sorted((second.sha256, anchor.sha256)))
     assert result.ranked_families == ()
-    assert (
-        f"anchor_edge_not_verified_all_zones:{missing_edge_id}"
-        in result.family_evaluations[0].failure_reasons
+    evaluation = result.family_evaluations[0]
+    assert "no_common_supported_anchor_all_zones" in evaluation.failure_reasons
+    assert evaluation.qualifying_common_anchor_sha256s == ()
+    assert evaluation.anchor_evaluations[0].missing_edge_ids == (
+        ":".join(sorted((second.sha256, anchor.sha256))),
     )
+
+
+def test_family_is_complete_when_every_endpoint_reaches_one_common_anchor() -> None:
+    current = _node(
+        "north-common-anchor",
+        roles=(ViewRole.SYSTEM_IDENTIFICATION,),
+        current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
+    )
+    first = _node("common-anchor-endpoint-1", roles=(ViewRole.SYSTEM_IDENTIFICATION,))
+    second = _node("common-anchor-endpoint-2", roles=(ViewRole.SYSTEM_IDENTIFICATION,))
+    common = _node(
+        "common-supported-anchor",
+        roles=(ViewRole.REVIEWED_SUPPORTED,),
+        anchor=True,
+        production_passed=True,
+    )
+    unrelated = _node(
+        "unrelated-supported-anchor",
+        roles=(ViewRole.REVIEWED_SUPPORTED,),
+        anchor=True,
+        production_passed=True,
+    )
+    graph = _graph(
+        (current, first, second, common, unrelated),
+        edges=(
+            _edge(first.sha256, second.sha256),
+            _edge(first.sha256, common.sha256),
+            _edge(second.sha256, common.sha256),
+            _edge(first.sha256, unrelated.sha256),
+        ),
+        components=(
+            (current.sha256,),
+            tuple(sorted((first.sha256, second.sha256, common.sha256, unrelated.sha256))),
+        ),
+    )
+    receipts = FROZEN_ENDPOINT_OBJECTIVE.selection_backing_report_sha256s
+    records = (
+        _endpoint(
+            evidence_id="common-anchor-a",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=first.sha256,
+            receipt_sha256=receipts[0],
+        ),
+        _endpoint(
+            evidence_id="common-anchor-b",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=second.sha256,
+            receipt_sha256=receipts[1],
+        ),
+    )
+
+    result = plan_camera_bridge(graph, records)
+
+    evaluation = result.family_evaluations[0]
+    assert evaluation.complete is True
+    assert evaluation.failure_reasons == ()
+    assert evaluation.qualifying_common_anchor_sha256s == (common.sha256,)
+    assert len(evaluation.anchor_evaluations) == 2
+    assert result.ranked_families[0].evaluation is evaluation
+
+
+def test_family_split_across_anchors_has_no_qualifying_common_anchor() -> None:
+    current = _node(
+        "north-split-anchor",
+        roles=(ViewRole.SYSTEM_IDENTIFICATION,),
+        current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
+    )
+    first = _node("split-anchor-endpoint-1", roles=(ViewRole.SYSTEM_IDENTIFICATION,))
+    second = _node("split-anchor-endpoint-2", roles=(ViewRole.SYSTEM_IDENTIFICATION,))
+    anchor_a = _node(
+        "split-supported-anchor-a",
+        roles=(ViewRole.REVIEWED_SUPPORTED,),
+        anchor=True,
+        production_passed=True,
+    )
+    anchor_b = _node(
+        "split-supported-anchor-b",
+        roles=(ViewRole.REVIEWED_SUPPORTED,),
+        anchor=True,
+        production_passed=True,
+    )
+    graph = _graph(
+        (current, first, second, anchor_a, anchor_b),
+        edges=(
+            _edge(first.sha256, second.sha256),
+            _edge(first.sha256, anchor_a.sha256),
+            _edge(second.sha256, anchor_b.sha256),
+        ),
+    )
+    receipts = FROZEN_ENDPOINT_OBJECTIVE.selection_backing_report_sha256s
+    records = (
+        _endpoint(
+            evidence_id="split-anchor-a",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=first.sha256,
+            receipt_sha256=receipts[0],
+        ),
+        _endpoint(
+            evidence_id="split-anchor-b",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=second.sha256,
+            receipt_sha256=receipts[1],
+        ),
+    )
+
+    result = plan_camera_bridge(graph, records)
+
+    evaluation = result.family_evaluations[0]
+    assert evaluation.complete is False
+    assert evaluation.qualifying_common_anchor_sha256s == ()
+    assert "no_common_supported_anchor_all_zones" in evaluation.failure_reasons
+    assert all(not item.complete for item in evaluation.anchor_evaluations)
+    assert result.ranked_families == ()
+
+
+def test_quarantined_supported_node_cannot_be_a_common_anchor() -> None:
+    current = _node(
+        "north-negative-anchor",
+        roles=(ViewRole.SYSTEM_IDENTIFICATION,),
+        current=True,
+        sha256=FROZEN_ENDPOINT_SOURCE_SHA256,
+    )
+    first = _node("negative-anchor-endpoint-1", roles=(ViewRole.SYSTEM_IDENTIFICATION,))
+    second = _node("negative-anchor-endpoint-2", roles=(ViewRole.SYSTEM_IDENTIFICATION,))
+    negative_anchor = _node(
+        "negative-supported-anchor",
+        roles=(ViewRole.REVIEWED_SUPPORTED, ViewRole.RISKY_STATE_CHANGE),
+        anchor=True,
+        production_passed=True,
+    )
+    graph = _graph(
+        (current, first, second, negative_anchor),
+        edges=(
+            _edge(first.sha256, second.sha256),
+            _edge(first.sha256, negative_anchor.sha256),
+            _edge(second.sha256, negative_anchor.sha256),
+        ),
+    )
+    receipts = FROZEN_ENDPOINT_OBJECTIVE.selection_backing_report_sha256s
+    records = (
+        _endpoint(
+            evidence_id="negative-anchor-a",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=first.sha256,
+            receipt_sha256=receipts[0],
+        ),
+        _endpoint(
+            evidence_id="negative-anchor-b",
+            family_id=FROZEN_ENDPOINT_FAMILY_ID,
+            source_sha256=current.sha256,
+            target_sha256=second.sha256,
+            receipt_sha256=receipts[1],
+        ),
+    )
+
+    result = plan_camera_bridge(graph, records)
+
+    evaluation = result.family_evaluations[0]
+    assert evaluation.frozen_anchor_sha256s == ()
+    assert evaluation.qualifying_common_anchor_sha256s == ()
+    assert "no_frozen_supported_anchors" in evaluation.failure_reasons
+    assert negative_anchor.sha256 in result.quarantined_sha256s
 
 
 def test_actual_corpus_shape_unverified_repeat_cycle_yields_no_recommendation() -> None:
