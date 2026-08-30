@@ -1819,7 +1819,7 @@ def test_stale_same_process_precursor_stops_before_reservation_or_right(
     ]
 
 
-def test_bridge_launcher_is_inert_without_exact_head_lead_enablement(
+def test_enabled_bridge_launcher_honors_consumed_host_reservation(
     tool: ModuleType,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1827,6 +1827,7 @@ def test_bridge_launcher_is_inert_without_exact_head_lead_enablement(
     output = tmp_path / "private"
     _Backend.constructed = 0
     _Lease.events = []
+    reservation_checks: list[str] = []
     monkeypatch.setattr(tool, "_resolve_private_output_root", lambda _path: output)
     monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
     monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
@@ -1835,15 +1836,13 @@ def test_bridge_launcher_is_inert_without_exact_head_lead_enablement(
         tool,
         "_load_bridge_analysis_evidence",
         lambda *_args, **_kwargs: pytest.fail(
-            "an input-disabled launcher must not convert analysis into authority"
+            "a consumed campaign must stop before loading analysis evidence"
         ),
     )
     monkeypatch.setattr(
         tool,
         "camera_bridge_authorization_consumed",
-        lambda _root: pytest.fail(
-            "an input-disabled launcher must not inspect or consume authorization"
-        ),
+        lambda _root: reservation_checks.append("checked") or True,
     )
 
     result = tool.main(
@@ -1860,7 +1859,8 @@ def test_bridge_launcher_is_inert_without_exact_head_lead_enablement(
     )
 
     assert result == 2
-    assert tool._BRIDGE_LIVE_INPUT_ENABLED is False
+    assert tool._BRIDGE_LIVE_INPUT_ENABLED is True
+    assert reservation_checks == ["checked"]
     assert _Backend.constructed == 0
     assert _Lease.events == []
 

@@ -650,7 +650,7 @@ identifies one smallest additional evidence edge; it does not authorize a live
 probe. Any future live use of R1 requires a separate architecture review and
 must still end in a fresh pass of the unchanged production detector.
 
-### R2 bridge-capture design (proposed; no live input authorized)
+### R2 bridge-capture design (source enabled; execution separately authorized)
 
 R1's exact result is
 `missing graph link: one receipt-proven, readiness-safe camera transition from
@@ -741,14 +741,15 @@ still the canonical evidence. The machine planner disposition is
 `no_safe_endpoint_evidence`; the human-readable result conclusion is
 `no safe endpoint evidence`.
 
-The development-only R2 bridge is now one inert full-campaign design rather
+The development-only R2 bridge is now one full-campaign design rather
 than a two-command compass-report handoff. The fixed Right capture component
 remains version `1.1.0`; its source-owned campaign authorization is R2.3 version
-`2.3.0`. The source-literal physical gate remains the compile-time value
-`False`, so this design does not authorize live input.
+`2.3.0`. The source-literal physical gate is the compile-time value `True` on
+the reviewed enable-only head. That source change does not itself authorize an
+invocation; live execution still requires a separate exact-head lead comment.
 
-If a future exact head is separately reviewed and its literal gate is changed,
-the only live invocation is one `bridge-capture-r2` command:
+After that exact head is separately authorized for live execution, the only
+live invocation is one `bridge-capture-r2` command:
 
 ```powershell
 .\.venv\Scripts\python.exe tools\validate_varrock_east_camera.py bridge-capture-r2 `
@@ -917,14 +918,13 @@ exit `1` records a truthful insufficient-evidence/STOP result; and exit `2`
 means authentication, setup, provenance, or publication failed. Every outcome
 sends zero input and can never authorize a second sample.
 
-The live capture command still has a source-literal, caller-inaccessible
-`False` gate and stops before inspecting or reserving the campaign, loading
-analysis pixels, acquiring the lease, or constructing the capture backend. No
-planner, generic north report, capture report, verifier result, CLI flag,
-environment variable, output path, or caller-selected value can satisfy or
-toggle that gate. Enabling one future sample requires a new exact code head and
-explicit lead review. No live input from this R2.3 design is authorized, and
-this section makes no reacquisition-success claim.
+The live capture command has a source-literal, caller-inaccessible `True` gate
+only on the reviewed enable-only head. No planner, generic north report,
+capture report, verifier result, CLI flag, environment variable, output path,
+or caller-selected value can toggle that gate, create a second campaign, or
+bypass the host-global reservation. Executing the one source-enabled sample
+still requires a separate exact-head lead authorization. This section does not
+authorize execution and makes no reacquisition-success claim.
 
 ## Repeated trial protocol
 
