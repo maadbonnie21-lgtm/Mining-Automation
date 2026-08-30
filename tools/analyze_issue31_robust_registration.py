@@ -47,7 +47,12 @@ _SYSTEM_ID_REPORT = Path(
     "issue31-system-id-eaaad585-20260829-182319.camera.json"
 )
 _COMPLETE_SYSTEM_ID_TOKEN = "20260829-182319"
-_RISKY_SYSTEM_ID_TOKEN = "20260829-182047"
+_RISKY_SYSTEM_ID_FILENAMES: tuple[str, ...] = (
+    "issue31-system-id-eaaad585-20260829-182047-"
+    "system-id-horizontal-baseline-01.raw",
+    "issue31-system-id-eaaad585-20260829-182047-"
+    "system-id-horizontal-baseline-02.raw",
+)
 _CURRENT_SUFFIX = "system-id-horizontal-return-post.raw"
 _EXTRA_VIEWS: tuple[tuple[str, ViewRole, Path], ...] = (
     (
@@ -271,13 +276,16 @@ def load_canonical_corpus(repo_root: Path) -> CorpusEvidence:
     specs.extend(system_specs)
     group_items["system_identification"] = _spec_digests(system_specs)
 
-    risky_paths = sorted(
-        path
-        for path in (repo_root / _SYSTEM_ID_FRAMES).glob("*.raw")
-        if _RISKY_SYSTEM_ID_TOKEN in path.name
+    risky_paths = tuple(
+        repo_root / _SYSTEM_ID_FRAMES / filename
+        for filename in _RISKY_SYSTEM_ID_FILENAMES
     )
-    if len(risky_paths) != 2:
-        raise ValueError(f"risky no-input corpus must contain 2 frames, got {len(risky_paths)}")
+    if len(risky_paths) != 2 or len(set(risky_paths)) != 2:
+        raise ValueError("risky no-input corpus must name two unique fixed frames")
+    missing_risky = tuple(path for path in risky_paths if not path.is_file())
+    if missing_risky:
+        missing = ", ".join(path.name for path in missing_risky)
+        raise ValueError(f"fixed risky no-input corpus frame missing: {missing}")
     risky_specs, next_frame_id = _raw_specs(
         repo_root,
         risky_paths,

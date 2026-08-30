@@ -493,6 +493,7 @@ def test_canonical_corpus_loader_enforces_fixed_group_membership_and_current(
     (system_root / "complete-07-return-post.raw").touch()
     for index in range(2):
         (system_root / f"risky-{index:02d}.raw").touch()
+    (system_root / "risky-unreviewed-extra.raw").touch()
     (tmp_path / "extra.raw").touch()
     (tmp_path / "disconnected.raw").touch()
 
@@ -518,7 +519,11 @@ def test_canonical_corpus_loader_enforces_fixed_group_membership_and_current(
     monkeypatch.setattr(tool, "_DRIFT_DIR", Path("drift"))
     monkeypatch.setattr(tool, "_SYSTEM_ID_FRAMES", Path("system"))
     monkeypatch.setattr(tool, "_COMPLETE_SYSTEM_ID_TOKEN", "complete-")
-    monkeypatch.setattr(tool, "_RISKY_SYSTEM_ID_TOKEN", "risky-")
+    monkeypatch.setattr(
+        tool,
+        "_RISKY_SYSTEM_ID_FILENAMES",
+        ("risky-00.raw", "risky-01.raw"),
+    )
     monkeypatch.setattr(tool, "_CURRENT_SUFFIX", "return-post.raw")
     monkeypatch.setattr(
         tool,
