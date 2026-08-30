@@ -30,6 +30,7 @@ from mining_automation.perception.inventory.live_validation import (
 )
 
 _ROOT = Path(__file__).resolve().parents[1]
+_GITIGNORE = _ROOT / ".gitignore"
 _TOOL = _ROOT / "tools" / "validate_inventory_session.py"
 _WINDOW_HANDLE = 91
 _LAYOUT = InventoryGridLayout(
@@ -477,6 +478,12 @@ def test_tool_is_thin_and_manifest_rejects_truth_promotion(
     report.report_path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(InventoryValidationSessionError, match="truth status"):
         load_inventory_validation_session(report.session_directory)
+
+
+def test_default_inventory_evidence_roots_are_gitignored() -> None:
+    ignored_roots = set(_GITIGNORE.read_text(encoding="utf-8").splitlines())
+    assert "/diagnostics/inventory-live/" in ignored_roots
+    assert "/diagnostics/inventory-validation-sessions/" in ignored_roots
 
 
 def test_session_report_is_deterministic_for_equivalent_owned_evidence(
