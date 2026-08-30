@@ -15,8 +15,6 @@ from pathlib import Path
 
 repository = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(repository / "src"))
-sys.path.insert(1, str(repository))
-sys.path.insert(2, str(repository / "tools"))
 tool_path = repository / "tools" / "verify_issue31_bridge_r2_post.py"
 spec = importlib.util.spec_from_file_location(
     "issue31_bridge_post_import_boundary_target",

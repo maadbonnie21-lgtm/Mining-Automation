@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -17,7 +18,8 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from types import ModuleType
+from typing import TYPE_CHECKING, Any, Final
 
 from mining_automation.capture import Frame, PixelFormat, RawFrame
 from mining_automation.perception.resource import ResourceVisualState
@@ -90,10 +92,31 @@ from mining_automation.validation.robust_view_graph import (
     ViewRole,
 )
 
-try:  # Script execution starts with tools/ on sys.path; tests import via repo root.
+
+def _load_sibling_r2_analysis() -> ModuleType:
+    """Load the exact source-owned sibling without trusting ``sys.path``."""
+
+    path = Path(__file__).resolve().with_name("analyze_issue31_bridge_r2.py")
+    specification = importlib.util.spec_from_file_location(
+        "_mining_automation_issue31_bridge_r2_analysis",
+        path,
+    )
+    if specification is None or specification.loader is None:
+        raise RuntimeError(f"cannot load source-owned R2 analysis module: {path}")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    try:
+        specification.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(specification.name, None)
+        raise
+    return module
+
+
+if TYPE_CHECKING:
     from tools import analyze_issue31_bridge_r2 as r2_analysis
-except ModuleNotFoundError:  # pragma: no cover - exercised by the real CLI
-    import analyze_issue31_bridge_r2 as r2_analysis
+else:
+    r2_analysis = _load_sibling_r2_analysis()
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _FULL_HEAD = re.compile(r"[0-9a-f]{40}")
