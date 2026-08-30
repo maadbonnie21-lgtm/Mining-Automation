@@ -62,7 +62,7 @@ __all__ = [
 ]
 
 REVIEW_PACKAGE_SCHEMA_VERSION: Final[int] = 1
-REVIEW_RECORD_SCHEMA_VERSION: Final[int] = 1
+REVIEW_RECORD_SCHEMA_VERSION: Final[int] = 2
 REPLAY_REPORT_SCHEMA_VERSION: Final[int] = 1
 SANITIZED_FIXTURE_SCHEMA_VERSION: Final[int] = 2
 _PACKAGE_MANIFEST_NAME: Final[str] = "review-package.json"
@@ -242,6 +242,7 @@ class InventoryCaseReview:
     visibility: InventoryEvidenceVisibility
     occupied_slots: int | None
     operator_intent_confirmed: bool
+    hover_visible: bool
     selected_item_visible: bool
     drag_visible: bool
     quantity_text_visible: bool
@@ -266,6 +267,7 @@ class InventoryCaseReview:
             raise ValueError("occupied_slots must be null or an integer in [0, 28]")
         for name, value in (
             ("operator_intent_confirmed", self.operator_intent_confirmed),
+            ("hover_visible", self.hover_visible),
             ("selected_item_visible", self.selected_item_visible),
             ("drag_visible", self.drag_visible),
             ("quantity_text_visible", self.quantity_text_visible),
@@ -290,7 +292,12 @@ class InventoryCaseReview:
             raise ValueError("wrong-tab/obstructed review must keep occupied_slots null")
         if (
             self.visibility is not InventoryEvidenceVisibility.INVENTORY
-            and (self.selected_item_visible or self.drag_visible or self.quantity_text_visible)
+            and (
+                self.hover_visible
+                or self.selected_item_visible
+                or self.drag_visible
+                or self.quantity_text_visible
+            )
         ):
             raise ValueError("adversarial item flags require a visible inventory")
         if self.geometry_source and (
@@ -298,6 +305,7 @@ class InventoryCaseReview:
             or self.visibility is not InventoryEvidenceVisibility.INVENTORY
             or self.occupied_slots != INVENTORY_CAPACITY
             or self.validation_split is not InventoryValidationSplit.CALIBRATION
+            or self.hover_visible
             or self.selected_item_visible
             or self.drag_visible
             or self.quantity_text_visible
@@ -313,6 +321,7 @@ class InventoryCaseReview:
             "decision": self.decision.value,
             "drag_visible": self.drag_visible,
             "geometry_source": self.geometry_source,
+            "hover_visible": self.hover_visible,
             "occupied_slots": self.occupied_slots,
             "operator_intent_confirmed": self.operator_intent_confirmed,
             "panel_raw_sha256": self.panel_raw_sha256,
@@ -604,12 +613,19 @@ def load_inventory_review_record(
     raw = _json_object(_read_bytes(review_record_path, "review record"), "review record")
     if raw.get("review_kind") != "inventory-evidence-review":
         raise InventoryReviewGateError("unsupported review record kind")
-    if raw.get("schema_version") != REVIEW_RECORD_SCHEMA_VERSION:
+    schema_version = raw.get("schema_version")
+    if not _strict_int(schema_version) or schema_version not in (
+        1,
+        REVIEW_RECORD_SCHEMA_VERSION,
+    ):
         raise InventoryReviewGateError("unsupported review record schema version")
     manifest_sha = _sha256(package.manifest_path.read_bytes())
     if _required_sha256(raw, "package_manifest_sha256") != manifest_sha:
         raise InventoryReviewGateError("review record is bound to another package manifest")
-    cases = tuple(_review_case_from_json(item) for item in _required_list(raw, "cases"))
+    cases = tuple(
+        _review_case_from_json(item, schema_version=schema_version)
+        for item in _required_list(raw, "cases")
+    )
     record = InventoryReviewRecord(
         package_manifest_sha256=manifest_sha,
         reviewer=_required_text(raw, "reviewer"),
@@ -670,6 +686,7 @@ def run_inventory_review_replay_gate(
     if (
         reference_review.visibility is not InventoryEvidenceVisibility.INVENTORY
         or reference_review.occupied_slots != 0
+        or reference_review.hover_visible
         or reference_review.selected_item_visible
         or reference_review.drag_visible
         or reference_review.quantity_text_visible
@@ -886,6 +903,7 @@ def _review_agreement(
     assert review.occupied_slots is not None
     adversarial = (
         review.selected_item_visible
+        or review.hover_visible
         or review.drag_visible
         or review.quantity_text_visible
     )
@@ -1376,6 +1394,7 @@ def _review_template(package: InventoryReviewPackage, manifest_sha: str) -> str:
                 "decision": None,
                 "drag_visible": None,
                 "geometry_source": None,
+                "hover_visible": None,
                 "occupied_slots": None,
                 "operator_intent_confirmed": None,
                 "panel_raw_sha256": case.panel_raw_sha256,
@@ -1467,7 +1486,11 @@ def _package_case_from_json(
     )
 
 
-def _review_case_from_json(value: object) -> InventoryCaseReview:
+def _review_case_from_json(
+    value: object,
+    *,
+    schema_version: object,
+) -> InventoryCaseReview:
     raw = _object_value(value, "review case")
     try:
         decision = InventoryReviewDecision(_required_text(raw, "decision"))
@@ -1486,6 +1509,11 @@ def _review_case_from_json(value: object) -> InventoryCaseReview:
         visibility=visibility,
         occupied_slots=_optional_slot_count(raw.get("occupied_slots")),
         operator_intent_confirmed=_required_bool(raw, "operator_intent_confirmed"),
+        hover_visible=(
+            False
+            if schema_version == 1
+            else _required_bool(raw, "hover_visible")
+        ),
         selected_item_visible=_required_bool(raw, "selected_item_visible"),
         drag_visible=_required_bool(raw, "drag_visible"),
         quantity_text_visible=_required_bool(raw, "quantity_text_visible"),
@@ -1684,6 +1712,7 @@ def _remaining_release_gaps(
         and item.validation_split is InventoryValidationSplit.HELD_OUT
         and item.occupied_slots is not None
         and 0 < item.occupied_slots < INVENTORY_CAPACITY
+        and not item.hover_visible
         and not item.selected_item_visible
         and not item.drag_visible
         and not item.quantity_text_visible
@@ -1695,6 +1724,7 @@ def _remaining_release_gaps(
         and item.validation_split is InventoryValidationSplit.HELD_OUT
         and item.occupied_slots == INVENTORY_CAPACITY
         and not item.geometry_source
+        and not item.hover_visible
         and not item.selected_item_visible
         and not item.drag_visible
         and not item.quantity_text_visible
@@ -1707,6 +1737,13 @@ def _remaining_release_gaps(
         for item in approved
     ):
         gaps.append("no reviewed wrong-tab negative evidence")
+    if not any(
+        item.visibility is InventoryEvidenceVisibility.INVENTORY
+        and item.validation_split is InventoryValidationSplit.ADVERSARIAL
+        and item.hover_visible
+        for item in approved
+    ):
+        gaps.append("no reviewer-confirmed hover evidence")
     if not any(
         item.visibility is InventoryEvidenceVisibility.INVENTORY
         and item.validation_split is InventoryValidationSplit.ADVERSARIAL
@@ -1726,6 +1763,7 @@ def _remaining_release_gaps(
         for item in approved
         if item.visibility is InventoryEvidenceVisibility.INVENTORY
         and item.occupied_slots not in (None, 0)
+        and not item.hover_visible
         and not item.selected_item_visible
         and not item.drag_visible
         and not item.quantity_text_visible

@@ -206,6 +206,7 @@ def _review_record(package_directory: Path) -> InventoryReviewRecord:
                 visibility=InventoryEvidenceVisibility.INVENTORY,
                 occupied_slots=0,
                 operator_intent_confirmed=True,
+                hover_visible=False,
                 selected_item_visible=False,
                 drag_visible=False,
                 quantity_text_visible=False,
@@ -221,6 +222,7 @@ def _review_record(package_directory: Path) -> InventoryReviewRecord:
                 visibility=InventoryEvidenceVisibility.INVENTORY,
                 occupied_slots=INVENTORY_CAPACITY,
                 operator_intent_confirmed=True,
+                hover_visible=False,
                 selected_item_visible=False,
                 drag_visible=False,
                 quantity_text_visible=False,
@@ -286,6 +288,7 @@ def _review_for_package(package: InventoryReviewPackage) -> InventoryReviewRecor
                 visibility=InventoryEvidenceVisibility.INVENTORY,
                 occupied_slots=0 if is_reference else INVENTORY_CAPACITY,
                 operator_intent_confirmed=True,
+                hover_visible=False,
                 selected_item_visible=False,
                 drag_visible=False,
                 quantity_text_visible=False,
@@ -382,9 +385,43 @@ def test_blank_review_template_never_promotes_operator_labels_to_truth(
         and item["validation_split"] is None
         and item["visibility"] is None
         and item["occupied_slots"] is None
+        and item["hover_visible"] is None
         for item in template["cases"]
     )
     assert "No field is populated from an operator label" in template["warning"]
+
+
+def test_schema_v1_review_record_loads_with_hover_truth_defaulted_false(
+    tmp_path: Path,
+) -> None:
+    package = _prepare(tmp_path, _session(tmp_path))
+    raw = json.loads(_review_record(package.package_directory).to_json())
+    raw["schema_version"] = 1
+    cases = raw["cases"]
+    assert isinstance(cases, list)
+    for case in cases:
+        assert isinstance(case, dict)
+        case.pop("hover_visible")
+    path = tmp_path / "schema-v1-review.json"
+    path.write_bytes(_canonical_json_bytes(raw))
+
+    loaded = load_inventory_review_record(path, package)
+
+    assert all(case.hover_visible is False for case in loaded.cases)
+
+
+def test_review_record_schema_version_rejects_boolean_alias(tmp_path: Path) -> None:
+    package = _prepare(tmp_path, _session(tmp_path))
+    raw = json.loads(_review_record(package.package_directory).to_json())
+    raw["schema_version"] = True
+    path = tmp_path / "boolean-schema-version-review.json"
+    path.write_bytes(_canonical_json_bytes(raw))
+
+    with pytest.raises(
+        InventoryReviewGateError,
+        match="unsupported review record schema version",
+    ):
+        load_inventory_review_record(path, package)
 
 
 def test_package_loader_detects_artifact_and_manifest_tampering(tmp_path: Path) -> None:
@@ -582,6 +619,7 @@ def test_explicit_review_must_cover_exact_artifacts_and_obey_truth_contracts(
                 visibility=reference.visibility,
                 occupied_slots=reference.occupied_slots,
                 operator_intent_confirmed=reference.operator_intent_confirmed,
+                hover_visible=reference.hover_visible,
                 selected_item_visible=reference.selected_item_visible,
                 drag_visible=reference.drag_visible,
                 quantity_text_visible=reference.quantity_text_visible,
@@ -607,6 +645,7 @@ def test_explicit_review_must_cover_exact_artifacts_and_obey_truth_contracts(
             visibility=InventoryEvidenceVisibility.WRONG_TAB,
             occupied_slots=1,
             operator_intent_confirmed=True,
+            hover_visible=False,
             selected_item_visible=False,
             drag_visible=False,
             quantity_text_visible=False,
@@ -616,16 +655,18 @@ def test_explicit_review_must_cover_exact_artifacts_and_obey_truth_contracts(
 
 
 @pytest.mark.parametrize(
-    ("validation_split", "selected", "drag", "quantity"),
+    ("validation_split", "hover", "selected", "drag", "quantity"),
     (
-        (InventoryValidationSplit.HELD_OUT, False, False, False),
-        (InventoryValidationSplit.CALIBRATION, True, False, False),
-        (InventoryValidationSplit.CALIBRATION, False, True, False),
-        (InventoryValidationSplit.CALIBRATION, False, False, True),
+        (InventoryValidationSplit.HELD_OUT, False, False, False, False),
+        (InventoryValidationSplit.CALIBRATION, True, False, False, False),
+        (InventoryValidationSplit.CALIBRATION, False, True, False, False),
+        (InventoryValidationSplit.CALIBRATION, False, False, True, False),
+        (InventoryValidationSplit.CALIBRATION, False, False, False, True),
     ),
 )
 def test_geometry_source_rejects_noncalibration_or_adversarial_evidence(
     validation_split: InventoryValidationSplit,
+    hover: bool,
     selected: bool,
     drag: bool,
     quantity: bool,
@@ -643,6 +684,7 @@ def test_geometry_source_rejects_noncalibration_or_adversarial_evidence(
             visibility=InventoryEvidenceVisibility.INVENTORY,
             occupied_slots=INVENTORY_CAPACITY,
             operator_intent_confirmed=True,
+            hover_visible=hover,
             selected_item_visible=selected,
             drag_visible=drag,
             quantity_text_visible=quantity,
@@ -827,6 +869,7 @@ def test_release_gate_reports_every_required_semantic_evidence_gap(
         "no reviewed ordinary held-out full inventory evidence",
         "no reviewed wrong-tab negative evidence",
         "fewer than two distinct reviewed obstruction examples",
+        "no reviewer-confirmed hover evidence",
         "no reviewer-confirmed held/drag evidence",
         "no reviewed quantity-text adversarial evidence",
     }.issubset(set(gaps))
@@ -897,6 +940,7 @@ def test_artwork_tag_ordering_cannot_game_diversity_release_gate(
         visibility=InventoryEvidenceVisibility.INVENTORY,
         occupied_slots=0,
         operator_intent_confirmed=True,
+        hover_visible=False,
         selected_item_visible=False,
         drag_visible=False,
         quantity_text_visible=False,

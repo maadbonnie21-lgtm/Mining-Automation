@@ -97,7 +97,7 @@ For each case the reviewer explicitly records:
   `inventory-obstructed`;
 - the exact `occupied_slots` count for a visible inventory, or `null` for a
   wrong tab or obstruction;
-- whether selected-item, genuine drag, or quantity-text evidence is visible;
+- whether item hover, selected-item, genuine drag, or quantity-text evidence is visible;
 - whether the operator's intended state is visually confirmed;
 - item-art tags used to prove evidence diversity; and
 - whether the case is the one reviewed full-inventory geometry source.
@@ -156,9 +156,9 @@ Wrong-tab and obstruction cases must fail closed with:
 - confidence exactly `0.0`; and
 - a non-empty diagnostic reason.
 
-Selected-item, genuine drag, and quantity-text cases may either produce the
-exact reviewed count or the same fail-closed unknown result. They may never
-produce an incorrect known count.
+Item-hover, selected-item, genuine drag, and quantity-text cases may either
+produce the exact reviewed count or the same fail-closed unknown result. They
+may never produce an incorrect known count.
 
 The report remains blocked if any case disagrees or if required release evidence
 is missing. The gate explicitly reports gaps for:
@@ -171,6 +171,7 @@ is missing. The gate explicitly reports gaps for:
 - no ordinary reviewed held-out partial or full frame;
 - no reviewed wrong-tab negative or quantity-text adversarial frame;
 - fewer than two distinct reviewed obstruction examples;
+- no reviewer-confirmed item-hover evidence;
 - no reviewer-confirmed held/drag evidence;
 - no reviewed wide-sprite evidence;
 - fewer than three byte-distinct varied-art positive evidence sets.
@@ -192,8 +193,10 @@ The current captured corpus has not closed this release gate. In particular:
 
 - the reviewed real partial and full iron inventories remain `unknown` under
   the unchanged production detector, rather than the exact known counts;
-- the capture staged as `hover-drag` proves selected/use-item presentation, but
-  does not visibly prove a genuinely held or dragged item;
+- the first capture staged as `hover-drag` proves selected/use-item
+  presentation, while the later passive batch separately proves a genuine
+  hover-only presentation; neither visibly proves a genuinely held or dragged
+  item;
 - the independently captured clean empty detector-owned region is
   byte-identical to the reference region, so capture independence is recorded
   but empty-region pixel variation is not yet demonstrated; and
