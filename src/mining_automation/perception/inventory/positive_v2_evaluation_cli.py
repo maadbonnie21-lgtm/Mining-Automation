@@ -6,18 +6,32 @@ import argparse
 import hashlib
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from .positive_v2_evaluation import (
+    INVENTORY_POSITIVE_V2_FORMAL_EVALUATOR_GIT_SHA,
     INVENTORY_POSITIVE_V2_MODEL_FREEZE_GIT_SHA,
     InventoryPositiveV2EvaluationError,
     evaluate_inventory_positive_v2,
 )
 
-_FROZEN_MODEL_PATHS = (
+_FROZEN_RUNTIME_BEHAVIOR_PATHS = (
+    "src/mining_automation/capture/__init__.py",
+    "src/mining_automation/capture/errors.py",
+    "src/mining_automation/capture/frame.py",
+    "src/mining_automation/contracts.py",
+    "src/mining_automation/perception/detector.py",
+    "src/mining_automation/perception/errors.py",
+    "src/mining_automation/perception/inventory/adapter.py",
+    "src/mining_automation/perception/inventory/classification.py",
     "src/mining_automation/perception/inventory/configuration.py",
+    "src/mining_automation/perception/inventory/detector.py",
+    "src/mining_automation/perception/inventory/geometry.py",
+    "src/mining_automation/perception/inventory/localization.py",
     "src/mining_automation/perception/inventory/positive_classifier_v2.py",
     "src/mining_automation/perception/inventory/positive_v2_calibration.py",
+    "src/mining_automation/perception/inventory/sanitized_replay.py",
 )
 
 
@@ -25,7 +39,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Evaluate the frozen inventory-positive V2 model against the reviewed "
-            "calibration and held-out sanitized campaigns."
+            "calibration and retrospective-validation sanitized campaigns."
         )
     )
     parser.add_argument("--fixture", required=True, type=Path)
@@ -69,19 +83,25 @@ def _verify_clean_head(expected_head: str) -> str:
         "merge-base",
         "--is-ancestor",
         INVENTORY_POSITIVE_V2_MODEL_FREEZE_GIT_SHA,
+        INVENTORY_POSITIVE_V2_FORMAL_EVALUATOR_GIT_SHA,
+    )
+    _git_output(
+        "merge-base",
+        "--is-ancestor",
+        INVENTORY_POSITIVE_V2_FORMAL_EVALUATOR_GIT_SHA,
         actual,
     )
-    changed_model_paths = _git_output(
+    changed_runtime_paths = _git_output(
         "diff",
         "--name-only",
         f"{INVENTORY_POSITIVE_V2_MODEL_FREEZE_GIT_SHA}..{actual}",
         "--",
-        *_FROZEN_MODEL_PATHS,
+        *_FROZEN_RUNTIME_BEHAVIOR_PATHS,
     )
-    if changed_model_paths:
+    if changed_runtime_paths:
         raise InventoryPositiveV2EvaluationError(
-            "V2 model files changed after the recorded freeze commit: "
-            f"{changed_model_paths}"
+            "V2 runtime behavior dependencies changed after the recorded freeze "
+            f"commit: {changed_runtime_paths}"
         )
     return actual
 
@@ -108,7 +128,10 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         head = _verify_clean_head(args.expected_head)
-        report = evaluate_inventory_positive_v2(args.fixture, git_head_sha=head)
+        report = replace(
+            evaluate_inventory_positive_v2(args.fixture, git_head_sha=head),
+            git_provenance_verified_by_cli=True,
+        )
         report_path, digest = _write_report(args.output, report.to_json())
     except (InventoryPositiveV2EvaluationError, OSError, ValueError) as exc:
         print(f"inventory positive V2 evaluation failed: {exc}", file=sys.stderr)

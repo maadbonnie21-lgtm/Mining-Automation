@@ -71,7 +71,9 @@ contract.
 ## Inventory positive classifier V2
 
 `evaluate_inventory_positive_v2.py` runs the frozen first-campaign calibration
-and second-campaign held-out classifier report entirely offline. It requires an
-exact clean Git head and writes canonical JSON plus a SHA-256 sidecar. The V2
-candidate remains non-activating. See
+and second-campaign retrospective-validation classifier report entirely
+offline. The second batch was repository-visible during development and is not
+claimed as truly unseen. The CLI requires an exact clean Git head and writes
+canonical JSON plus a SHA-256 sidecar; only CLI-produced reports have that
+verified Git provenance. The V2 candidate remains non-activating. See
 `docs/INVENTORY_POSITIVE_CLASSIFIER_V2.md`.

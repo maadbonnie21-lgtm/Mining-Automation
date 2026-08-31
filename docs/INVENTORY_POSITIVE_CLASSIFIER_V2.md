@@ -73,18 +73,27 @@ and sprite spill outside slot ownership therefore fail closed as unsupported
 presentations. These guards add `UNKNOWN` paths; they do not relax any existing
 obstruction or occupancy threshold.
 
-## Calibration and held-out discipline
+## Calibration and retrospective-validation discipline
 
 The model-development split is separate from the review record's original
 `validation_split` field; reviewer truth is not rewritten.
 
 - Calibration campaign: exact source session
   `20260830T183057.424897Z-inventory-session`, the first eight cases.
-- Held-out campaign: exact source session
+- Retrospective-validation campaign (labelled `held-out` in the immutable
+  reviewer record): exact source session
   `20260830T222938.820219Z-inventory-session`, the final eight cases.
 
-The algorithm and constants were frozen from the first campaign before the
-second campaign was evaluated. The calibration-only evidence SHA-256 is:
+The formal evaluator chronology freezes the algorithm and constants from the
+first campaign before running the second-campaign evaluator. This proves that
+the reported failure was preserved without changing the frozen model after the
+formal evaluation. It does **not** prove that the second batch was unseen by the
+implementer: the complete 16-case fixture had already been committed and was
+available during model development. The second campaign is therefore described
+as frozen retrospective validation, not an independently acquired or blinded
+held-out set.
+
+The calibration-only evidence SHA-256 is:
 
 ```text
 91d12e3a30824da09f98b766bde8659460121d463e3df7ae8755f617d8abf2c9
@@ -92,22 +101,25 @@ second campaign was evaluated. The calibration-only evidence SHA-256 is:
 
 It binds the first campaign's sanitized region hashes, independent reviewer
 truth, profile/reference identity, and algorithm constants. It excludes all
-held-out frame bytes; deterministic tests reproduce the digest after deleting
-or corrupting every held-out artifact. Model commit
-`620dcde6a476b5f458f6736e990f4d4e578791c4` was created before the held-out
-evaluator ran, and the CLI rejects any later change to the frozen classifier,
-calibration reader, or factory files.
+second-campaign frame bytes; deterministic tests reproduce the digest after
+deleting or corrupting every second-campaign artifact. That establishes input
+separation for the calibration reader, not lack of human or development-time
+visibility into the second campaign. Model commit
+`620dcde6a476b5f458f6736e990f4d4e578791c4` was created before the formal
+second-campaign evaluator ran, and the CLI rejects any later change to the
+frozen classifier, calibration reader, or factory files.
 
-## Frozen held-out result: failed safely
+## Frozen retrospective-validation result: failed safely
 
 The frozen candidate passes all eight calibration expectations. Its spatial
-feature also gives every clean held-out occupied slot at least `0.857549858`,
-above the unchanged `0.8` floor. The one-shot candidate nevertheless fails the
-required clean held-out counts because the first-batch perimeter guard rejects
-four legitimate `D>=61` pixels in slot 1 of both varied-art cases. The detector
-therefore returns `UNKNOWN` rather than bypassing the guard.
+feature also gives every clean second-campaign occupied slot at least
+`0.857549858`, above the unchanged `0.8` floor. The frozen candidate
+nevertheless fails the required clean retrospective-validation counts because
+the first-batch perimeter guard rejects four legitimate `D>=61` pixels in slot
+1 of both varied-art cases. The detector therefore returns `UNKNOWN` rather
+than bypassing the guard.
 
-The frozen held-out results are:
+The frozen retrospective-validation results are:
 
 | Reviewed case | V2 result | Weakest slot confidence |
 |---|---:|---:|
@@ -120,9 +132,9 @@ The frozen held-out results are:
 The passive reviewed hover/selected/quantity-text examples remain intentionally
 unsupported `UNKNOWN` with zero aggregate confidence. Synthetic weak,
 ambiguous, malformed-geometry, no-row-gutter, spill, and obstruction cases also
-remain fail closed. No held-out-driven threshold or guard change is permitted;
-this failed candidate remains non-activating and the diversity batch is now a
-consumed validation set.
+remain fail closed. No second-campaign-driven threshold or guard change was
+made or is permitted for this frozen candidate; it remains non-activating and
+the diversity batch is now a consumed retrospective-validation set.
 
 ## One-command offline report
 
@@ -138,14 +150,19 @@ python tools/evaluate_inventory_positive_v2.py `
 The output directory is created exclusively and contains canonical JSON plus a
 SHA-256 sidecar. A dirty tracked worktree, wrong Git head, changed calibration,
 fixture-integrity failure, incorrect count, or unsafe negative produces a
-non-zero result.
+non-zero result. Only a report produced through this CLI has the documented
+clean-head and exact-head checks. Direct library calls, in-memory evaluation
+objects, test assertions, and a copied JSON file do not by themselves have
+verified Git provenance.
 
 ## Limitations and next blocker
 
 The reviewed empty regions are byte-identical, so no rendering jitter is yet
-proven. Seven-cell support is the observed held-out lower edge; one fewer cell
-fails closed. More importantly, a perimeter rule derived from the first batch's
-single clean art family does not generalize to ordinary varied item art. The
-second batch cannot now be reused to tune that rule while retaining a true
-held-out claim. V2 does not approve new client themes, scales, geometries,
-tabs, renderers, overlays, activation authority, or production release.
+proven. Seven-cell support is the observed second-campaign lower edge; one
+fewer cell fails closed. More importantly, a perimeter rule derived from the
+first batch's single clean art family does not generalize to ordinary varied
+item art. The second batch is consumed by this frozen retrospective result and
+cannot be relabelled as fresh validation after tuning. A genuinely unseen
+release-validation set would require separately controlled evidence. V2 does
+not approve new client themes, scales, geometries, tabs, renderers, overlays,
+activation authority, or production release.

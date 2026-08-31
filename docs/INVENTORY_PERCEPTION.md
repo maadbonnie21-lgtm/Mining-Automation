@@ -20,8 +20,10 @@ silently assigned a guessed count.
 The separately identified, non-activating positive-classifier V2 candidate is
 documented in `INVENTORY_POSITIVE_CLASSIFIER_V2.md`. It diagnoses the current
 real clean-positive confidence defect while leaving this V1 factory and all V1
-replay expectations unchanged. Its frozen held-out run failed safely on a new
-presentation guard, so it is not an approved production factory.
+replay expectations unchanged. Its frozen retrospective-validation run failed
+safely on a new presentation guard, so it is not an approved production
+factory. Its evaluator ran after the model freeze, but the second-batch data
+was already repository-visible and is not claimed as truly unseen.
 
 This boundary is intentional. Issue #9 establishes that a slot owns a 32 by 32
 pixel interaction/counting region in a four-column by seven-row inventory. It

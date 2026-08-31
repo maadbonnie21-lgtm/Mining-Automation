@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from mining_automation.perception.inventory import (
     INVENTORY_POSITIVE_V2_MODEL_FREEZE_GIT_SHA,
     InventoryPositiveV2EvaluationError,
     evaluate_inventory_positive_v2,
+    positive_v2_evaluation,
 )
 
 _FIXTURE = (
@@ -36,7 +38,9 @@ def test_frozen_v2_records_the_one_shot_held_out_failure(report) -> None:  # typ
     )
     assert report.to_dict()["activation_allowed"] is False
     assert report.model_freeze_git_sha == INVENTORY_POSITIVE_V2_MODEL_FREEZE_GIT_SHA
-    assert report.to_dict()["held_out"]["evaluated_model_freeze_git_sha"] == (  # type: ignore[index]
+    assert report.to_dict()["retrospective_validation"][  # type: ignore[index]
+        "evaluated_model_freeze_git_sha"
+    ] == (
         INVENTORY_POSITIVE_V2_MODEL_FREEZE_GIT_SHA
     )
     assert [item.v2_actual["occupied_slots"] for item in report.cases] == [
@@ -189,6 +193,23 @@ def test_v2_report_is_canonical_and_deterministic(report) -> None:  # type: igno
     assert first.endswith("\n")
     decoded = json.loads(first)
     assert decoded["passed"] is False
+    assert decoded["report_schema_version"] == 2
+    assert decoded["git_provenance"] == {
+        "head_sha": _HEAD,
+        "verified_by_clean_head_cli": False,
+    }
+    repository_evidence = decoded["calibration"]["repository_evidence"]
+    assert repository_evidence["model_commit_precedes_formal_evaluator_commit"] is None
+    assert repository_evidence["unseen_data_chronology_established"] is False
+    assert decoded["fixture"]["campaign_partition_schema"] == (
+        "inventory-positive-v2-campaign-partition-v1"
+    )
+    assert (
+        decoded["retrospective_validation"][
+            "unseen_data_chronology_established"
+        ]
+        is False
+    )
     assert decoded["model"]["configuration_sha256"] == (
         "cd916de0f7b7201ecfd25646b34e09855bc4641f5a041be6f6665837f719acc2"
     )
@@ -204,6 +225,46 @@ def test_v2_model_identity_contains_no_held_out_or_full_fixture_identity(report)
     assert report.fixture_dataset_id not in model
     assert report.fixture_manifest_sha256 not in model
     assert report.calibration_evidence_sha256 in model
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement_value", "message"),
+    [
+        (
+            "dataset_id",
+            "inventory-live-candidate-safety-0000000000000000",
+            "pinned canonical dataset",
+        ),
+        ("fixture_manifest_sha256", "0" * 64, "pinned canonical manifest"),
+    ],
+)
+def test_v2_evaluator_pins_exact_dataset_and_manifest_identity(
+    monkeypatch,
+    field: str,
+    replacement_value: str,
+    message: str,
+) -> None:  # type: ignore[no-untyped-def]
+    original = positive_v2_evaluation.replay_inventory_sanitized_fixture(_FIXTURE)
+    altered = replace(original, **{field: replacement_value})
+    monkeypatch.setattr(
+        positive_v2_evaluation,
+        "replay_inventory_sanitized_fixture",
+        lambda fixture: altered,
+    )
+
+    with pytest.raises(InventoryPositiveV2EvaluationError, match=message):
+        evaluate_inventory_positive_v2(_FIXTURE, git_head_sha=_HEAD)
+
+
+def test_v2_evaluator_pins_exact_held_out_case_identities(report) -> None:  # type: ignore[no-untyped-def]
+    case_ids = tuple(item.case_id for item in report.cases)
+    altered = (*case_ids[:8], case_ids[9], case_ids[8], *case_ids[10:])
+
+    with pytest.raises(
+        InventoryPositiveV2EvaluationError,
+        match="held-out case identities or order",
+    ):
+        positive_v2_evaluation._require_canonical_case_identities(altered)
 
 
 @pytest.mark.parametrize("case_index", [0, 15])

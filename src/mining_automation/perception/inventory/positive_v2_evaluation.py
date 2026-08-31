@@ -50,6 +50,7 @@ __all__ = [
     "INVENTORY_POSITIVE_V2_CALIBRATION_SESSION_ID",
     "INVENTORY_POSITIVE_V2_HELD_OUT_SESSION_ID",
     "INVENTORY_POSITIVE_V2_MODEL_FREEZE_GIT_SHA",
+    "INVENTORY_POSITIVE_V2_FORMAL_EVALUATOR_GIT_SHA",
     "InventoryPositiveV2CaseResult",
     "InventoryPositiveV2EvaluationError",
     "InventoryPositiveV2EvaluationReport",
@@ -61,7 +62,55 @@ __all__ = [
 INVENTORY_POSITIVE_V2_MODEL_FREEZE_GIT_SHA: Final[str] = (
     "620dcde6a476b5f458f6736e990f4d4e578791c4"
 )
-_REPORT_SCHEMA_VERSION: Final[int] = 1
+INVENTORY_POSITIVE_V2_FORMAL_EVALUATOR_GIT_SHA: Final[str] = (
+    "a4145f3dfb9e743247927776f7418c592c4ef003"
+)
+_CANONICAL_DATASET_ID: Final[str] = (
+    "inventory-live-candidate-safety-bb0d0e3f7ff1c73b"
+)
+_CANONICAL_MANIFEST_SHA256: Final[str] = (
+    "2e518ce81dd291f8b7d055afad9ddc12acbc66e0e967845f8f2e548fe1644479"
+)
+_CALIBRATION_CASE_IDS: Final[tuple[str, ...]] = (
+    "20260830T183057.424897Z-inventory-session/"
+    "20260830T183116.108869Z-empty-reference",
+    "20260830T183057.424897Z-inventory-session/"
+    "20260830T183124.595093Z-empty-validation",
+    "20260830T183057.424897Z-inventory-session/"
+    "20260830T183146.765045Z-partial",
+    "20260830T183057.424897Z-inventory-session/"
+    "20260830T184604.267640Z-full",
+    "20260830T183057.424897Z-inventory-session/"
+    "20260830T184613.513325Z-wrong-tab",
+    "20260830T183057.424897Z-inventory-session/"
+    "20260830T184628.891977Z-obstructed",
+    "20260830T183057.424897Z-inventory-session/"
+    "20260830T184642.926662Z-hover-drag",
+    "20260830T183057.424897Z-inventory-session/"
+    "20260830T185539.015871Z-quantity-text",
+)
+_HELD_OUT_CASE_IDS: Final[tuple[str, ...]] = (
+    "20260830T222938.820219Z-inventory-session/"
+    "20260830T222953.235958Z-empty-reference",
+    "20260830T222938.820219Z-inventory-session/"
+    "20260830T223017.619746Z-empty-validation",
+    "20260830T222938.820219Z-inventory-session/"
+    "20260830T223251.020375Z-partial",
+    "20260830T222938.820219Z-inventory-session/"
+    "20260830T223429.224578Z-full",
+    "20260830T222938.820219Z-inventory-session/"
+    "20260830T223441.334333Z-wrong-tab",
+    "20260830T222938.820219Z-inventory-session/"
+    "20260830T223457.929771Z-obstructed",
+    "20260830T222938.820219Z-inventory-session/"
+    "20260830T223534.039055Z-hover-drag",
+    "20260830T222938.820219Z-inventory-session/"
+    "20260830T223630.280156Z-quantity-text",
+)
+_CAMPAIGN_PARTITION_SCHEMA: Final[str] = (
+    "inventory-positive-v2-campaign-partition-v1"
+)
+_REPORT_SCHEMA_VERSION: Final[int] = 2
 _PUBLICATION_FLOOR: Final[float] = 0.8
 
 
@@ -99,9 +148,10 @@ class InventoryPositiveV2CaseResult:
 
 @dataclass(frozen=True, slots=True)
 class InventoryPositiveV2EvaluationReport:
-    """Canonical non-activating V2 calibration and held-out report."""
+    """Canonical non-activating V2 calibration and retrospective report."""
 
     git_head_sha: str
+    git_provenance_verified_by_cli: bool
     model_freeze_git_sha: str
     fixture_dataset_id: str
     fixture_manifest_sha256: str
@@ -135,7 +185,9 @@ class InventoryPositiveV2EvaluationReport:
     @property
     def held_out_cases(self) -> tuple[InventoryPositiveV2CaseResult, ...]:
         return tuple(
-            item for item in self.cases if item.campaign_partition == "held-out"
+            item
+            for item in self.cases
+            if item.campaign_partition == "retrospective-validation"
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -156,29 +208,51 @@ class InventoryPositiveV2EvaluationReport:
             "calibration": {
                 "case_ids": [item.case_id for item in self.calibration_cases],
                 "evidence_sha256": self.calibration_evidence_sha256,
-                "frozen_before_held_out_evaluation": True,
                 "model_freeze_git_sha": self.model_freeze_git_sha,
+                "repository_evidence": {
+                    "formal_evaluator_git_sha": (
+                        INVENTORY_POSITIVE_V2_FORMAL_EVALUATOR_GIT_SHA
+                    ),
+                    "model_commit_precedes_formal_evaluator_commit": (
+                        True if self.git_provenance_verified_by_cli else None
+                    ),
+                    "scope": (
+                        "verified clean Git history"
+                        if self.git_provenance_verified_by_cli
+                        else "unverified caller-supplied Git identity"
+                    ),
+                    "unseen_data_chronology_established": False,
+                },
                 "session_id": INVENTORY_POSITIVE_V2_CALIBRATION_SESSION_ID,
             },
             "cases": [item.to_dict() for item in self.cases],
             "fixture": {
+                "campaign_partition_schema": _CAMPAIGN_PARTITION_SCHEMA,
                 "dataset_id": self.fixture_dataset_id,
                 "generator_head_sha": self.fixture_generator_head_sha,
                 "manifest_sha256": self.fixture_manifest_sha256,
             },
-            "git_head_sha": self.git_head_sha,
-            "held_out": {
+            "git_provenance": {
+                "head_sha": self.git_head_sha,
+                "verified_by_clean_head_cli": self.git_provenance_verified_by_cli,
+            },
+            "retrospective_validation": {
                 "case_ids": [item.case_id for item in self.held_out_cases],
                 "evaluated_model_freeze_git_sha": self.model_freeze_git_sha,
                 "session_id": INVENTORY_POSITIVE_V2_HELD_OUT_SESSION_ID,
                 "tuning_after_evaluation_allowed": False,
+                "unseen_data_chronology_established": False,
             },
-            "held_out_conclusion": (
+            "retrospective_validation_conclusion": (
                 "The frozen spatial confidence feature clears the 0.8 floor "
-                "for every clean held-out occupied slot, but the first-batch "
+                "for every clean second-campaign occupied slot, but the model-commit "
                 "slot-perimeter presentation guard rejects clean varied art. "
                 "The candidate remains non-activating and this second batch "
-                "must not be used for post-hoc tuning."
+                "must not be used for post-hoc tuning. Only a clean-head CLI "
+                "report verifies that the recorded model commit precedes the "
+                "formal evaluator commit; even that repository ordering does "
+                "not establish that the held-out bytes were unseen before "
+                "model selection."
             ),
             "model": {
                 "configuration": dict(self.model_configuration),
@@ -318,7 +392,8 @@ def evaluate_inventory_positive_v2(
             "V2 campaign requires exactly 16 reviewed cases"
         )
     if any(item.campaign_partition != "calibration" for item in results[:8]) or any(
-        item.campaign_partition != "held-out" for item in results[8:]
+        item.campaign_partition != "retrospective-validation"
+        for item in results[8:]
     ):
         raise InventoryPositiveV2EvaluationError(
             "V2 campaign sessions are reordered or interleaved"
@@ -328,6 +403,7 @@ def evaluate_inventory_positive_v2(
     model_configuration_sha256 = _sha256(_canonical_bytes(model_configuration))
     return InventoryPositiveV2EvaluationReport(
         git_head_sha=git_head_sha,
+        git_provenance_verified_by_cli=False,
         model_freeze_git_sha=INVENTORY_POSITIVE_V2_MODEL_FREEZE_GIT_SHA,
         fixture_dataset_id=campaign.v1_report.dataset_id,
         fixture_manifest_sha256=campaign.v1_report.fixture_manifest_sha256,
@@ -365,6 +441,16 @@ def _load_campaign(fixture_directory: Path) -> _Campaign:
     if _read_bytes(manifest_path, "fixture manifest") != manifest_before:
         raise InventoryPositiveV2EvaluationError(
             "fixture manifest changed during V2 evaluation"
+        )
+    if v1_report.dataset_id != _CANONICAL_DATASET_ID:
+        raise InventoryPositiveV2EvaluationError(
+            "V2 campaign dataset differs from the pinned canonical dataset: "
+            f"{v1_report.dataset_id}"
+        )
+    if v1_report.fixture_manifest_sha256 != _CANONICAL_MANIFEST_SHA256:
+        raise InventoryPositiveV2EvaluationError(
+            "V2 campaign manifest differs from the pinned canonical manifest: "
+            f"{v1_report.fixture_manifest_sha256}"
         )
     manifest = _json_object(manifest_before, "fixture manifest")
     candidate = _required_object(manifest, "candidate")
@@ -422,6 +508,7 @@ def _load_campaign(fixture_directory: Path) -> _Campaign:
         raise InventoryPositiveV2EvaluationError(
             "V2 campaign cannot resolve the exact candidate reference"
         )
+    _require_canonical_case_identities(tuple(item.case_id for item in parsed))
     return _Campaign(
         v1_report=v1_report,
         profile=profile,
@@ -430,11 +517,26 @@ def _load_campaign(fixture_directory: Path) -> _Campaign:
     )
 
 
+def _require_canonical_case_identities(case_ids: tuple[str, ...]) -> None:
+    calibration = case_ids[: len(_CALIBRATION_CASE_IDS)]
+    held_out = case_ids[len(_CALIBRATION_CASE_IDS) :]
+    if calibration != _CALIBRATION_CASE_IDS:
+        raise InventoryPositiveV2EvaluationError(
+            "V2 campaign calibration case identities or order differ from the "
+            "pinned canonical campaign"
+        )
+    if held_out != _HELD_OUT_CASE_IDS:
+        raise InventoryPositiveV2EvaluationError(
+            "V2 campaign held-out case identities or order differ from the pinned "
+            "canonical campaign"
+        )
+
+
 def _campaign_partition(session_id: str) -> str:
     if session_id == INVENTORY_POSITIVE_V2_CALIBRATION_SESSION_ID:
         return "calibration"
     if session_id == INVENTORY_POSITIVE_V2_HELD_OUT_SESSION_ID:
-        return "held-out"
+        return "retrospective-validation"
     raise InventoryPositiveV2EvaluationError(
         f"case belongs to an unreviewed V2 campaign session: {session_id}"
     )

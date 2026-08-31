@@ -18,9 +18,11 @@ policy.
 
 The later offline positive-classifier V2 campaign consumes this gate's immutable
 sanitized output without rewriting reviewer truth or the V1 safety expectation.
-See `INVENTORY_POSITIVE_CLASSIFIER_V2.md`. The first frozen V2 held-out report
-failed safely; even a future green report would remain non-activating and would
-not grant this gate factory/production authority.
+See `INVENTORY_POSITIVE_CLASSIFIER_V2.md`. The first frozen V2
+retrospective-validation report failed safely; the second batch was already
+available during development and is not claimed as truly unseen. Even a future
+green report would remain non-activating and would not grant this gate
+factory/production authority.
 
 ## Authority boundaries
 
@@ -264,6 +266,10 @@ Evaluation writes:
 The canonical report records the exact Git head, detector ID/version and
 configuration ID, package and review hashes, source payload identity, reviewer
 truth, current detector result, agreement rule, and remaining release gaps.
+Verified Git provenance applies only when the report is produced through the
+documented CLI path, which performs the clean-worktree and exact-head checks;
+calling evaluation helpers directly or copying report JSON does not establish
+those checks.
 For imported candidates it separately records original derivation provenance
 and current evaluation-package/review bindings; the two authorities are never
 collapsed into one hash.
