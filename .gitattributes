@@ -1,0 +1,5 @@
+*.py text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf
+validation/inventory-positive-v3/*.json text eol=lf
+validation/inventory-positive-v3/*.sha256 text eol=lf
