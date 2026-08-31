@@ -114,95 +114,9 @@
   },
   "location_id": "varrock-east-mine",
   "minimum_anchor_confidence": 0.9,
-  "minimum_landmark_quorum": 5,
-  "minimum_landmark_zones": 3,
   "minimum_scene_confidence": 0.85,
   "ore_label": "iron",
   "profile_id": "varrock-east-iron-v1",
   "sample_step": 2,
-  "scene_landmarks": [
-    {
-      "grid": 4,
-      "landmark_id": "west-ridge",
-      "maximum_distance": 0.12,
-      "reference_descriptor": [
-        0.578483, 0.798826, -0.497874, 0.348648,
-        -0.456174, 0.667594, -0.307893, -0.360095,
-        -0.436482, 0.801364, -0.033105, -1.0,
-        -0.53288, 0.964521, 0.213013, -0.747946
-      ],
-      "region": [6, 376, 48, 48],
-      "zone": "north_west"
-    },
-    {
-      "grid": 4,
-      "landmark_id": "west-lower-ridge",
-      "maximum_distance": 0.12,
-      "reference_descriptor": [
-        0.692031, 0.351959, -0.277861, -0.553755,
-        1.0, 0.018392, -0.504311, -0.471103,
-        0.991303, 0.312147, -0.397231, -0.446366,
-        0.229945, -0.176824, -0.375565, -0.392759
-      ],
-      "region": [6, 448, 48, 48],
-      "zone": "north_west"
-    },
-    {
-      "grid": 4,
-      "landmark_id": "south-path",
-      "maximum_distance": 0.12,
-      "reference_descriptor": [
-        -0.352321, -0.36217, -0.365994, 0.331845,
-        -0.364846, -0.366182, -0.366057, 0.715706,
-        -0.370831, -0.387066, -0.181471, 0.993555,
-        -0.392493, -0.335723, 0.804048, 1.0
-      ],
-      "region": [258, 784, 48, 48],
-      "zone": "south_west"
-    },
-    {
-      "grid": 4,
-      "landmark_id": "south-central-edge",
-      "maximum_distance": 0.12,
-      "reference_descriptor": [
-        0.56574, 0.814542, -0.04869, -1.0,
-        -0.934556, -0.531345, -0.342228, -0.534201,
-        -0.020678, 0.380984, 0.345386, 0.296817,
-        -0.874236, 0.642729, 0.674544, 0.565192
-      ],
-      "region": [426, 736, 48, 48],
-      "zone": "south_west"
-    },
-    {
-      "grid": 4,
-      "landmark_id": "north-east-wall",
-      "maximum_distance": 0.12,
-      "reference_descriptor": [
-        0.9571998441967811, 0.9217957626794682,
-        0.6476931093479928, -0.7754667460494871,
-        0.8913168919387386, 0.9235426642479136,
-        0.5064907005271415, -0.9026678758727938,
-        0.7234732230005247, 0.22975129095638208,
-        -0.9504634083922525, -0.8135943221654205,
-        -0.07257503577324946, -0.47721532452210513,
-        -1.0, -0.8092807741196315
-      ],
-      "region": [689, 299, 48, 48],
-      "zone": "north_east"
-    },
-    {
-      "grid": 4,
-      "landmark_id": "east-bank-edge",
-      "maximum_distance": 0.12,
-      "reference_descriptor": [
-        -1.0, 0.166549, 0.731298, -0.175635,
-        -0.699088, 0.846673, 0.591575, -0.239147,
-        -0.668823, -0.214718, 0.251567, 0.455167,
-        -0.938356, -0.5367, 0.560672, 0.868966
-      ],
-      "region": [678, 448, 48, 48],
-      "zone": "north_east"
-    }
-  ],
-  "schema_version": 3
+  "schema_version": 2
 }

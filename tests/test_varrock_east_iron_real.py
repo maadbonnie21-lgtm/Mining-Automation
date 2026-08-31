@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from mining_automation.capture import Frame, PixelFormat, RawFrame
 from mining_automation.contracts import Observation
 from mining_automation.perception import (
@@ -111,6 +113,33 @@ def _replace_rgb_region(
     )
 
 
+def _translate(frame: Frame, offset_x: int, offset_y: int) -> Frame:
+    """Translate a reviewed frame for deterministic camera-jitter regression."""
+
+    stride = frame.width * frame.pixel_format.bytes_per_pixel
+    source = frame.payload
+    translated = bytearray(len(source))
+    for y in range(frame.height):
+        source_y = (y - offset_y) % frame.height
+        for x in range(frame.width):
+            source_x = (x - offset_x) % frame.width
+            destination_offset = y * stride + x * 4
+            source_offset = source_y * stride + source_x * 4
+            translated[destination_offset : destination_offset + 4] = source[
+                source_offset : source_offset + 4
+            ]
+    return Frame.from_raw(
+        RawFrame(
+            payload=bytes(translated),
+            width=frame.width,
+            height=frame.height,
+            pixel_format=frame.pixel_format,
+        ),
+        frame_id=frame.frame_id + 1,
+        captured_monotonic_s=frame.captured_monotonic_s + 1.0,
+    )
+
+
 def test_packaged_profile_and_real_replay_pass_objective_evaluation(
     tmp_path: Path,
 ) -> None:
@@ -148,6 +177,44 @@ def test_real_available_depleted_and_respawn_sequence_matches_review(
             for resource_id, state in EXPECTED_STATES[sample.case.case_id].items()
         }
         assert actual == expected
+
+        shared_states = resource_states_from_observations(list(observations))
+        for resource_id, expected_state in EXPECTED_STATES[sample.case.case_id].items():
+            state = shared_states[resource_id]
+            if expected_state is ResourceVisualState.AVAILABLE:
+                assert state.available is True
+                assert state.interaction_region is not None
+            elif expected_state is ResourceVisualState.DEPLETED:
+                assert state.available is False
+                assert state.interaction_region is None
+            else:
+                raise AssertionError(expected_state)
+
+
+@pytest.mark.parametrize(
+    ("offset_x", "offset_y"),
+    ((2, 0), (-2, 0), (0, 2), (0, -2)),
+)
+def test_two_pixel_cardinal_jitter_preserves_every_reviewed_resource_state(
+    tmp_path: Path,
+    offset_x: int,
+    offset_y: int,
+) -> None:
+    """The accepted jitter envelope preserves exact production classifications."""
+
+    dataset = _load_real_dataset(tmp_path)
+    detector = build_varrock_east_iron_detector()
+
+    for sample in dataset.samples:
+        observations = run_detector(
+            detector,
+            _translate(sample.frame, offset_x, offset_y),
+        )
+        expected = {
+            resource_id: state.value
+            for resource_id, state in EXPECTED_STATES[sample.case.case_id].items()
+        }
+        assert _states_by_resource(observations) == expected
 
         shared_states = resource_states_from_observations(list(observations))
         for resource_id, expected_state in EXPECTED_STATES[sample.case.case_id].items():
@@ -232,8 +299,13 @@ def test_wrong_scene_returns_uncertain_for_every_profiled_target(
     # this case is the most extreme form (every anchor fails at once) and
     # continues to prove the scene is rejected outright, not partially
     # trusted.
+    # Schema v3 (Issue #18): an all-black frame matches none of the six
+    # structural landmarks, so distributed evidence rejects the scene with a
+    # specific quorum reason. Previously this tripped the v2 per-anchor floor;
+    # the outcome is unchanged (every target uncertain) and the reason is now
+    # more diagnostic.
     assert all(
-        observation.evidence["reason"].startswith("anchor_confidence_below_floor")
+        observation.evidence["reason"].startswith("insufficient_landmark_quorum")
         for observation in observations
     )
 
@@ -295,14 +367,16 @@ def _mutate_region(
     )
 
 
-def test_single_anchor_drift_is_caught_by_the_per_anchor_floor(tmp_path: Path) -> None:
-    """A camera-drift stand-in: one real anchor's patch is replaced with a
-    colour distinct enough to matter but not so extreme it fails outright.
-    similarity ~= 0.6 -- comfortably above the ~0.4 a single anchor could
-    survive at under the old weighted-average-only check (see the
-    ResourceDetectorProfile docstring for that arithmetic), but below the
-    production profile's 0.90 per-anchor floor. Every other anchor and every
-    candidate region keep their real, unmutated pixels."""
+def test_legacy_anchor_patch_change_is_non_gating_under_schema_v3(tmp_path: Path) -> None:
+    """Issue #18, lead decision B/D: legacy mean-RGB anchors no longer veto.
+
+    Under schema v2 this exact mutation tripped the Issue #13 per-anchor floor
+    and rejected the whole scene. That veto is the confirmed reacquisition
+    bug: the four legacy anchors measure 0.78-3.27 structural variance against
+    a 8.0 discriminative floor, so they never carried information capable of
+    telling one camera view from another. Under v3 the six structural
+    landmarks still agree, so the scene remains validated.
+    """
     dataset = _load_real_dataset(tmp_path)
     source = next(
         sample.frame
@@ -322,20 +396,16 @@ def test_single_anchor_drift_is_caught_by_the_per_anchor_floor(tmp_path: Path) -
     observations = run_detector(build_varrock_east_iron_detector(), frame)
 
     assert _states_by_resource(observations) == {
-        resource_id: ResourceVisualState.UNCERTAIN.value for resource_id in ALL_RESOURCES
+        resource_id: ResourceVisualState.AVAILABLE.value for resource_id in ALL_RESOURCES
     }
-    assert all(
-        observation.evidence["reason"].startswith("anchor_confidence_below_floor")
-        and "south-ground" in observation.evidence["reason"]
-        for observation in observations
-    )
-    # The other three anchors are untouched real pixels and should still read
-    # as a near-perfect match, confirming the rejection is specific to the
-    # one drifted anchor rather than a side effect of the mutation.
-    anchor_confidences = observations[0].evidence["anchor_confidences"]
-    for anchor_id in ("grass-west", "grass-center", "east-slope"):
-        assert anchor_confidences[anchor_id] > 0.99
-    assert anchor_confidences["south-ground"] < 0.65
+    # The legacy anchor measurement is still recorded as evidence, just not
+    # used to gate the decision.
+    assert "anchor_confidences" in observations[0].evidence
+    assert observations[0].evidence["anchor_confidences"]["south-ground"] < 0.65
+    # Every landmark is untouched by this mutation and still matches exactly.
+    distances = observations[0].evidence["landmark_distances"]
+    assert len(distances) == 6
+    assert max(distances.values()) == 0.0
 
 
 def test_partial_occlusion_on_a_real_candidate_is_suspected(tmp_path: Path) -> None:

@@ -16,9 +16,11 @@ A profiled detector returns one observation per known resource candidate:
 
 Each observation carries:
 
+- `detector_id` and the observation's detector version
 - `label`: ore label, currently `iron`
 - `location_id`
 - `profile_id`
+- `profile_schema_version`
 - `resource_id`
 - `state`
 - frame-local `region` when the profiled geometry is valid
@@ -26,7 +28,24 @@ Each observation carries:
 - scene confidence and per-anchor confidence
 - a concise reason
 
-`resource_state_from_observation()` converts this detector output into the shared `ResourceState` contract. Only an **available** observation exposes an `interaction_region`; depleted or uncertain targets are never handed to later input code as clickable.
+`resource_state_from_observation()` converts an individual detector output into
+the shared `ResourceState` contract. It remains a generic diagnostic adapter and
+does not prove that a production frame is complete.
+
+The controller-preparation boundary is
+`trust_varrock_east_iron_observations()`. Its policy is source-owned and has no
+runtime or CLI overrides. It requires the exact
+`profiled-resource:varrock-east-iron-v1@2.1.0` detector identity, schema v3,
+`varrock-east-iron-v1` profile, `varrock-east-mine` location, all four expected
+resource IDs exactly once, and one identical `FrameRef`. Any incomplete, mixed,
+malformed, stale, or identity-mismatched ensemble returns zero resource states
+and zero actionable targets. The caller must supply the source-owned current
+capture `FrameRef`; all four observations must equal that exact identity. This
+uses no inferred age threshold or configurable freshness window. In an accepted
+complete ensemble, only an **available**
+resource with its exact packaged frame-local candidate region is actionable;
+depleted and uncertain resources never expose interaction regions. This is a
+typed contract for later controller work, not WorldState or controller activation.
 
 ## Why the detector is profile-driven
 

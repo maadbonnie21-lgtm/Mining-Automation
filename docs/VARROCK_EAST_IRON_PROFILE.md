@@ -49,8 +49,9 @@ strictly tied to:
 - pixel format `BGRA8888`
 - the reviewed fixed camera/zoom
 - the four frame-local 20x20 rock-surface patches
-- the four reviewed scene anchors
-- detector version `1.0.0`
+- the six reviewed world-only structural landmarks (the four legacy anchors
+  remain diagnostic evidence only)
+- detector version `2.1.0`
 
 Geometry, scene, obstruction, or colour mismatch returns `resource.uncertain`.
 Only `resource.available` is adapted into a clickable `ResourceState` region.
@@ -64,8 +65,10 @@ same reviewed grey state.
 
 Current thresholds:
 
-- scene confidence: `0.85`
-- per-anchor confidence floor: `0.90` (new, Issue #13)
+- scene confidence: `0.85` (legacy v2 path only; non-gating under v3)
+- per-anchor confidence floor: `0.90` (Issue #13; **non-gating under v3**, see below)
+- structural landmarks: 6, quorum 5, spanning >= 3 of 4 macro zones (Issue #18)
+- landmark descriptor max distance: `0.12` (Issue #18)
 - candidate minimum similarity: `0.65`
 - candidate minimum available/depleted margin: `0.25`
 - candidate signature maximum RGB distance: `60`
@@ -152,6 +155,137 @@ real patch) may look different from any synthetic fill colour and should
 still be captured and evaluated before this profile is called
 occlusion-validated, not just occlusion-defended.
 
+## Issue #18: structural scene validation and reacquisition
+
+Schema v3 replaces the *gating* role of the four mean-RGB terrain anchors with
+six spatially distributed structural landmarks under a quorum rule.
+
+**Why the old anchors could not work.** Measured with the same structural
+variance metric that now gates landmark calibration, the four legacy anchors
+score `grass-west 1.75`, `grass-center 3.03`, `east-slope 0.78`,
+`south-ground 3.27` -- against a discriminative floor of `8.0`. They never
+carried information capable of telling one camera view from another. Giving any
+single one of them veto power (the Issue #13 per-anchor floor) therefore
+rejected scenes on evidence that could not distinguish views, which is the
+confirmed cause of the reacquisition failure. They are still measured and
+recorded as evidence; they no longer gate.
+
+**The replacement.** Each landmark is a 48x48 region reduced to a 4x4 grid of
+cell luminances, mean-centred and normalised by maximum absolute deviation. It
+encodes internal structure rather than average colour and is invariant to a
+uniform brightness change. The scene validates only when at least 5 of 6
+landmarks match **and** the matching ones span at least 3 macro zones.
+
+**Calibrated landmarks**, two per usable macro zone:
+
+| landmark | region | zone | structural variance |
+|---|---|---|---|
+| `west-ridge` | (6,376,48,48) | north_west | 10.17 |
+| `west-lower-ridge` | (6,448,48,48) | north_west | 13.35 |
+| `south-path` | (258,784,48,48) | south_west | 17.53 |
+| `south-central-edge` | (426,736,48,48) | south_west | 12.60 |
+| `north-east-wall` | (689,299,48,48) | north_east | 11.93 |
+| `east-bank-edge` | (678,448,48,48) | north_east | 16.38 |
+
+`north-east-wall` retains its stable evidence identifier, but its region now
+samples the world bank at `(689,299,48,48)`. The earlier region at
+`(702,88,48,48)` was inside the minimap and has been retired.
+
+The 2-per-zone layout is load-bearing: with one landmark per zone, losing any
+single landmark would drop below the 3-zone requirement and the 5-of-6 quorum
+would never actually tolerate an obstruction. The south-east quadrant is
+unusable -- the inventory panel occupies it -- so three zones is the maximum
+available and every one of them carries a spare.
+
+**Threshold derivation.** Set by measured separation, not tuned:
+
+- worst positive across all five reviewed rock-state frames: `0.00008`
+- smallest above-threshold distance in the synthetic `(+4,+2)` negative
+  scene: `0.143` (the scene matches only 1-of-6 landmarks)
+- smallest distance in the synthetic `(+8,+4)` negative scene: `0.292`
+  (the scene matches 0-of-6)
+
+`0.12` sits more than 1500x above the worst positive and below every
+above-threshold distance in those negatives. The quorum still rejects the
+`(+4,+2)` scene despite its one locally matching landmark.
+
+The numeric policy parameters remain unchanged at distance `0.12`, 5-of-6
+landmarks, and three zones. Replacing the contaminated landmark nevertheless
+changes the empirical accepted image envelope. Synthetic cardinal 2px
+translations are now intentionally tolerated at frozen production coordinates:
+both horizontal directions match 5-of-6 landmarks across all three zones, and
+both vertical directions match 6-of-6 across all three zones. The production
+detector preserves the exact expected state for every resource ID across all
+five reviewed available/depleted/respawn/mixed fixtures in each direction. On
+the reviewed available baseline, all tested cardinal 3px and 4px
+translations remain fail-closed at between 1-of-6 and 4-of-6 landmarks.
+
+**Calibration guards.** `MINIMUM_STRUCTURAL_VARIANCE` (8.0) rejects a
+featureless region at construction time, so "no generic grass/dirt patches" is
+mechanically enforced. Landmarks may not overlap candidate regions, so rock
+available/depleted transitions cannot alter scene validation -- measured at
+<= 0.00008 descriptor movement across every reviewed depletion/respawn frame.
+
+**Masked/UI-region hazard.** The committed fixtures are privacy-sanitized, and
+the live minimap, orbs, side rail, lower-right panel, title bar, status area,
+and non-rendered padding can all look stable and highly structural. None are
+world-scene evidence. Their reviewed frame-local rectangles are centralized in
+`VARROCK_EAST_IRON_FIXED_UI_REGIONS`; the packaged profile loader rejects any
+landmark that overlaps them. Both narrow and wide development diagnostics use
+the same exclusions in addition to the resource candidates.
+
+**Backward compatibility.** A profile with no `scene_landmarks` keeps the exact
+v2 behaviour including the Issue #13 per-anchor floor. Schema v3 is additive.
+
+## Issue #22: real restored-frame diagnosis
+
+The stored `reacquire-restored-20260818.raw` capture is not a small-jitter
+version of the calibrated view. Its frozen-profile distances are:
+
+| landmark | distance | threshold | result |
+|---|---:|---:|---|
+| `west-ridge` | 0.719223 | 0.12 | fail |
+| `west-lower-ridge` | 0.591629 | 0.12 | fail |
+| `south-path` | 0.514805 | 0.12 | fail |
+| `south-central-edge` | 0.659996 | 0.12 | fail |
+| `north-east-wall` | 1.125719 | 0.12 | fail |
+| `east-bank-edge` | 0.799425 | 0.12 | fail |
+
+A coherent +/-4px search remains 0-of-6, and independent local searches also
+recover 0-of-6 after the minimap-contaminated landmark is removed. More
+decisively, the claimed restored frame matches **all 36** known
+unsupported drift captures at 6-of-6 landmarks across all three zones when
+the existing descriptor threshold, quorum, and spatial-spread rule are used
+for frame-to-frame comparison. The capture therefore remained in the drifted
+north-west camera view; frozen landmark brittleness is not the cause of this
+real failure. The world-only evidence strengthens that diagnosis: the one
+previous frozen-coordinate match came from the minimap, not the world.
+
+The policy parameters are unchanged: no production threshold, quorum, zone
+rule, descriptor algorithm, or profile schema changed. The empirical accepted
+image envelope did change when the contaminated frozen evidence region was
+replaced, so the detector version is `2.1.0`. Bounded coherent registration
+remains diagnostic-only because the production safety contract still uses
+frozen coordinates. It rejects all tested cardinal 3px/4px translations and
+all 36 real drift frames; no broader claim is made about every possible
+translation outside the reviewed 2px envelope.
+Independent local minima are never combined into a scene verdict. Diagnostic
+search envelopes must remain outside candidates and reviewed fixed UI,
+preserving resource-state and world-scene independence.
+
+Run the complete owner-only validation and diagnosis without inspecting JSON:
+
+```bash
+python tools/validate_varrock_east_drift.py --drift-frames diagnostics/issue18-drift-v3 --restored-frame diagnostics/varrock-east-iron/frames/reacquire-restored-20260818.raw
+```
+
+The command prints per-landmark distances and thresholds, matched zones,
+production scene verdicts and rock states, the 36-frame safety total, bounded
+search evidence, known-drift similarity, the restored-frame result, and a
+plain-language diagnosis. When it reports `camera_not_actually_restored`, the
+next useful evidence is one fresh capture made after returning RuneLite to the
+reviewed supported view—not threshold tuning.
+
 ## Release boundary
 
 This is a calibrated development profile, not yet a claim of universal or
@@ -165,9 +299,13 @@ four-node release readiness. Before Issue #11 can close, collect and pass:
   Issue #13 occlusion defense is mechanism-validated against real pixels with
   a synthetic mutation — see above — not yet against a genuinely captured
   occlusion event)
-- at least one reviewed frame with the camera or zoom genuinely different
-  from the calibrated position, to confirm the per-anchor floor behaves as
-  expected against real drift rather than only a synthetic one
+- the 36 real camera-drift frames re-run through the Issue #22 combined command:
+  all 36 frames remain UNCERTAIN, with zero false definitive targets
+- one fresh supported-view capture, because the stored frame was proven to be
+  the same unsupported view as the drift set; rerun it through the combined
+  command as `--restored-frame`
+- an ordinary RuneLite restart followed by supported-view reacquisition,
+  re-run with `--expect definitive`
 - repeated runs with the supported camera restored after ordinary client restart
 
 PR #12 remains a draft until those gates pass.

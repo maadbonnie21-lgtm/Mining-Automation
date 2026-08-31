@@ -1,8 +1,8 @@
 """Profile-driven resource perception and shared-state adaptation.
 
 The first production detector is deliberately narrow: one reviewed site profile
-represents one supported mine, ore, client geometry, and camera envelope.  The
-profile contains frame-local scene anchors and candidate rock regions.  It never
+represents one supported mine, ore, client geometry, and camera envelope. The
+profile contains frame-local scene evidence and candidate rock regions. It never
 contains desktop coordinates and it never guesses when the frame does not match
 that supported envelope.
 """
@@ -21,6 +21,7 @@ from typing import Final
 from ..capture import Frame, PixelFormat
 from ..contracts import Observation, ResourceState
 from .detector import DetectorMetadata
+from .scene_landmarks import MacroZone, SceneLandmarkProfile, evaluate_scene
 
 __all__ = [
     "RESOURCE_OBSERVATION_PREFIX",
@@ -40,7 +41,9 @@ __all__ = [
 ]
 
 RESOURCE_OBSERVATION_PREFIX: Final[str] = "resource."
-RESOURCE_PROFILE_SCHEMA_VERSION: Final[int] = 2
+RESOURCE_PROFILE_SCHEMA_VERSION: Final[int] = 3
+_LEGACY_RESOURCE_PROFILE_SCHEMA_VERSION: Final[int] = 2
+_MACRO_ZONE_COUNT: Final[int] = len(MacroZone)
 _REGION_COMPONENTS: Final[int] = 4
 _MAX_RGB_DISTANCE: Final[float] = math.sqrt(3.0 * 255.0 * 255.0)
 
@@ -89,12 +92,8 @@ def _regions_overlap(
     first: tuple[int, int, int, int],
     second: tuple[int, int, int, int],
 ) -> bool:
-    """Whether two frame-local ``(x, y, width, height)`` rectangles intersect.
+    """Whether two frame-local rectangles have positive-area intersection."""
 
-    Edge-touching (sharing only a boundary line, zero-area intersection) is
-    not overlap -- two candidate regions calibrated flush against each other
-    are a legitimate, if tight, calibration and should not be rejected.
-    """
     first_x, first_y, first_width, first_height = first
     second_x, second_y, second_width, second_height = second
     return (
@@ -145,15 +144,13 @@ class ColorSignature:
             raise ValueError("max_distance must be finite and within the RGB distance range")
 
     def similarity(self, actual_rgb: tuple[float, float, float]) -> float:
-        """Return a clipped 0..1 similarity to ``actual_rgb``."""
-
         distance = math.dist(self.mean_rgb, actual_rgb)
         return max(0.0, min(1.0, 1.0 - distance / float(self.max_distance)))
 
 
 @dataclass(frozen=True, slots=True)
 class SceneAnchorProfile:
-    """A stable frame-local patch used to verify the supported scene."""
+    """A frame-local mean-RGB patch used by legacy schema-v2 scene gating."""
 
     anchor_id: str
     region: tuple[int, int, int, int]
@@ -172,20 +169,7 @@ class SceneAnchorProfile:
 
 @dataclass(frozen=True, slots=True)
 class RockCandidateProfile:
-    """One known rock position and its available/depleted colour prototypes.
-
-    ``occlusion_grid_columns``/``occlusion_grid_rows`` default to ``1x1``: one
-    cell covering the whole region, which is exactly today's whole-region-mean
-    behaviour and requires no calibration change for an existing profile. A
-    grid larger than 1x1 partitions the region into that many equal cells,
-    classifies each independently against the same signatures and thresholds,
-    and requires ``minimum_occlusion_agreement`` of them to agree on the same
-    definitive state before trusting it. A whole-region mean has no defence
-    against a partial occluder (a player, an overlay) that covers *some* of the
-    region and pulls the aggregate mean toward whichever colour it is; a grid
-    that requires several independent sub-regions to agree does, because an
-    occluder covering one cell cannot silently outvote the others.
-    """
+    """One known rock position and its available/depleted colour prototypes."""
 
     resource_id: str
     region: tuple[int, int, int, int]
@@ -225,24 +209,12 @@ class RockCandidateProfile:
                 f"region height {height} must divide evenly by "
                 f"occlusion_grid_rows {self.occlusion_grid_rows}"
             )
-        # No separate "cell must be at least one pixel" check is needed here:
-        # if width % columns == 0 and width > 0, width // columns >= 1 always
-        # holds (width is a positive multiple of columns), and symmetrically
-        # for height // rows. The divide-evenly checks above already
-        # guarantee every cell is at least one pixel.
 
     @property
     def occlusion_cell_count(self) -> int:
-        """Total number of independently classified sub-regions."""
         return self.occlusion_grid_columns * self.occlusion_grid_rows
 
     def occlusion_cell_regions(self) -> tuple[tuple[int, int, int, int], ...]:
-        """Row-major frame-local regions for every occlusion grid cell.
-
-        A 1x1 grid (the default) returns exactly ``(self.region,)``, so this is
-        a strict generalisation of the whole-region case rather than a
-        parallel code path.
-        """
         x, y, width, height = self.region
         cell_width = width // self.occlusion_grid_columns
         cell_height = height // self.occlusion_grid_rows
@@ -257,16 +229,10 @@ class RockCandidateProfile:
 class ResourceDetectorProfile:
     """Reviewed support envelope for one mine/ore/camera configuration.
 
-    ``minimum_scene_confidence`` gates a *weighted average* across all
-    anchors, which a single badly drifted anchor can survive if the others
-    stay strong -- with four equally weighted anchors, one anchor's confidence
-    can fall as low as ``4 * minimum_scene_confidence - 3`` while the other
-    three stay near 1.0 and the average still passes. In-game camera rotation
-    or zoom, unlike frame-size or pixel-format mismatch, is not caught by any
-    other check here. ``minimum_anchor_confidence`` (default ``0.0``, meaning
-    no additional floor and therefore no behaviour change for an existing
-    profile) closes that gap: every anchor must individually clear it, so no
-    single anchor's drift can be averaged away by the others.
+    Profiles without ``scene_landmarks`` use the exact schema-v2 anchor gating
+    semantics. Migrated schema-v3 profiles use structural landmarks as the
+    gating scene evidence while retaining legacy anchor measurements only for
+    diagnostics.
     """
 
     profile_id: str
@@ -280,6 +246,10 @@ class ResourceDetectorProfile:
     minimum_scene_confidence: float = 0.7
     minimum_anchor_confidence: float = 0.0
     sample_step: int = 2
+    scene_landmarks: tuple[SceneLandmarkProfile, ...] = ()
+    minimum_landmark_quorum: int = 0
+    minimum_landmark_zones: int = 0
+    schema_version: int = RESOURCE_PROFILE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         for field_name, value in (
@@ -295,6 +265,11 @@ class ResourceDetectorProfile:
             raise ValueError("frame_height must be a positive integer")
         if not isinstance(self.pixel_format, PixelFormat):
             raise ValueError("pixel_format must be PixelFormat")
+        if not _is_integer(self.schema_version) or self.schema_version not in {
+            _LEGACY_RESOURCE_PROFILE_SCHEMA_VERSION,
+            RESOURCE_PROFILE_SCHEMA_VERSION,
+        }:
+            raise ValueError("schema_version must be a supported resource profile version")
         if (
             not isinstance(self.anchors, tuple)
             or not self.anchors
@@ -304,12 +279,13 @@ class ResourceDetectorProfile:
         if (
             not isinstance(self.candidates, tuple)
             or not self.candidates
-            or any(
-                not isinstance(candidate, RockCandidateProfile)
-                for candidate in self.candidates
-            )
+            or any(not isinstance(candidate, RockCandidateProfile) for candidate in self.candidates)
         ):
             raise ValueError("candidates must be a non-empty tuple of RockCandidateProfile values")
+        if not isinstance(self.scene_landmarks, tuple) or any(
+            not isinstance(landmark, SceneLandmarkProfile) for landmark in self.scene_landmarks
+        ):
+            raise ValueError("scene_landmarks must be a tuple of SceneLandmarkProfile values")
         _validate_unit_interval(self.minimum_scene_confidence, "minimum_scene_confidence")
         _validate_unit_interval(self.minimum_anchor_confidence, "minimum_anchor_confidence")
         if not _is_integer(self.sample_step) or self.sample_step <= 0:
@@ -334,15 +310,6 @@ class ResourceDetectorProfile:
                 frame_height=self.frame_height,
             )
 
-        # A hand-calibrated profile is exactly the workflow most prone to a
-        # copy-paste or eyeballing mistake leaving two windows over what is
-        # really one physical location -- unlike a programmatically derived
-        # grid, nothing here generates these regions, so nothing else catches
-        # that mistake. Two candidates observing the same rock would silently
-        # produce two independent, potentially disagreeing observations for
-        # one physical target; a candidate overlapping an anchor would let a
-        # rock's own colour changes corrupt the scene-verification signal that
-        # is supposed to be independent of resource state.
         for first_index, first_candidate in enumerate(self.candidates):
             for second_candidate in self.candidates[first_index + 1 :]:
                 if _regions_overlap(first_candidate.region, second_candidate.region):
@@ -357,6 +324,51 @@ class ResourceDetectorProfile:
                         "a candidate region must not overlap a scene anchor: "
                         f"{first_candidate.resource_id!r} and anchor {anchor.anchor_id!r}"
                     )
+
+        if self.scene_landmarks:
+            landmark_ids = [item.landmark_id for item in self.scene_landmarks]
+            if len(set(landmark_ids)) != len(landmark_ids):
+                raise ValueError("scene landmark ids must be unique")
+            if (
+                not _is_integer(self.minimum_landmark_quorum)
+                or not 1 <= self.minimum_landmark_quorum <= len(self.scene_landmarks)
+            ):
+                raise ValueError(
+                    "minimum_landmark_quorum must be between 1 and the landmark count"
+                )
+            if (
+                not _is_integer(self.minimum_landmark_zones)
+                or not 1 <= self.minimum_landmark_zones <= _MACRO_ZONE_COUNT
+            ):
+                raise ValueError(
+                    f"minimum_landmark_zones must be between 1 and {_MACRO_ZONE_COUNT}"
+                )
+            available_zones = {
+                landmark.zone(self.frame_width, self.frame_height)
+                for landmark in self.scene_landmarks
+            }
+            if len(available_zones) < self.minimum_landmark_zones:
+                raise ValueError(
+                    f"landmarks span only {len(available_zones)} macro zones but "
+                    f"minimum_landmark_zones is {self.minimum_landmark_zones}; the "
+                    "spatial-spread requirement could never be satisfied"
+                )
+            for landmark in self.scene_landmarks:
+                _validate_region(
+                    landmark.region,
+                    frame_width=self.frame_width,
+                    frame_height=self.frame_height,
+                )
+                for candidate in self.candidates:
+                    if _regions_overlap(landmark.region, candidate.region):
+                        raise ValueError(
+                            "a scene landmark must not overlap a candidate region: "
+                            f"{landmark.landmark_id!r} and {candidate.resource_id!r}"
+                        )
+        elif self.minimum_landmark_quorum or self.minimum_landmark_zones:
+            raise ValueError(
+                "landmark quorum/zone requirements set without any scene_landmarks"
+            )
 
 
 class ProfiledResourceDetector:
@@ -382,8 +394,6 @@ class ProfiledResourceDetector:
         return self._profile
 
     def detect(self, frame: Frame) -> tuple[Observation, ...]:
-        """Return one deterministic observation per profiled resource candidate."""
-
         mismatch = self._frame_mismatch_reason(frame)
         if mismatch is not None:
             return tuple(
@@ -400,24 +410,61 @@ class ProfiledResourceDetector:
         anchor_evidence: dict[str, float] = {}
         weighted_total = 0.0
         total_weight = 0.0
-        weakest_anchor_id = ""
-        weakest_anchor_confidence = 1.0
         for anchor in self._profile.anchors:
             mean_rgb = _mean_rgb(frame, anchor.region, sample_step=self._profile.sample_step)
             confidence = anchor.signature.similarity(mean_rgb)
             anchor_evidence[anchor.anchor_id] = confidence
             weighted_total += confidence * float(anchor.weight)
             total_weight += float(anchor.weight)
+        legacy_scene_confidence = weighted_total / total_weight if total_weight else 0.0
+
+        if self._profile.scene_landmarks:
+            verdict = evaluate_scene(
+                frame,
+                self._profile.scene_landmarks,
+                required_quorum=self._profile.minimum_landmark_quorum,
+                required_zones=self._profile.minimum_landmark_zones,
+                frame_width=self._profile.frame_width,
+                frame_height=self._profile.frame_height,
+            )
+            landmark_evidence = {
+                match.landmark_id: round(match.distance, 6) for match in verdict.matches
+            }
+            scene_confidence = verdict.matched_count / len(verdict.matches)
+            if not verdict.validated:
+                return tuple(
+                    self._uncertain_observation(
+                        frame,
+                        candidate,
+                        reason=verdict.detail,
+                        scene_confidence=scene_confidence,
+                        region_is_valid=True,
+                        anchor_confidences=anchor_evidence,
+                        landmark_distances=landmark_evidence,
+                    )
+                    for candidate in self._profile.candidates
+                )
+            return tuple(
+                self._classify_candidate(
+                    frame,
+                    candidate,
+                    scene_confidence=scene_confidence,
+                    anchor_confidences=anchor_evidence,
+                    landmark_distances=landmark_evidence,
+                )
+                for candidate in self._profile.candidates
+            )
+
+        # Exact schema-v2 semantics: every legacy anchor must clear its floor,
+        # then the weighted scene average must clear minimum_scene_confidence.
+        scene_confidence = legacy_scene_confidence
+        weakest_anchor_id = ""
+        weakest_anchor_confidence = 1.0
+        for anchor_id, confidence in anchor_evidence.items():
             if confidence < weakest_anchor_confidence:
                 weakest_anchor_confidence = confidence
-                weakest_anchor_id = anchor.anchor_id
-        scene_confidence = weighted_total / total_weight
+                weakest_anchor_id = anchor_id
 
-        # Checked before the aggregate: a weighted average can hide one badly
-        # drifted anchor behind several unaffected ones (see the profile
-        # docstring for the exact arithmetic). This floor requires every
-        # anchor to independently clear it, so in-scene camera drift that a
-        # single anchor's patch would reveal cannot be averaged away.
         if weakest_anchor_confidence < self._profile.minimum_anchor_confidence:
             return tuple(
                 self._uncertain_observation(
@@ -479,15 +526,22 @@ class ProfiledResourceDetector:
         *,
         scene_confidence: float,
         anchor_confidences: dict[str, float],
+        landmark_distances: dict[str, float] | None = None,
     ) -> Observation:
         if candidate.occlusion_cell_count == 1:
             return self._classify_whole_region(
-                frame, candidate, scene_confidence=scene_confidence,
+                frame,
+                candidate,
+                scene_confidence=scene_confidence,
                 anchor_confidences=anchor_confidences,
+                landmark_distances=landmark_distances,
             )
         return self._classify_with_occlusion_grid(
-            frame, candidate, scene_confidence=scene_confidence,
+            frame,
+            candidate,
+            scene_confidence=scene_confidence,
             anchor_confidences=anchor_confidences,
+            landmark_distances=landmark_distances,
         )
 
     def _classify_whole_region(
@@ -497,6 +551,7 @@ class ProfiledResourceDetector:
         *,
         scene_confidence: float,
         anchor_confidences: dict[str, float],
+        landmark_distances: dict[str, float] | None = None,
     ) -> Observation:
         mean_rgb = _mean_rgb(
             frame,
@@ -508,13 +563,8 @@ class ProfiledResourceDetector:
         best_similarity = max(available_similarity, depleted_similarity)
         margin = abs(available_similarity - depleted_similarity)
 
-        if (
-            best_similarity < candidate.minimum_similarity
-            or margin < candidate.minimum_margin
-        ):
+        if best_similarity < candidate.minimum_similarity or margin < candidate.minimum_margin:
             state = ResourceVisualState.UNCERTAIN
-            # Confidence here means confidence that progression must stop and
-            # reacquire, not confidence in either available/depleted state.
             confidence = min(
                 scene_confidence,
                 max(0.0, 1.0 - best_similarity + (candidate.minimum_margin - margin)),
@@ -530,9 +580,11 @@ class ProfiledResourceDetector:
             reason = "depleted_signature_matched"
 
         evidence: dict[str, object] = {
+            "detector_id": self._metadata.detector_id,
             "label": self._profile.ore_label,
             "location_id": self._profile.location_id,
             "profile_id": self._profile.profile_id,
+            "profile_schema_version": self._profile.schema_version,
             "resource_id": candidate.resource_id,
             "state": state.value,
             "region": candidate.region,
@@ -543,6 +595,8 @@ class ProfiledResourceDetector:
             "anchor_confidences": dict(sorted(anchor_confidences.items())),
             "reason": reason,
         }
+        if landmark_distances is not None:
+            evidence["landmark_distances"] = dict(sorted(landmark_distances.items()))
         return Observation(
             kind=observation_kind_for_state(state),
             frame=frame.ref,
@@ -558,24 +612,20 @@ class ProfiledResourceDetector:
         *,
         scene_confidence: float,
         anchor_confidences: dict[str, float],
+        landmark_distances: dict[str, float] | None = None,
     ) -> Observation:
-        """Classify each occlusion-grid cell independently and require agreement.
-
-        A whole-region mean cannot distinguish "the whole rock changed colour"
-        from "part of the rock is hidden behind something colour-different" --
-        both shift the same single average. Splitting into cells and requiring
-        several of them to independently agree can: an occluder covering a
-        minority of cells is outvoted rather than silently blended into a
-        confident answer for the whole region.
-        """
-        whole_mean_rgb = _mean_rgb(frame, candidate.region, sample_step=self._profile.sample_step)
+        whole_mean_rgb = _mean_rgb(
+            frame, candidate.region, sample_step=self._profile.sample_step
+        )
         whole_available_similarity = candidate.available_signature.similarity(whole_mean_rgb)
         whole_depleted_similarity = candidate.depleted_signature.similarity(whole_mean_rgb)
 
         cell_states: list[ResourceVisualState] = []
         cell_winning_similarities: list[float] = []
         for cell_region in candidate.occlusion_cell_regions():
-            cell_mean_rgb = _mean_rgb(frame, cell_region, sample_step=self._profile.sample_step)
+            cell_mean_rgb = _mean_rgb(
+                frame, cell_region, sample_step=self._profile.sample_step
+            )
             cell_available = candidate.available_signature.similarity(cell_mean_rgb)
             cell_depleted = candidate.depleted_signature.similarity(cell_mean_rgb)
             cell_best = max(cell_available, cell_depleted)
@@ -607,13 +657,11 @@ class ProfiledResourceDetector:
             state = leading_state
             agreeing_similarities = [
                 similarity
-                for similarity, cell_state in zip(cell_winning_similarities, cell_states, strict=True)
+                for similarity, cell_state in zip(
+                    cell_winning_similarities, cell_states, strict=True
+                )
                 if cell_state is leading_state
             ]
-            # Minimum, not average or the whole-region mean: one weak agreeing
-            # cell should not be hidden behind stronger ones, matching the same
-            # "weakest evidence sets the confidence" principle already used for
-            # inventory-slot aggregation elsewhere in this codebase.
             confidence = min(scene_confidence, min(agreeing_similarities))
             reason = (
                 "available_signature_matched"
@@ -622,9 +670,11 @@ class ProfiledResourceDetector:
             )
 
         evidence: dict[str, object] = {
+            "detector_id": self._metadata.detector_id,
             "label": self._profile.ore_label,
             "location_id": self._profile.location_id,
             "profile_id": self._profile.profile_id,
+            "profile_schema_version": self._profile.schema_version,
             "resource_id": candidate.resource_id,
             "state": state.value,
             "region": candidate.region,
@@ -637,6 +687,8 @@ class ProfiledResourceDetector:
             "occlusion_cell_states": [cell_state.value for cell_state in cell_states],
             "occlusion_agreement_fraction": round(agreement_fraction, 6),
         }
+        if landmark_distances is not None:
+            evidence["landmark_distances"] = dict(sorted(landmark_distances.items()))
         return Observation(
             kind=observation_kind_for_state(state),
             frame=frame.ref,
@@ -654,11 +706,14 @@ class ProfiledResourceDetector:
         scene_confidence: float,
         region_is_valid: bool,
         anchor_confidences: dict[str, float] | None = None,
+        landmark_distances: dict[str, float] | None = None,
     ) -> Observation:
         evidence: dict[str, object] = {
+            "detector_id": self._metadata.detector_id,
             "label": self._profile.ore_label,
             "location_id": self._profile.location_id,
             "profile_id": self._profile.profile_id,
+            "profile_schema_version": self._profile.schema_version,
             "resource_id": candidate.resource_id,
             "state": ResourceVisualState.UNCERTAIN.value,
             "scene_confidence": round(scene_confidence, 6),
@@ -668,6 +723,8 @@ class ProfiledResourceDetector:
             evidence["region"] = candidate.region
         if anchor_confidences is not None:
             evidence["anchor_confidences"] = dict(sorted(anchor_confidences.items()))
+        if landmark_distances is not None:
+            evidence["landmark_distances"] = dict(sorted(landmark_distances.items()))
         return Observation(
             kind=observation_kind_for_state(ResourceVisualState.UNCERTAIN),
             frame=frame.ref,
@@ -678,12 +735,7 @@ class ProfiledResourceDetector:
 
 
 def resource_state_from_observation(observation: Observation) -> ResourceState:
-    """Convert one validated resource observation to the shared contract.
-
-    Controller code receives ``ResourceState`` and never parses detector-private
-    dictionaries.  Interaction regions are exposed only for visually available
-    targets; depleted and uncertain targets are deliberately not clickable.
-    """
+    """Convert one validated resource observation to the shared contract."""
 
     if not isinstance(observation, Observation):
         raise TypeError("observation must be Observation")
@@ -723,8 +775,6 @@ def resource_state_from_observation(observation: Observation) -> ResourceState:
 def resource_states_from_observations(
     observations: tuple[Observation, ...] | list[Observation],
 ) -> dict[str, ResourceState]:
-    """Convert resource observations, rejecting duplicate resource identities."""
-
     result: dict[str, ResourceState] = {}
     for observation in observations:
         state = resource_state_from_observation(observation)
@@ -747,22 +797,24 @@ def _evidence_region(value: object) -> tuple[int, int, int, int] | None:
     return typed_region
 
 
-
 def measure_region_mean_rgb(
     frame: Frame,
     region: tuple[int, int, int, int],
     *,
     sample_step: int = 1,
 ) -> tuple[float, float, float]:
-    """Public deterministic colour measurement used by profile tooling."""
-
     if not _is_integer(sample_step) or sample_step <= 0:
         raise ValueError("sample_step must be a positive integer")
     return _mean_rgb(frame, region, sample_step=sample_step)
 
 
 def load_resource_detector_profile(path: Path) -> ResourceDetectorProfile:
-    """Load a strict, versioned detector profile from JSON."""
+    """Load a strict schema-v2 or schema-v3 resource detector profile.
+
+    Schema v2 is kept as a real compatibility path rather than being inferred
+    from missing v3 fields. Schema v3 requires the explicit landmark fields and
+    frozen per-landmark ``zone`` identity.
+    """
 
     path = Path(path)
     try:
@@ -771,7 +823,9 @@ def load_resource_detector_profile(path: Path) -> ResourceDetectorProfile:
         raise ValueError(f"resource profile cannot be read: {path}: {exc}") from exc
     if not isinstance(raw, dict):
         raise ValueError("resource profile root must be an object")
-    expected_keys = {
+
+    schema_version = raw.get("schema_version")
+    common_keys = {
         "schema_version",
         "profile_id",
         "location_id",
@@ -783,12 +837,19 @@ def load_resource_detector_profile(path: Path) -> ResourceDetectorProfile:
         "anchors",
         "candidates",
     }
+    if schema_version == _LEGACY_RESOURCE_PROFILE_SCHEMA_VERSION:
+        expected_keys = common_keys
+    elif schema_version == RESOURCE_PROFILE_SCHEMA_VERSION:
+        expected_keys = common_keys | {
+            "scene_landmarks",
+            "minimum_landmark_quorum",
+            "minimum_landmark_zones",
+        }
+    else:
+        raise ValueError(f"unsupported resource profile schema version {schema_version}")
     if set(raw) != expected_keys:
         raise ValueError("resource profile has missing or unknown root fields")
-    if raw["schema_version"] != RESOURCE_PROFILE_SCHEMA_VERSION:
-        raise ValueError(
-            f"unsupported resource profile schema version {raw['schema_version']}"
-        )
+
     frame_raw = raw["frame"]
     if not isinstance(frame_raw, dict) or set(frame_raw) != {
         "width",
@@ -800,9 +861,22 @@ def load_resource_detector_profile(path: Path) -> ResourceDetectorProfile:
     candidates_raw = raw["candidates"]
     if not isinstance(anchors_raw, list) or not isinstance(candidates_raw, list):
         raise ValueError("resource profile anchors and candidates must be arrays")
+
     try:
         anchors = tuple(_scene_anchor_from_json(item) for item in anchors_raw)
         candidates = tuple(_candidate_from_json(item) for item in candidates_raw)
+        if schema_version == RESOURCE_PROFILE_SCHEMA_VERSION:
+            landmarks_raw = raw["scene_landmarks"]
+            if not isinstance(landmarks_raw, list):
+                raise ValueError("resource profile scene_landmarks must be an array")
+            scene_landmarks = tuple(_landmark_from_json(item) for item in landmarks_raw)
+            minimum_landmark_quorum = raw["minimum_landmark_quorum"]
+            minimum_landmark_zones = raw["minimum_landmark_zones"]
+        else:
+            scene_landmarks = ()
+            minimum_landmark_quorum = 0
+            minimum_landmark_zones = 0
+
         return ResourceDetectorProfile(
             profile_id=raw["profile_id"],
             location_id=raw["location_id"],
@@ -815,13 +889,17 @@ def load_resource_detector_profile(path: Path) -> ResourceDetectorProfile:
             minimum_scene_confidence=raw["minimum_scene_confidence"],
             minimum_anchor_confidence=raw["minimum_anchor_confidence"],
             sample_step=raw["sample_step"],
+            scene_landmarks=scene_landmarks,
+            minimum_landmark_quorum=minimum_landmark_quorum,
+            minimum_landmark_zones=minimum_landmark_zones,
+            schema_version=schema_version,
         )
     except (TypeError, ValueError) as exc:
         raise ValueError(f"invalid resource profile: {exc}") from exc
 
 
 def save_resource_detector_profile(profile: ResourceDetectorProfile, path: Path) -> None:
-    """Atomically write a versioned detector profile."""
+    """Atomically write a current schema-v3 detector profile."""
 
     if not isinstance(profile, ResourceDetectorProfile):
         raise TypeError("profile must be ResourceDetectorProfile")
@@ -838,6 +916,19 @@ def save_resource_detector_profile(profile: ResourceDetectorProfile, path: Path)
         "minimum_scene_confidence": profile.minimum_scene_confidence,
         "minimum_anchor_confidence": profile.minimum_anchor_confidence,
         "sample_step": profile.sample_step,
+        "minimum_landmark_quorum": profile.minimum_landmark_quorum,
+        "minimum_landmark_zones": profile.minimum_landmark_zones,
+        "scene_landmarks": [
+            {
+                "landmark_id": landmark.landmark_id,
+                "region": list(landmark.region),
+                "reference_descriptor": list(landmark.reference_descriptor),
+                "maximum_distance": landmark.maximum_distance,
+                "grid": landmark.grid,
+                "zone": landmark.macro_zone.value,
+            }
+            for landmark in profile.scene_landmarks
+        ],
         "anchors": [
             {
                 "anchor_id": anchor.anchor_id,
@@ -851,12 +942,8 @@ def save_resource_detector_profile(profile: ResourceDetectorProfile, path: Path)
             {
                 "resource_id": candidate.resource_id,
                 "region": list(candidate.region),
-                "available_signature": _signature_to_json(
-                    candidate.available_signature
-                ),
-                "depleted_signature": _signature_to_json(
-                    candidate.depleted_signature
-                ),
+                "available_signature": _signature_to_json(candidate.available_signature),
+                "depleted_signature": _signature_to_json(candidate.depleted_signature),
                 "minimum_similarity": candidate.minimum_similarity,
                 "minimum_margin": candidate.minimum_margin,
                 "occlusion_grid_columns": candidate.occlusion_grid_columns,
@@ -869,9 +956,7 @@ def save_resource_detector_profile(profile: ResourceDetectorProfile, path: Path)
     encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", dir=path.parent
-    )
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary_path = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "wb") as output:
@@ -924,6 +1009,33 @@ def _scene_anchor_from_json(value: object) -> SceneAnchorProfile:
     )
 
 
+def _landmark_from_json(value: object) -> SceneLandmarkProfile:
+    if not isinstance(value, dict) or set(value) != {
+        "landmark_id",
+        "region",
+        "reference_descriptor",
+        "maximum_distance",
+        "grid",
+        "zone",
+    }:
+        raise ValueError("scene landmark has invalid fields")
+    descriptor = value["reference_descriptor"]
+    if not isinstance(descriptor, list):
+        raise ValueError("scene landmark reference_descriptor must be an array")
+    try:
+        macro_zone = MacroZone(value["zone"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("scene landmark zone must be a valid macro-zone value") from exc
+    return SceneLandmarkProfile(
+        landmark_id=value["landmark_id"],
+        region=_region_from_json(value["region"]),
+        reference_descriptor=tuple(descriptor),
+        maximum_distance=value["maximum_distance"],
+        grid=value["grid"],
+        macro_zone=macro_zone,
+    )
+
+
 def _candidate_from_json(value: object) -> RockCandidateProfile:
     if not isinstance(value, dict) or set(value) != {
         "resource_id",
@@ -948,6 +1060,7 @@ def _candidate_from_json(value: object) -> RockCandidateProfile:
         occlusion_grid_rows=value["occlusion_grid_rows"],
         minimum_occlusion_agreement=value["minimum_occlusion_agreement"],
     )
+
 
 def _mean_rgb(
     frame: Frame,
