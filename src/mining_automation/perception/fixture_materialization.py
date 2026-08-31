@@ -7,7 +7,7 @@ import hashlib
 from pathlib import Path
 
 from .errors import CorruptFixtureError, MissingFixtureError
-from .replay import load_fixture_manifest
+from .replay import _load_fixture_manifest_snapshot
 
 __all__ = ["materialize_gzip_replay_dataset"]
 
@@ -37,7 +37,11 @@ def materialize_gzip_replay_dataset(
 
     source_manifest = Path(source_manifest)
     destination_root = Path(destination_root)
-    manifest = load_fixture_manifest(source_manifest)
+    # Read and parse the manifest once. The same immutable byte snapshot is
+    # installed after its cases and reviewed payload hashes succeed, so a
+    # concurrent source edit cannot rebind the destination manifest to content
+    # that this run never verified.
+    manifest, manifest_bytes = _load_fixture_manifest_snapshot(source_manifest)
     source_root = source_manifest.parent.resolve()
     destination_root.mkdir(parents=True, exist_ok=True)
     destination_root_resolved = destination_root.resolve()
@@ -133,7 +137,6 @@ def materialize_gzip_replay_dataset(
             raise CorruptFixtureError(
                 f"materialized manifest already exists: {destination_manifest}"
             )
-        manifest_bytes = source_manifest.read_bytes()
         try:
             with destination_manifest.open("xb") as output:
                 output.write(manifest_bytes)

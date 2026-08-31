@@ -567,18 +567,17 @@ def _parse_manifest(value: object) -> FixtureManifest:
     )
 
 
-def load_fixture_manifest(path: str | Path) -> FixtureManifest:
-    """Parse and validate one schema-v1 manifest without loading payloads."""
+def _parse_fixture_manifest_bytes(
+    manifest_bytes: bytes,
+    *,
+    manifest_path: Path,
+) -> FixtureManifest:
+    """Parse the exact bytes read for one manifest snapshot."""
 
-    manifest_path = Path(path)
     try:
-        manifest_text = manifest_path.read_text(encoding="utf-8")
+        manifest_text = manifest_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ManifestError(f"manifest is not valid UTF-8: {manifest_path}: {exc}") from exc
-    except FileNotFoundError as exc:
-        raise ManifestError(f"manifest does not exist: {manifest_path}") from exc
-    except OSError as exc:
-        raise ManifestError(f"manifest cannot be read: {manifest_path}: {exc}") from exc
     try:
         raw: object = json.loads(
             manifest_text,
@@ -588,6 +587,34 @@ def load_fixture_manifest(path: str | Path) -> FixtureManifest:
     except (json.JSONDecodeError, ValueError) as exc:
         raise ManifestError(f"manifest is not valid strict JSON: {exc}") from exc
     return _parse_manifest(raw)
+
+
+def _load_fixture_manifest_snapshot(
+    path: str | Path,
+) -> tuple[FixtureManifest, bytes]:
+    """Read, parse, and retain exactly one immutable manifest byte snapshot."""
+
+    manifest_path = Path(path)
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+    except FileNotFoundError as exc:
+        raise ManifestError(f"manifest does not exist: {manifest_path}") from exc
+    except OSError as exc:
+        raise ManifestError(f"manifest cannot be read: {manifest_path}: {exc}") from exc
+    return (
+        _parse_fixture_manifest_bytes(
+            manifest_bytes,
+            manifest_path=manifest_path,
+        ),
+        manifest_bytes,
+    )
+
+
+def load_fixture_manifest(path: str | Path) -> FixtureManifest:
+    """Parse and validate one schema-v1 manifest without loading payloads."""
+
+    manifest, _manifest_bytes = _load_fixture_manifest_snapshot(path)
+    return manifest
 
 
 def _resolve_payload_path(manifest_path: Path, fixture: FrameFixture) -> Path:

@@ -13,6 +13,7 @@ from mining_automation.perception import (
     load_replay_dataset,
     materialize_gzip_replay_dataset,
 )
+from mining_automation.perception import fixture_materialization as materialization
 
 
 def _write_source(
@@ -79,6 +80,41 @@ def test_materializes_exact_bytes_for_ordinary_replay_loader(tmp_path: Path) -> 
 
     assert (manifest.parent / "frames" / "case.raw").read_bytes() == payload
     assert dataset.samples[0].frame.payload == payload
+
+
+def test_source_manifest_edit_during_materialization_cannot_rebind_destination(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_manifest = _write_source(tmp_path / "source")
+    verified_snapshot = source_manifest.read_bytes()
+    changed = json.loads(verified_snapshot.decode("utf-8"))
+    changed["dataset_id"] = "unverified-concurrent-edit"
+    changed["cases"][0]["frame"]["path"] = "frames/unverified.raw"
+    changed_bytes = json.dumps(changed).encode("utf-8")
+
+    real_gzip_open = gzip.open
+    changed_source = False
+
+    def open_after_source_edit(*args: object, **kwargs: object):
+        nonlocal changed_source
+        if not changed_source:
+            source_manifest.write_bytes(changed_bytes)
+            changed_source = True
+        return real_gzip_open(*args, **kwargs)
+
+    monkeypatch.setattr(materialization.gzip, "open", open_after_source_edit)
+    destination_manifest = materialize_gzip_replay_dataset(
+        source_manifest,
+        tmp_path / "materialized",
+    )
+
+    assert changed_source is True
+    assert source_manifest.read_bytes() == changed_bytes
+    assert destination_manifest.read_bytes() == verified_snapshot
+    dataset = load_replay_dataset(destination_manifest)
+    assert dataset.manifest.dataset_id == "compressed-test"
+    assert dataset.samples[0].case.frame.path == "frames/case.raw"
 
 
 def test_missing_compressed_payload_is_typed_and_leaves_no_manifest(

@@ -47,6 +47,17 @@ resource with its exact packaged frame-local candidate region is actionable;
 depleted and uncertain resources never expose interaction regions. This is a
 typed contract for later controller work, not WorldState or controller activation.
 
+The future live call site must use
+`capture_detect_trust_varrock_east_iron()`, the non-activating source-owned
+assembly boundary. Its only argument is an already-open `CaptureSource`; it
+captures one owned frame, constructs the packaged detector internally, runs the
+guarded detector contract, and supplies that same frame's exact `FrameRef` to
+the production trust boundary. It accepts no observation ensemble, detector,
+frame token, identity, or policy override from its caller and returns only the
+fail-closed trusted result. Capture/detector failures raise their existing typed
+errors rather than manufacturing an empty success. This assembly still does not
+create `WorldState`, select a target, authorize an interaction, or execute input.
+
 ## Why the detector is profile-driven
 
 The first supported envelope is intentionally narrow and testable. A versioned profile declares:

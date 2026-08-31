@@ -123,6 +123,18 @@ unsupported versions raise typed replay errors. Exact raw bytes keep all current
 lossless without adding Pillow/OpenCV or a platform dependency. Encoded PNG/JPEG support would
 require a later schema version that defines decoding and color semantics.
 
+### Gzip-at-rest materialization integrity
+
+Reviewed large raw fixtures may be committed as deterministic gzip files and
+losslessly materialized for replay. Materialization reads the source manifest
+exactly once, parses that immutable byte snapshot, verifies every decompressed
+payload's exact size and reviewed `provenance.sanitized_sha256`, and installs
+the same manifest bytes only after every case succeeds. A concurrent edit to
+the source manifest therefore cannot replace the destination manifest with
+different cases or hashes that the materialization run never verified. Existing
+path containment, exclusive creation, duplicate-path rejection, and atomic
+cleanup remain part of the same fail-closed boundary.
+
 ### Deterministic replay identity
 
 Manifest order is canonical because future transition fixtures may depend on sequence. Each load
