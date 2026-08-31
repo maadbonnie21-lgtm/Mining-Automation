@@ -397,7 +397,7 @@ _BRIDGE_SMALLEST_ADDITIONAL_EVIDENCE = (
     "existing family endpoints and at least one common frozen reviewed "
     "supported anchor"
 )
-_BRIDGE_LIVE_INPUT_ENABLED: Final[bool] = True
+_BRIDGE_LIVE_INPUT_ENABLED: Final[bool] = False
 _BRIDGE_NORTH_MAXIMUM_AGE_SECONDS = 30.0
 _EXPECTED_DETECTOR_ID = "profiled-resource:varrock-east-iron-v1"
 _EXPECTED_DETECTOR_VERSION = "2.1.0"

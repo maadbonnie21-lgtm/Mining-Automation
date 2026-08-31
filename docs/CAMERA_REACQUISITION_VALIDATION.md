@@ -650,7 +650,7 @@ identifies one smallest additional evidence edge; it does not authorize a live
 probe. Any future live use of R1 requires a separate architecture review and
 must still end in a fresh pass of the unchanged production detector.
 
-### R2 bridge-capture design (source enabled; execution separately authorized)
+### R2 bridge-capture design (retired; source disabled)
 
 R1's exact result is
 `missing graph link: one receipt-proven, readiness-safe camera transition from
@@ -744,12 +744,12 @@ still the canonical evidence. The machine planner disposition is
 The development-only R2 bridge is now one full-campaign design rather
 than a two-command compass-report handoff. The fixed Right capture component
 remains version `1.1.0`; its source-owned campaign authorization is R2.3 version
-`2.3.0`. The source-literal physical gate is the compile-time value `True` on
-the reviewed enable-only head. That source change does not itself authorize an
-invocation; live execution still requires a separate exact-head lead comment.
+`2.3.0`. The source-literal physical gate is the compile-time value `False` on
+the inert closure head. The sole reviewed campaign was consumed historically;
+this protocol version cannot authorize another invocation on a fresh host or
+checkout.
 
-After that exact head is separately authorized for live execution, the only
-live invocation is one `bridge-capture-r2` command:
+The historical one-shot invocation shape is preserved for evidence review:
 
 ```powershell
 .\.venv\Scripts\python.exe tools\validate_varrock_east_camera.py bridge-capture-r2 `
@@ -918,13 +918,13 @@ exit `1` records a truthful insufficient-evidence/STOP result; and exit `2`
 means authentication, setup, provenance, or publication failed. Every outcome
 sends zero input and can never authorize a second sample.
 
-The live capture command has a source-literal, caller-inaccessible `True` gate
-only on the reviewed enable-only head. No planner, generic north report,
+The retired live capture command has a source-literal, caller-inaccessible
+`False` gate on the inert closure head. No planner, generic north report,
 capture report, verifier result, CLI flag, environment variable, output path,
-or caller-selected value can toggle that gate, create a second campaign, or
-bypass the host-global reservation. Executing the one source-enabled sample
-still requires a separate exact-head lead authorization. This section does not
-authorize execution and makes no reacquisition-success claim.
+or caller-selected value can toggle that gate, create another campaign, or
+bypass the host-global reservation. Historical source-enabled evidence remains
+preserved; this section does not authorize execution and makes no
+reacquisition-success claim.
 
 ## Repeated trial protocol
 

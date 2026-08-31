@@ -1242,6 +1242,72 @@ def test_alternate_well_formed_analysis_digest_is_evidence_not_authority(
     assert _Lease.events == []
 
 
+def test_disabled_source_gate_stops_fresh_host_before_physical_stack(
+    tool: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "private"
+    _Backend.constructed = 0
+    _Source.last = None
+    _Control.last = None
+    _Lease.events = []
+    monkeypatch.setattr(tool, "_resolve_private_output_root", lambda _path: output)
+    monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
+    monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
+    monkeypatch.setattr(tool, "CaptureSource", _Source)
+    monkeypatch.setattr(tool, "WindowsCameraControl", _Control)
+    monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    monkeypatch.setattr(
+        tool,
+        "camera_bridge_authorization_consumed",
+        lambda _root: pytest.fail(
+            "disabled source gate must stop before host reservation inspection"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "_load_bridge_analysis_evidence",
+        lambda *_args, **_kwargs: pytest.fail(
+            "disabled source gate must stop before analysis loading"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "reserve_camera_bridge_authorization",
+        lambda *_args, **_kwargs: pytest.fail(
+            "disabled source gate must stop before authorization reservation"
+        ),
+    )
+    monkeypatch.setattr(
+        tool,
+        "run_fixed_camera_bridge_capture",
+        lambda *_args, **_kwargs: pytest.fail(
+            "disabled source gate must stop before physical input"
+        ),
+    )
+
+    result = tool.main(
+        [
+            "bridge-capture-r2",
+            "--expected-head",
+            "a" * 40,
+            "--output",
+            str(output),
+            "--case-prefix",
+            "fresh-host-source-disabled",
+            *_review_args(),
+        ]
+    )
+
+    assert result == 2
+    assert tool._BRIDGE_LIVE_INPUT_ENABLED is False
+    assert _Backend.constructed == 0
+    assert _Source.last is None
+    assert _Control.last is None
+    assert _Lease.events == []
+
+
 def test_legacy_north_report_is_rejected_without_reading_it(
     tool: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
@@ -1832,6 +1898,7 @@ def test_enabled_bridge_launcher_honors_consumed_host_reservation(
     monkeypatch.setattr(tool, "_git_state", lambda: ("a" * 40, True))
     monkeypatch.setattr(tool, "WindowsCaptureBackend", _Backend)
     monkeypatch.setattr(tool, "WindowsCameraInputLease", _Lease)
+    monkeypatch.setattr(tool, "_BRIDGE_LIVE_INPUT_ENABLED", True)
     monkeypatch.setattr(
         tool,
         "_load_bridge_analysis_evidence",
