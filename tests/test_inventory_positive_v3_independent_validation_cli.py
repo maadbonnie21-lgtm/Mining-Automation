@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
+import sys
 from collections.abc import Iterator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
@@ -23,7 +25,33 @@ from mining_automation.perception.inventory.positive_v3_independent_validation i
 )
 
 _ROOT = Path(__file__).resolve().parent.parent
-_HEAD = "a" * 40
+_VALIDATION_LAUNCHER = _ROOT / "tools" / "inventory_v3_independent_validation.py"
+_HEAD = subprocess.run(
+    ("git", "-C", str(_ROOT), "rev-parse", "HEAD"),
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.strip()
+
+
+def _synthetic_protocol_lock() -> validation._ValidationProtocolLockBinding:
+    return validation._ValidationProtocolLockBinding(
+        lock_git_commit_sha="b" * 40,
+        lock_git_committed_at_utc="2098-12-31T23:59:00Z",
+        lock_git_blob="c" * 40,
+        lock_sha256="d" * 64,
+        protocol_source_commit_sha="a" * 40,
+        locked_git_blobs=(),
+        approved_passive_capture=validation._ApprovedPassiveCaptureBinding(
+            build_sha="a" * 40,
+            capture_configuration_id=(
+                "inventory-positive-v3-independent-passive-natural-fill-v1"
+            ),
+            source_git_blobs=(),
+        ),
+        evaluator_head_sha=_HEAD,
+        repository_root=_ROOT,
+    )
 
 
 class _StallingWriter:
@@ -71,15 +99,100 @@ class _CloseErrorAfterRelease:
         return self._handle.closed
 
 
+def _committed_launcher_repository(tmp_path: Path) -> Path:
+    root = tmp_path / "launcher-repository"
+    ignored = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo")
+    for directory in ("src", "tools", "validation"):
+        shutil.copytree(_ROOT / directory, root / directory, ignore=ignored)
+    shutil.copy2(_ROOT / ".gitattributes", root / ".gitattributes")
+    shutil.copy2(_ROOT / ".gitignore", root / ".gitignore")
+    for arguments in (
+        ("init", "--quiet"),
+        ("config", "core.autocrlf", "false"),
+        ("config", "core.longpaths", "true"),
+        ("config", "user.name", "Launcher Test"),
+        ("config", "user.email", "launcher-test@example.invalid"),
+        ("add", "."),
+        ("commit", "--quiet", "-m", "freeze launcher source"),
+    ):
+        subprocess.run(
+            ("git", "-C", str(root), *arguments),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    return root
+
+
 @pytest.fixture(autouse=True)
 def _allow_cli_unit_tests_to_use_an_uncommitted_evaluator(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(cli, "_isolated_mode_enabled", lambda: True)
     monkeypatch.setattr(
         validation,
         "_verify_repository_state",
         lambda root, _expected_head: root.resolve(strict=True),
     )
+    monkeypatch.setattr(
+        validation,
+        "_current_validation_protocol_lock",
+        lambda _root: _synthetic_protocol_lock(),
+    )
+
+
+@pytest.mark.parametrize(
+    "python_flags",
+    [(), ("-I",), ("-S",)],
+    ids=("neither", "missing-no-site", "missing-isolation"),
+)
+def test_official_validation_launcher_rejects_missing_isolation_guards(
+    python_flags: tuple[str, ...],
+) -> None:
+    rejected = subprocess.run(
+        (sys.executable, *python_flags, str(_VALIDATION_LAUNCHER), "--help"),
+        cwd=_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rejected.returncode == 2
+    assert "requires the locked Python -I -S launcher" in rejected.stderr
+
+
+def test_official_validation_launcher_has_prepare_and_evaluate_entrypoints(
+    tmp_path: Path,
+) -> None:
+    repository = _committed_launcher_repository(tmp_path)
+    launcher = repository / "tools" / _VALIDATION_LAUNCHER.name
+    isolated = subprocess.run(
+        (sys.executable, "-I", "-S", str(launcher), "--help"),
+        cwd=repository,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert isolated.returncode == 0
+    assert "prepare" in isolated.stdout
+    assert "evaluate" in isolated.stdout
+
+
+def test_validation_cli_rejects_isolated_no_site_without_source_cache() -> None:
+    source_root = json.dumps(str(_ROOT / "src"))
+    code = (
+        f"import sys; sys.path.insert(0, {source_root}); "
+        "from mining_automation.perception.inventory."
+        "positive_v3_independent_validation_cli import main; "
+        "raise SystemExit(main(['--help']))"
+    )
+    rejected = subprocess.run(
+        (sys.executable, "-I", "-S", "-c", code),
+        cwd=_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rejected.returncode == 2
 
 
 def test_prepare_cli_writes_canonical_nonactivating_readiness_package(
@@ -108,12 +221,16 @@ def test_prepare_cli_writes_canonical_nonactivating_readiness_package(
         "campaign-manifest.template.json.sha256",
         "inventory-positive-v3-validation-readiness-report.json",
         "inventory-positive-v3-validation-readiness-report.json.sha256",
+        "passive-capture-command.template.json",
+        "passive-capture-command.template.json.sha256",
         "preregistration.json",
         "preregistration.json.sha256",
         "reviewer-truth.template.json",
         "reviewer-truth.template.json.sha256",
         "source-capture-report.template.json",
         "source-capture-report.template.json.sha256",
+        "source-completion-seal.template.json",
+        "source-completion-seal.template.json.sha256",
         "source-session-report.template.json",
         "source-session-report.template.json.sha256",
         "validation-package.template.json",
@@ -145,6 +262,22 @@ def test_prepare_cli_writes_canonical_nonactivating_readiness_package(
     assert report["campaign_execution_authorized"] is False
     assert report["activation_allowed"] is False
     assert report["independent_validation_case_count"] == 0
+    command_template = json.loads(
+        (output / "passive-capture-command.template.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert command_template["command"].startswith(
+        "python -I -S tools/capture_inventory_v3_independent.py "
+    )
+    campaign_template = json.loads(
+        (output / "campaign-manifest.template.json").read_text(encoding="utf-8")
+    )
+    assert {
+        "capture_environment.python_isolated_mode",
+        "capture_environment.python_isolated_source_cache",
+        "capture_environment.python_no_site_mode",
+    } <= set(campaign_template["required_provenance"])
     stdout = capsys.readouterr().out
     assert "Inventory V3 independent-validation readiness: PASS" in stdout
     assert "Live validation authorized: false" in stdout

@@ -13,6 +13,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
+if __name__ == "__main__" and not (
+    sys.flags.isolated and sys.flags.no_site and sys.pycache_prefix is not None
+):
+    print(
+        "Inventory V3 validation requires the locked Python -I -S launcher "
+        "with an isolated source cache.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
 from .positive_v3_independent_validation import (
     INVENTORY_POSITIVE_V3_FROZEN_HEAD_SHA,
     InventoryPositiveV3IndependentValidationError,
@@ -343,7 +353,9 @@ def _create_output_directory(output: Path) -> _OwnedOutputDirectory:
     return _OwnedOutputDirectory.from_path(output)
 
 
-def _prepare_templates() -> Mapping[str, Mapping[str, object]]:
+def _prepare_templates(
+    protocol_lock: Mapping[str, object],
+) -> Mapping[str, Mapping[str, object]]:
     return {
         "approval-registry-entry.template.json": {
             "note": (
@@ -361,6 +373,7 @@ def _prepare_templates() -> Mapping[str, Mapping[str, object]]:
                 "package_sha256",
                 "reviewer",
                 "reviewer_truth_sha256",
+                "source_completion_seal_sha256",
                 "source_session_report_sha256",
             ],
             "schema": (
@@ -385,9 +398,20 @@ def _prepare_templates() -> Mapping[str, Mapping[str, object]]:
             "required_provenance": [
                 "finalized_at_utc",
                 "operator",
+                "capture_environment.protocol_lock_git_commit_sha",
+                "capture_environment.capture_execution_head_sha",
+                "capture_environment.live_authorization_id",
+                "capture_environment.live_authorization_git_commit_sha",
+                "capture_environment.live_authorization_git_blob",
+                "capture_environment.host_reservation_sha256",
+                "capture_environment.python_isolated_mode",
+                "capture_environment.python_isolated_source_cache",
+                "capture_environment.python_no_site_mode",
+                "source_completion_seal",
                 "source_session_report",
             ],
             "schema": "inventory-positive-v3-independent-validation-dataset-template-v1",
+            "target_schema": "inventory-positive-v3-independent-validation-dataset-v2",
             "template_only": True,
         },
         "source-capture-report.template.json": {
@@ -396,9 +420,13 @@ def _prepare_templates() -> Mapping[str, Mapping[str, object]]:
                 "report that owns the exact inventory-region artifact."
             ),
             "required_bindings": [
+                "capture_policy",
                 "capture_environment",
                 "capture_id",
                 "captured_at_utc",
+                "full_frame.path",
+                "full_frame.sha256",
+                "full_frame.size_bytes",
                 "inventory_region.path",
                 "inventory_region.region",
                 "inventory_region.sha256",
@@ -406,6 +434,24 @@ def _prepare_templates() -> Mapping[str, Mapping[str, object]]:
                 "session_id",
             ],
             "schema": "inventory-positive-v3-independent-source-capture-template-v1",
+            "target_schema": "inventory-positive-v3-independent-source-capture-v2",
+            "template_only": True,
+        },
+        "passive-capture-command.template.json": {
+            "approved_binding": dict(protocol_lock),
+            "command": (
+                "python -I -S tools/capture_inventory_v3_independent.py "
+                "--operator <identity> --runelite-build <build> "
+                "--client-mode <mode> --theme <theme> --renderer <renderer>"
+            ),
+            "live_validation_authorized": False,
+            "note": (
+                "Template only. Do not execute until a later source-owned live "
+                "authorization registry commit is lead-reviewed. The current empty "
+                "registry blocks before output/backend. The command has no detector, "
+                "build, configuration, title, stage, retry, or input override."
+            ),
+            "schema": "inventory-positive-v3-passive-capture-command-template-v1",
             "template_only": True,
         },
         "source-session-report.template.json": {
@@ -419,10 +465,39 @@ def _prepare_templates() -> Mapping[str, Mapping[str, object]]:
                 "captures",
                 "completed_at_utc",
                 "operator",
+                "owned_attempts",
                 "session_id",
                 "started_at_utc",
             ],
             "schema": "inventory-positive-v3-independent-source-session-template-v1",
+            "target_schema": "inventory-positive-v3-independent-source-session-v2",
+            "template_only": True,
+        },
+        "source-completion-seal.template.json": {
+            "note": (
+                "Template only. The source-owned capture process creates this "
+                "only after all seven owned attempts are accepted and final "
+                "repository/authorization checks still pass."
+            ),
+            "required_bindings": [
+                "authorization_id",
+                "campaign_id",
+                "capture_count",
+                "capture_execution_head_sha",
+                "completed_at_utc",
+                "host_reservation_sha256",
+                "live_authorization_git_commit_sha",
+                "protocol_lock_git_commit_sha",
+                "session_id",
+                "source_session_report_sha256",
+                "status",
+            ],
+            "schema": (
+                "inventory-positive-v3-independent-source-completion-seal-template-v1"
+            ),
+            "target_schema": (
+                "inventory-positive-v3-independent-source-completion-seal-v1"
+            ),
             "template_only": True,
         },
         "reviewer-truth.template.json": {
@@ -432,6 +507,7 @@ def _prepare_templates() -> Mapping[str, Mapping[str, object]]:
                 "from operator stage labels."
             ),
             "schema": "inventory-positive-v3-independent-validation-review-template-v1",
+            "target_schema": "inventory-positive-v3-independent-validation-review-v1",
             "template_only": True,
             "truth_source": "independent-human-review",
         },
@@ -442,6 +518,7 @@ def _prepare_templates() -> Mapping[str, Mapping[str, object]]:
                 "separate source-owned registry entry is reviewed and committed."
             ),
             "schema": "inventory-positive-v3-independent-validation-package-template-v1",
+            "target_schema": "inventory-positive-v3-independent-validation-package-v2",
             "template_only": True,
         },
     }
@@ -453,6 +530,11 @@ def _prepare(output: Path, expected_head: str) -> int:
         root,
         evaluator_git_head_sha=head,
     )
+    protocol_lock = report.get("validation_protocol_lock")
+    if not isinstance(protocol_lock, Mapping):
+        raise InventoryPositiveV3IndependentValidationError(
+            "readiness report omitted its verified protocol-lock binding"
+        )
     _verify_clean_head(expected_head)
     output.parent.mkdir(parents=True, exist_ok=True)
     owned_output = _create_output_directory(output)
@@ -464,7 +546,7 @@ def _prepare(output: Path, expected_head: str) -> int:
             _canonical_json(independent_validation_preregistration()),
             owned_paths,
         )
-        for filename, template in _prepare_templates().items():
+        for filename, template in _prepare_templates(protocol_lock).items():
             _write_text_and_sidecar(
                 output,
                 filename,
@@ -532,6 +614,12 @@ def _evaluate(dataset: Path, output: Path, expected_head: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if not _isolated_mode_enabled():
+        print(
+            "Inventory V3 validation requires Python isolated mode (-I).",
+            file=sys.stderr,
+        )
+        return 2
     args = _parser().parse_args(argv)
     try:
         if args.command == "prepare":
@@ -548,6 +636,14 @@ def main(argv: list[str] | None = None) -> int:
     ) as exc:
         print(f"inventory V3 independent-validation gate failed: {exc}", file=sys.stderr)
         return 2
+
+
+def _isolated_mode_enabled() -> bool:
+    return bool(
+        sys.flags.isolated
+        and sys.flags.no_site
+        and sys.pycache_prefix is not None
+    )
 
 
 def _require_git_sha(value: str, label: str) -> None:

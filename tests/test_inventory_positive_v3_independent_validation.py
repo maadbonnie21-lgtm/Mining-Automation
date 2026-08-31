@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -20,13 +21,53 @@ from mining_automation.perception.inventory.positive_v3_independent_validation i
     evaluate_frozen_v3_independent_validation,
     frozen_v3_model_binding,
     independent_validation_preregistration,
-    load_independent_validation_dataset,
 )
 
 _ROOT = Path(__file__).resolve().parent.parent
-_EVALUATOR_HEAD = "a" * 40
+_EVALUATOR_HEAD = subprocess.run(
+    ("git", "-C", str(_ROOT), "rev-parse", "HEAD"),
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.strip()
 _SESSION_ID = "20990101T000000.000000Z-synthetic-contract-test-session"
 _REGION_BYTES = 158 * 248 * 4
+_FULL_FRAME_BYTES = 1005 * 1078 * 4
+
+
+def _synthetic_protocol_lock() -> validation._ValidationProtocolLockBinding:
+    return validation._ValidationProtocolLockBinding(
+        lock_git_commit_sha="b" * 40,
+        lock_git_committed_at_utc="2098-12-31T23:59:00Z",
+        lock_git_blob="c" * 40,
+        lock_sha256="d" * 64,
+        protocol_source_commit_sha="a" * 40,
+        locked_git_blobs=(),
+        approved_passive_capture=validation._ApprovedPassiveCaptureBinding(
+            build_sha="a" * 40,
+            capture_configuration_id=(
+                "inventory-positive-v3-independent-passive-natural-fill-v1"
+            ),
+            source_git_blobs=(),
+        ),
+        evaluator_head_sha=_EVALUATOR_HEAD,
+        repository_root=_ROOT,
+    )
+
+
+def load_independent_validation_dataset(
+    package_directory: Path,
+    *,
+    expected_preregistration_sha256: str = (
+        INVENTORY_POSITIVE_V3_PREREGISTRATION_SHA256
+    ),
+    protocol_lock: validation._ValidationProtocolLockBinding | None = None,
+) -> validation.IndependentValidationDataset:
+    return validation._load_independent_validation_dataset(
+        package_directory,
+        expected_preregistration_sha256=expected_preregistration_sha256,
+        protocol_lock=protocol_lock or _synthetic_protocol_lock(),
+    )
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -57,6 +98,19 @@ def _write_document(path: Path, value: object) -> tuple[bytes, str]:
 def _synthetic_region(index: int) -> bytes:
     """Return unmistakably synthetic bytes that are never validation evidence."""
     return bytes((offset * 17 + index * 29) % 256 for offset in range(_REGION_BYTES))
+
+
+def _full_frame_from_region(region: bytes) -> bytes:
+    frame = bytearray(_FULL_FRAME_BYTES)
+    source_stride = 158 * 4
+    destination_stride = 1005 * 4
+    for row in range(248):
+        source_start = row * source_stride
+        destination_start = (569 + row) * destination_stride + 567 * 4
+        frame[destination_start : destination_start + source_stride] = region[
+            source_start : source_start + source_stride
+        ]
+    return bytes(frame)
 
 
 def _development_conformance_payloads() -> tuple[bytes, ...]:
@@ -126,6 +180,21 @@ def _allow_synthetic_tests_to_use_an_uncommitted_evaluator(
         "_verify_repository_state",
         lambda root, _expected_head: root.resolve(strict=True),
     )
+    binding = _synthetic_protocol_lock()
+    monkeypatch.setattr(
+        validation,
+        "_current_validation_protocol_lock",
+        lambda _root: binding,
+    )
+    monkeypatch.setattr(
+        validation,
+        "_verify_capture_execution_authorization",
+        lambda *_args, **_kwargs: (
+            "2" * 64,
+            "2098-12-31T23:59:30Z",
+            "2098-12-31T23:59:45Z",
+        ),
+    )
 
 
 def _build_synthetic_contract_package(
@@ -135,11 +204,14 @@ def _build_synthetic_contract_package(
     dataset_id: str | None = None,
     session_id: str = _SESSION_ID,
     first_region_payload: bytes | None = None,
+    first_full_frame_payload: bytes | None = None,
+    first_full_frame_path: str | None = None,
     region_payloads: Sequence[bytes] | None = None,
     source_started_at_utc: str = "2098-12-31T23:59:59Z",
 ) -> Path:
     root = tmp_path / "synthetic-contract-package"
     root.mkdir(parents=True)
+    protocol_lock = validation._current_validation_protocol_lock(_ROOT)
     specifications = (
         ("empty", 0, "inventory-visible"),
         ("early-partial", 1, "inventory-visible"),
@@ -149,9 +221,25 @@ def _build_synthetic_contract_package(
         ("wrong-tab", None, "wrong-tab-visible"),
         ("row-obstruction", None, "inventory-obstructed"),
     )
+    host_reservation = {
+        "authorization_id": "2" * 64,
+        "capture_build_sha": protocol_lock.approved_passive_capture.build_sha,
+        "capture_configuration_id": (
+            protocol_lock.approved_passive_capture.capture_configuration_id
+        ),
+        "live_authorization_git_commit_sha": "f" * 40,
+        "protocol_lock_git_commit_sha": protocol_lock.lock_git_commit_sha,
+        "protocol_lock_sha256": protocol_lock.lock_sha256,
+        "repository": "maadbonnie21-lgtm/Mining-Automation",
+        "schema": "inventory-positive-v3-independent-host-reservation-v1",
+        "status": "reserved-and-irrevocably-consumed",
+    }
     environment: dict[str, object] = {
-        "capture_build_sha": "b" * 40,
-        "capture_configuration_id": "synthetic-contract-test",
+        "capture_build_sha": protocol_lock.approved_passive_capture.build_sha,
+        "capture_configuration_id": (
+            protocol_lock.approved_passive_capture.capture_configuration_id
+        ),
+        "capture_execution_head_sha": "c" * 40,
         "client_mode": "synthetic-test",
         "frame": {
             "height": 1078,
@@ -159,10 +247,21 @@ def _build_synthetic_contract_package(
             "profile_id": "candidate-live-inventory-348867800b28a54e",
             "width": 1005,
         },
+        "host_reservation_sha256": hashlib.sha256(
+            _canonical_bytes(host_reservation)
+        ).hexdigest(),
+        "live_authorization_id": "2" * 64,
+        "live_authorization_git_blob": "1" * 40,
+        "live_authorization_git_commit_sha": "f" * 40,
         "renderer": "synthetic-test",
+        "protocol_lock_git_commit_sha": protocol_lock.lock_git_commit_sha,
+        "python_isolated_mode": True,
+        "python_isolated_source_cache": True,
+        "python_no_site_mode": True,
         "runelite_build": "not-a-live-campaign",
         "theme": "synthetic-test",
         "window_class": "synthetic-test",
+        "window_handle": 3107,
         "windows_dpi": 96,
         "windows_scaling_percent": 100,
         "windows_version": "synthetic-test",
@@ -170,6 +269,7 @@ def _build_synthetic_contract_package(
     campaign_id = validation._content_bound_campaign_id(session_id)
     cases: list[dict[str, object]] = []
     truths: list[dict[str, object]] = []
+    materialized_regions: list[bytes] = []
     for index, (stage, count, visibility) in enumerate(specifications, start=1):
         if region_payloads is not None:
             payload = region_payloads[index - 1]
@@ -185,6 +285,7 @@ def _build_synthetic_contract_package(
         payload_path = root / Path(relative_path)
         payload_path.parent.mkdir(parents=True, exist_ok=True)
         payload_path.write_bytes(payload)
+        materialized_regions.append(payload)
         digest = hashlib.sha256(payload).hexdigest()
         cases.append(
             {
@@ -240,11 +341,15 @@ def _build_synthetic_contract_package(
         "preregistration_sha256": INVENTORY_POSITIVE_V3_PREREGISTRATION_SHA256,
         "prior_campaigns": [],
         "prototype_eligible": False,
-        "schema": "inventory-positive-v3-independent-validation-dataset-v1",
+        "schema": "inventory-positive-v3-independent-validation-dataset-v2",
         "selection_policy": (
             "all-owned-captures-in-source-order-no-drop-no-replacement"
         ),
         "session_id": session_id,
+        "source_completion_seal": {
+            "path": "source/completion-seal.json",
+            "sha256": "0" * 64,
+        },
         "source_session_report": {
             "path": "source/session-report.json",
             "sha256": "0" * 64,
@@ -275,13 +380,14 @@ def _build_synthetic_contract_package(
             "path": "reviewer-truth.json",
             "sha256": "0" * 64,
         },
-        "schema": "inventory-positive-v3-independent-validation-package-v1",
+        "schema": "inventory-positive-v3-independent-validation-package-v2",
         "training_allowed": False,
     }
     if mutate is not None:
         mutate(manifest, review, package)
 
     source_captures: list[dict[str, object]] = []
+    source_owned_attempts: list[dict[str, object]] = []
     raw_cases = manifest["cases"]
     assert isinstance(raw_cases, list)
     source_environment = manifest["capture_environment"]
@@ -297,18 +403,75 @@ def _build_synthetic_contract_package(
         assert isinstance(case_session_id, str)
         assert isinstance(frame_region, dict)
         report_relative = f"source/captures/{position:03d}-capture-report.json"
+        full_frame = (
+            first_full_frame_payload
+            if position == 1 and first_full_frame_payload is not None
+            else _full_frame_from_region(
+                materialized_regions[position - 1]
+            )
+        )
+        full_frame_relative = (
+            first_full_frame_path
+            if position == 1 and first_full_frame_path is not None
+            else f"source/frames/{position:03d}-full-frame.bgra"
+        )
+        full_frame_path = root / Path(full_frame_relative)
+        if ".." not in Path(full_frame_relative).parts:
+            full_frame_path.parent.mkdir(parents=True, exist_ok=True)
+            full_frame_path.write_bytes(full_frame)
+        owned_report_relative = f"source/owned/{position:03d}-owned-frame.json"
+        owned_report = {
+            "capture_id": capture_id,
+            "captured_at_utc": captured_at_utc,
+            "frame": {
+                "frame_id": position,
+                "height": 1078,
+                "path": full_frame_relative,
+                "pixel_format": "bgra8888",
+                "sha256": hashlib.sha256(full_frame).hexdigest(),
+                "size_bytes": len(full_frame),
+                "width": 1005,
+            },
+            "planned_stage_id": raw_case["planned_stage_id"],
+            "schema": "inventory-positive-v3-independent-owned-frame-v1",
+            "sequence_index": position,
+            "session_id": case_session_id,
+            "status": "captured-unreviewed",
+            "window": {
+                "class": "synthetic-test",
+                "handle": 3107,
+                "windows_dpi": 96,
+            },
+        }
+        _, owned_report_sha = _write_document(
+            root / Path(owned_report_relative), owned_report
+        )
         capture_report = {
             "activation_allowed": False,
+            "capture_policy": {
+                "backend_attempts": 1,
+                "detector_executed": False,
+                "input_automation_allowed": False,
+                "pixel_materialization": "fixed-bgra-row-slice-only",
+            },
             "capture_environment": source_environment,
             "capture_id": capture_id,
             "captured_at_utc": captured_at_utc,
+            "full_frame": {
+                "height": 1078,
+                "path": full_frame_relative,
+                "pixel_format": "bgra8888",
+                "sha256": hashlib.sha256(full_frame).hexdigest(),
+                "size_bytes": len(full_frame),
+                "width": 1005,
+            },
             "inventory_region": {
                 "path": frame_region["path"],
                 "region": list(validation.SUPPORTED_REGION),
                 "sha256": frame_region["sha256"],
                 "size_bytes": frame_region["size_bytes"],
             },
-            "schema": "inventory-positive-v3-independent-source-capture-v1",
+            "schema": "inventory-positive-v3-independent-source-capture-v2",
             "session_id": case_session_id,
         }
         _, capture_report_sha = _write_document(
@@ -328,6 +491,25 @@ def _build_synthetic_contract_package(
                     "path": report_relative,
                     "sha256": capture_report_sha,
                 },
+                "planned_stage_id": raw_case["planned_stage_id"],
+                "sequence_index": position,
+            }
+        )
+        source_owned_attempts.append(
+            {
+                "capture_id": capture_id,
+                "full_frame_attempt": {
+                    "path": full_frame_relative,
+                    "sha256": hashlib.sha256(full_frame).hexdigest(),
+                    "size_bytes": len(full_frame),
+                },
+                "owned_frame_report": {
+                    "path": owned_report_relative,
+                    "sha256": owned_report_sha,
+                },
+                "planned_stage_id": raw_case["planned_stage_id"],
+                "sequence_index": position,
+                "status": "owned-frame-finalized",
             }
         )
     source_session = {
@@ -338,7 +520,8 @@ def _build_synthetic_contract_package(
         "captures": source_captures,
         "completed_at_utc": "2099-01-01T00:01:00Z",
         "operator": manifest["operator"],
-        "schema": "inventory-positive-v3-independent-source-session-v1",
+        "owned_attempts": source_owned_attempts,
+        "schema": "inventory-positive-v3-independent-source-session-v2",
         "session_id": manifest["session_id"],
         "started_at_utc": source_started_at_utc,
     }
@@ -348,6 +531,36 @@ def _build_synthetic_contract_package(
     source_session_ref = manifest["source_session_report"]
     assert isinstance(source_session_ref, dict)
     source_session_ref["sha256"] = source_session_sha
+    completion_seal = {
+        "activation_allowed": False,
+        "authorization_id": source_environment["live_authorization_id"],
+        "campaign_id": manifest["campaign_id"],
+        "capture_count": len(source_captures),
+        "capture_execution_head_sha": source_environment[
+            "capture_execution_head_sha"
+        ],
+        "completed_at_utc": source_session["completed_at_utc"],
+        "host_reservation_sha256": source_environment[
+            "host_reservation_sha256"
+        ],
+        "live_authorization_git_commit_sha": source_environment[
+            "live_authorization_git_commit_sha"
+        ],
+        "protocol_lock_git_commit_sha": source_environment[
+            "protocol_lock_git_commit_sha"
+        ],
+        "schema": "inventory-positive-v3-independent-source-completion-seal-v1",
+        "session_id": manifest["session_id"],
+        "source_session_report_sha256": source_session_sha,
+        "status": "complete-not-reviewed",
+    }
+    _, completion_seal_sha = _write_document(
+        root / "source" / "completion-seal.json",
+        completion_seal,
+    )
+    completion_seal_ref = manifest["source_completion_seal"]
+    assert isinstance(completion_seal_ref, dict)
+    completion_seal_ref["sha256"] = completion_seal_sha
     if manifest["dataset_id"] == "pending-content-bound-dataset-id":
         manifest["dataset_id"] = validation._content_bound_dataset_id(manifest)
     review["campaign_id"] = manifest["campaign_id"]
@@ -388,6 +601,9 @@ def _approval_entry_for(
         package_sha256=dataset.package_sha256,
         campaign_manifest_sha256=dataset.campaign_manifest_sha256,
         reviewer_truth_sha256=dataset.reviewer_truth_sha256,
+        source_completion_seal_sha256=(
+            dataset.source_completion_seal_sha256
+        ),
         source_session_report_sha256=dataset.source_session_report_sha256,
         registry_sha256=registry_sha256,
     )
@@ -563,6 +779,117 @@ def test_rebound_source_capture_report_is_rejected_before_analysis(
         )
 
 
+def test_missing_source_full_frame_is_rejected_before_analysis(
+    tmp_path: Path,
+) -> None:
+    package = _build_synthetic_contract_package(tmp_path)
+    (package / "source" / "frames" / "001-full-frame.bgra").unlink()
+
+    with pytest.raises(
+        InventoryPositiveV3IndependentValidationError,
+        match="owned full frame|source full frame",
+    ):
+        evaluate_frozen_v3_independent_validation(
+            package,
+            repository_root=_ROOT,
+            evaluator_git_head_sha=_EVALUATOR_HEAD,
+        )
+
+
+def test_missing_completion_seal_is_rejected_before_analysis(
+    tmp_path: Path,
+) -> None:
+    package = _build_synthetic_contract_package(tmp_path)
+    (package / "source" / "completion-seal.json").unlink()
+
+    with pytest.raises(
+        InventoryPositiveV3IndependentValidationError,
+        match="cannot resolve source completion seal",
+    ):
+        evaluate_frozen_v3_independent_validation(
+            package,
+            repository_root=_ROOT,
+            evaluator_git_head_sha=_EVALUATOR_HEAD,
+        )
+
+
+def test_rebound_completion_seal_is_rejected_before_analysis(
+    tmp_path: Path,
+) -> None:
+    package = _build_synthetic_contract_package(tmp_path)
+    _rewrite_document(
+        package / "source" / "completion-seal.json",
+        lambda seal: seal.__setitem__("status", "failed-retained"),
+    )
+
+    with pytest.raises(
+        InventoryPositiveV3IndependentValidationError,
+        match="completion seal SHA-256 mismatch",
+    ):
+        evaluate_frozen_v3_independent_validation(
+            package,
+            repository_root=_ROOT,
+            evaluator_git_head_sha=_EVALUATOR_HEAD,
+        )
+
+
+def test_source_full_frame_wrong_size_is_rejected_before_analysis(
+    tmp_path: Path,
+) -> None:
+    package = _build_synthetic_contract_package(
+        tmp_path,
+        first_full_frame_payload=b"not-a-full-frame",
+    )
+
+    with pytest.raises(
+        InventoryPositiveV3IndependentValidationError,
+        match="full frame cannot be cropped|full-frame size differs",
+    ):
+        evaluate_frozen_v3_independent_validation(
+            package,
+            repository_root=_ROOT,
+            evaluator_git_head_sha=_EVALUATOR_HEAD,
+        )
+
+
+def test_source_region_must_be_the_exact_fixed_crop_of_full_frame(
+    tmp_path: Path,
+) -> None:
+    package = _build_synthetic_contract_package(
+        tmp_path,
+        first_full_frame_payload=bytes(_FULL_FRAME_BYTES),
+    )
+
+    with pytest.raises(
+        InventoryPositiveV3IndependentValidationError,
+        match="not the exact fixed full-frame row slice",
+    ):
+        evaluate_frozen_v3_independent_validation(
+            package,
+            repository_root=_ROOT,
+            evaluator_git_head_sha=_EVALUATOR_HEAD,
+        )
+
+
+def test_source_full_frame_path_cannot_escape_campaign(
+    tmp_path: Path,
+) -> None:
+    package = _build_synthetic_contract_package(
+        tmp_path,
+        first_full_frame_path="../outside-private-frame.bgra",
+    )
+
+    with pytest.raises(
+        InventoryPositiveV3IndependentValidationError,
+        match="safe relative POSIX path",
+    ):
+        evaluate_frozen_v3_independent_validation(
+            package,
+            repository_root=_ROOT,
+            evaluator_git_head_sha=_EVALUATOR_HEAD,
+        )
+
+
 def test_byte_identical_content_bound_region_is_reported_not_rejected(
     tmp_path: Path,
 ) -> None:
@@ -622,7 +949,7 @@ def test_development_fixture_path_overlap_rejected_before_package_load(
 
     monkeypatch.setattr(
         validation,
-        "load_independent_validation_dataset",
+        "_load_independent_validation_dataset",
         package_load_is_forbidden,
     )
     with pytest.raises(
@@ -714,17 +1041,125 @@ def test_campaign_and_dataset_ids_are_content_bound(tmp_path: Path) -> None:
         load_independent_validation_dataset(arbitrary_campaign)
 
 
-def test_session_start_must_be_strictly_after_preregistration(
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("capture_build_sha", "9" * 40, "source-approved passive build"),
+        (
+            "capture_build_sha",
+            INVENTORY_POSITIVE_V3_FROZEN_HEAD_SHA,
+            "source-approved passive build",
+        ),
+        ("capture_build_sha", "0" * 40, "source-approved passive build"),
+        (
+            "capture_configuration_id",
+            "attacker-rebound-capture-configuration",
+            "source-approved identity",
+        ),
+        (
+            "protocol_lock_git_commit_sha",
+            "8" * 40,
+            "wrong protocol lock commit",
+        ),
+        (
+            "live_authorization_id",
+            "3" * 64,
+            "live authorization identity differs",
+        ),
+        (
+            "python_isolated_mode",
+            False,
+            "not produced through Python isolated mode",
+        ),
+        (
+            "python_isolated_source_cache",
+            False,
+            "no-site isolated-source launcher",
+        ),
+        (
+            "python_no_site_mode",
+            False,
+            "no-site isolated-source launcher",
+        ),
+    ],
+)
+def test_capture_environment_cannot_rebind_source_owned_provenance(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    def mutate(
+        manifest: dict[str, object],
+        _review: dict[str, object],
+        _package: dict[str, object],
+    ) -> None:
+        environment = manifest["capture_environment"]
+        assert isinstance(environment, dict)
+        environment[field] = value
+
+    package = _build_synthetic_contract_package(tmp_path, mutate=mutate)
+
+    with pytest.raises(
+        InventoryPositiveV3IndependentValidationError,
+        match=message,
+    ):
+        load_independent_validation_dataset(package)
+
+
+def test_session_start_must_be_strictly_after_protocol_lock(
     tmp_path: Path,
 ) -> None:
+    protocol_lock = validation._current_validation_protocol_lock(_ROOT)
     package = _build_synthetic_contract_package(
         tmp_path,
-        source_started_at_utc="2026-08-31T11:30:00Z",
+        source_started_at_utc=protocol_lock.lock_git_committed_at_utc,
     )
 
     with pytest.raises(
         InventoryPositiveV3IndependentValidationError,
-        match="must begin after the preregistration",
+        match="must begin after the protocol lock",
+    ):
+        load_independent_validation_dataset(package, protocol_lock=protocol_lock)
+
+
+def test_session_start_must_follow_authorization_and_execution_head(
+    tmp_path: Path,
+) -> None:
+    package = _build_synthetic_contract_package(
+        tmp_path,
+        source_started_at_utc="2098-12-31T23:59:40Z",
+    )
+
+    with pytest.raises(
+        InventoryPositiveV3IndependentValidationError,
+        match="after authorization and execution HEAD",
+    ):
+        load_independent_validation_dataset(package)
+
+
+def test_each_source_capture_must_follow_authorization_and_execution_head(
+    tmp_path: Path,
+) -> None:
+    def backdate_first_capture(
+        manifest: dict[str, object],
+        _review: dict[str, object],
+        _package: dict[str, object],
+    ) -> None:
+        cases = manifest["cases"]
+        assert isinstance(cases, list)
+        first = cases[0]
+        assert isinstance(first, dict)
+        first["captured_at_utc"] = "2098-12-31T23:59:45Z"
+
+    package = _build_synthetic_contract_package(
+        tmp_path,
+        mutate=backdate_first_capture,
+    )
+
+    with pytest.raises(
+        InventoryPositiveV3IndependentValidationError,
+        match="predates authorization or execution HEAD",
     ):
         load_independent_validation_dataset(package)
 
@@ -889,7 +1324,13 @@ def test_operator_label_cannot_populate_missing_reviewer_truth(
             lambda manifest, review, package: manifest["cases"][3].__setitem__(  # type: ignore[index,union-attr]
                 "planned_stage_id", "mid-partial"
             ),
-            "duplicated",
+            "exactly the seven preregistered stages",
+        ),
+        (
+            lambda manifest, review, package: manifest["cases"][3].__setitem__(  # type: ignore[index,union-attr]
+                "planned_stage_id", "unexpected-presentation"
+            ),
+            "unsupported source-session stage",
         ),
         (
             lambda manifest, review, package: review["cases"][3].__setitem__(  # type: ignore[index,union-attr]
@@ -901,7 +1342,7 @@ def test_operator_label_cannot_populate_missing_reviewer_truth(
             lambda manifest, review, package: manifest["cases"][0].__setitem__(  # type: ignore[index,union-attr]
                 "captured_at_utc", "2026-08-31T05:25:40Z"
             ),
-            "pre-preregistration",
+            "pre-protocol-lock",
         ),
         (
             lambda manifest, review, package: manifest["cases"][0][  # type: ignore[index]
@@ -921,6 +1362,36 @@ def test_sequence_truth_chronology_and_path_integrity_fail_closed(
     with pytest.raises(
         InventoryPositiveV3IndependentValidationError,
         match=message,
+    ):
+        load_independent_validation_dataset(package)
+
+
+def test_protocol_v1_rejects_prior_campaign_disclosure_or_retry(
+    tmp_path: Path,
+) -> None:
+    def add_prior_campaign(
+        manifest: dict[str, object],
+        _review: dict[str, object],
+        _package: dict[str, object],
+    ) -> None:
+        prior_campaigns = manifest["prior_campaigns"]
+        assert isinstance(prior_campaigns, list)
+        prior_campaigns.append(
+            {
+                "campaign_id": "inventory-positive-v3-campaign-prior",
+                "manifest_sha256": "4" * 64,
+                "status": "failed",
+            }
+        )
+
+    package = _build_synthetic_contract_package(
+        tmp_path,
+        mutate=add_prior_campaign,
+    )
+
+    with pytest.raises(
+        InventoryPositiveV3IndependentValidationError,
+        match="one irrevocable authorized capture attempt only",
     ):
         load_independent_validation_dataset(package)
 
@@ -1094,6 +1565,9 @@ def test_missing_or_forged_source_approval_cannot_validate(tmp_path: Path) -> No
         package_sha256=str(entry["package_sha256"]),
         campaign_manifest_sha256=str(entry["campaign_manifest_sha256"]),
         reviewer_truth_sha256=str(entry["reviewer_truth_sha256"]),
+        source_completion_seal_sha256=str(
+            entry["source_completion_seal_sha256"]
+        ),
         source_session_report_sha256=str(entry["source_session_report_sha256"]),
         registry_sha256=registry_sha,
     )

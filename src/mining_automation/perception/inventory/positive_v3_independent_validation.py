@@ -51,6 +51,7 @@ from .positive_v3_prototypes import (
 )
 
 __all__ = [
+    "INVENTORY_POSITIVE_V3_APPROVED_CAPTURE_CONFIGURATION_ID",
     "INVENTORY_POSITIVE_V3_FROZEN_HEAD_SHA",
     "INVENTORY_POSITIVE_V3_PREREGISTRATION_SHA256",
     "FrozenV3ModelBinding",
@@ -68,12 +69,14 @@ __all__ = [
 INVENTORY_POSITIVE_V3_FROZEN_HEAD_SHA: Final[str] = (
     "5975532b472a74d93f010e04ca44b2efa2a3ffd7"
 )
+INVENTORY_POSITIVE_V3_APPROVED_CAPTURE_CONFIGURATION_ID: Final[str] = (
+    "inventory-positive-v3-independent-passive-natural-fill-v1"
+)
 INVENTORY_POSITIVE_V3_PREREGISTRATION_SHA256: Final[str] = (
-    "9cd485f6b095018763ea481144ea183e089d670148ed7a79d3c11126a9736518"
+    "47db5a775095b7828e1c10d19949519002d5c7540eaf8d3c18e0eb3154bd9130"
 )
 
 _FROZEN_COMMITTED_AT_UTC: Final[str] = "2026-08-31T05:25:40Z"
-_PREREGISTRATION_EFFECTIVE_AT_UTC: Final[str] = "2026-08-31T11:30:00Z"
 _PREREGISTRATION_BASE_HEAD_SHA: Final[str] = INVENTORY_POSITIVE_V3_FROZEN_HEAD_SHA
 _FROZEN_CONFIGURATION_ID: Final[str] = (
     "inventory-positive-v3-development-"
@@ -145,40 +148,127 @@ _PREREGISTRATION_PATH: Final[PurePosixPath] = PurePosixPath(
 _APPROVAL_REGISTRY_PATH: Final[PurePosixPath] = PurePosixPath(
     "validation/inventory-positive-v3/approved-campaigns.json"
 )
+_PROTOCOL_LOCK_PATH: Final[PurePosixPath] = PurePosixPath(
+    "validation/inventory-positive-v3/protocol-lock.json"
+)
+_LIVE_AUTHORIZATION_PATH: Final[PurePosixPath] = PurePosixPath(
+    "validation/inventory-positive-v3/live-campaign-authorizations.json"
+)
+_HOST_RESERVATION_SCHEMA: Final[str] = (
+    "inventory-positive-v3-independent-host-reservation-v1"
+)
+_REPOSITORY_ID: Final[str] = "maadbonnie21-lgtm/Mining-Automation"
+_EVALUATOR_SOURCE_PATH: Final[PurePosixPath] = PurePosixPath(
+    "src/mining_automation/perception/inventory/"
+    "positive_v3_independent_validation.py"
+)
+
+_PROTOCOL_LOCKED_PATHS: Final[tuple[str, ...]] = (
+    ".gitattributes",
+    "src/mining_automation/__init__.py",
+    "src/mining_automation/capture/windows/bmp.py",
+    "src/mining_automation/perception/__init__.py",
+    "src/mining_automation/perception/detector.py",
+    "src/mining_automation/perception/errors.py",
+    "src/mining_automation/perception/evaluation.py",
+    "src/mining_automation/perception/inventory/__init__.py",
+    "src/mining_automation/perception/inventory/adapter.py",
+    "src/mining_automation/perception/inventory/classification.py",
+    "src/mining_automation/perception/inventory/configuration.py",
+    "src/mining_automation/perception/inventory/detector.py",
+    "src/mining_automation/perception/inventory/fixture_preparation.py",
+    "src/mining_automation/perception/inventory/geometry.py",
+    "src/mining_automation/perception/inventory/live_validation.py",
+    "src/mining_automation/perception/inventory/live_validation_session.py",
+    "src/mining_automation/perception/inventory/localization.py",
+    "src/mining_automation/perception/inventory/positive_classifier_v2.py",
+    "src/mining_automation/perception/inventory/positive_classifier_v3.py",
+    "src/mining_automation/perception/inventory/positive_v2_calibration.py",
+    "src/mining_automation/perception/inventory/positive_v2_evaluation.py",
+    "src/mining_automation/perception/inventory/positive_v3_independent_validation.py",
+    "src/mining_automation/perception/inventory/positive_v3_independent_validation_cli.py",
+    "src/mining_automation/perception/inventory/positive_v3_prototypes.py",
+    "src/mining_automation/perception/inventory/review_gate.py",
+    "src/mining_automation/perception/inventory/sanitized_replay.py",
+    "src/mining_automation/perception/replay.py",
+    "tools/inventory_v3_independent_validation.py",
+    "validation/inventory-positive-v3/preregistration.json",
+    "validation/inventory-positive-v3/preregistration.sha256",
+)
+_APPROVED_CAPTURE_SOURCE_PATHS: Final[tuple[str, ...]] = (
+    ".gitattributes",
+    ".gitignore",
+    "src/mining_automation/__init__.py",
+    "src/mining_automation/capture/__init__.py",
+    "src/mining_automation/capture/backend.py",
+    "src/mining_automation/capture/errors.py",
+    "src/mining_automation/capture/frame.py",
+    "src/mining_automation/capture/source.py",
+    "src/mining_automation/capture/windows/__init__.py",
+    "src/mining_automation/capture/windows/_win32_calls.py",
+    "src/mining_automation/capture/windows/backend.py",
+    "src/mining_automation/capture/windows/gdi_resources.py",
+    "src/mining_automation/capture/windows/geometry.py",
+    "src/mining_automation/capture/windows/win32_api.py",
+    "src/mining_automation/capture/windows/window_selector.py",
+    "src/mining_automation/contracts.py",
+    "src/mining_automation/diagnostics.py",
+    "src/mining_automation/validation/__init__.py",
+    "src/mining_automation/validation/inventory_v3_capture.py",
+    "src/mining_automation/validation/inventory_v3_capture_cli.py",
+    "tools/capture_inventory_v3_independent.py",
+)
 
 _PREREGISTRATION_SCHEMA: Final[str] = (
-    "inventory-positive-v3-independent-validation-preregistration-v1"
+    "inventory-positive-v3-independent-validation-preregistration-v2"
 )
 _PACKAGE_SCHEMA: Final[str] = (
-    "inventory-positive-v3-independent-validation-package-v1"
+    "inventory-positive-v3-independent-validation-package-v2"
 )
 _DATASET_SCHEMA: Final[str] = (
-    "inventory-positive-v3-independent-validation-dataset-v1"
+    "inventory-positive-v3-independent-validation-dataset-v2"
 )
 _REVIEW_SCHEMA: Final[str] = (
     "inventory-positive-v3-independent-validation-review-v1"
 )
 _SOURCE_SESSION_SCHEMA: Final[str] = (
-    "inventory-positive-v3-independent-source-session-v1"
+    "inventory-positive-v3-independent-source-session-v2"
 )
 _SOURCE_CAPTURE_SCHEMA: Final[str] = (
-    "inventory-positive-v3-independent-source-capture-v1"
+    "inventory-positive-v3-independent-source-capture-v2"
+)
+_OWNED_FRAME_SCHEMA: Final[str] = (
+    "inventory-positive-v3-independent-owned-frame-v1"
+)
+_COMPLETION_SEAL_SCHEMA: Final[str] = (
+    "inventory-positive-v3-independent-source-completion-seal-v1"
 )
 _REPORT_SCHEMA: Final[str] = (
-    "inventory-positive-v3-independent-validation-report-v1"
+    "inventory-positive-v3-independent-validation-report-v2"
 )
 _READINESS_REPORT_SCHEMA: Final[str] = (
-    "inventory-positive-v3-independent-validation-readiness-v1"
+    "inventory-positive-v3-independent-validation-readiness-v2"
 )
 _APPROVAL_REGISTRY_SCHEMA: Final[str] = (
     "inventory-positive-v3-independent-validation-approval-registry-v1"
+)
+_PROTOCOL_LOCK_SCHEMA: Final[str] = (
+    "inventory-positive-v3-independent-validation-protocol-lock-v1"
+)
+_PROTOCOL_ID: Final[str] = "inventory-positive-v3-independent-validation"
+_PROTOCOL_VERSION: Final[str] = "1.0.0"
+_LIVE_AUTHORIZATION_SCHEMA: Final[str] = (
+    "inventory-positive-v3-independent-live-campaign-authorization-registry-v1"
+)
+_LIVE_AUTHORIZATION_STATUS: Final[str] = (
+    "authorized-for-passive-independent-validation-capture"
 )
 _APPROVAL_STATUS: Final[str] = "approved-for-independent-validation-conformance"
 _APPROVAL_REQUIRED_STATUS: Final[str] = "approval-required"
 _VALIDATION_PASSED_STATUS: Final[str] = "independent-validation-passed-nonactivating"
 _VALIDATION_FAILED_STATUS: Final[str] = "independent-validation-failed"
 _EVALUATOR_ID: Final[str] = "inventory-positive-v3-independent-validation"
-_EVALUATOR_VERSION: Final[str] = "1.0.0"
+_EVALUATOR_VERSION: Final[str] = "2.0.0"
 _DATASET_ROLE: Final[str] = "independent-validation-only"
 _SELECTION_POLICY: Final[str] = (
     "all-owned-captures-in-source-order-no-drop-no-replacement"
@@ -198,7 +288,6 @@ _NEGATIVE_STAGES: Final[tuple[str, ...]] = (
     "row-obstruction",
 )
 _REQUIRED_STAGES: Final[tuple[str, ...]] = _POSITIVE_STAGES + _NEGATIVE_STAGES
-_OPTIONAL_STAGE: Final[str] = "unexpected-presentation"
 _PRESENTATION_FLAGS: Final[tuple[str, ...]] = (
     "drag_visible",
     "hover_visible",
@@ -259,11 +348,83 @@ class FrozenV3ModelBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class _ApprovedPassiveCaptureBinding:
+    """Source-owned identity for the only eligible passive capture build."""
+
+    build_sha: str
+    capture_configuration_id: str
+    source_git_blobs: tuple[tuple[str, str], ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "build_sha": self.build_sha,
+            "capture_configuration_id": self.capture_configuration_id,
+            "policy": {
+                "all_owned_captures_retained": True,
+                "detector_controls_capture_selection": False,
+                "detector_controls_inclusion": False,
+                "detector_controls_retry": False,
+                "detector_controls_stage_advancement": False,
+                "input_automation_allowed": False,
+                "inventory_region": list(SUPPORTED_REGION),
+                "pixel_materialization": "fixed-bgra-row-slice-only",
+                "pixel_value_transformation_allowed": False,
+            },
+            "source_git_blobs": [
+                {"git_blob": blob, "path": path}
+                for path, blob in self.source_git_blobs
+            ],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidationProtocolLockBinding:
+    """Immutable Git provenance for the validation rules and capture build."""
+
+    lock_git_commit_sha: str
+    lock_git_committed_at_utc: str
+    lock_git_blob: str
+    lock_sha256: str
+    protocol_source_commit_sha: str
+    locked_git_blobs: tuple[tuple[str, str], ...]
+    approved_passive_capture: _ApprovedPassiveCaptureBinding
+    evaluator_head_sha: str
+    repository_root: Path
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "approved_passive_capture": self.approved_passive_capture.to_dict(),
+            "lock_git_blob": self.lock_git_blob,
+            "lock_git_commit_sha": self.lock_git_commit_sha,
+            "lock_git_committed_at_utc": self.lock_git_committed_at_utc,
+            "lock_path": _PROTOCOL_LOCK_PATH.as_posix(),
+            "lock_sha256": self.lock_sha256,
+            "locked_git_blobs": [
+                {"git_blob": blob, "path": path}
+                for path, blob in self.locked_git_blobs
+            ],
+            "protocol_id": _PROTOCOL_ID,
+            "protocol_source_commit_sha": self.protocol_source_commit_sha,
+            "protocol_version": _PROTOCOL_VERSION,
+            "verified_evaluator_head_sha": self.evaluator_head_sha,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class IndependentValidationEnvironment:
     """Complete environment provenance required for a future campaign."""
 
     capture_build_sha: str
     capture_configuration_id: str
+    capture_execution_head_sha: str
+    host_reservation_sha256: str
+    live_authorization_id: str
+    live_authorization_git_blob: str
+    live_authorization_git_commit_sha: str
+    protocol_lock_git_commit_sha: str
+    python_isolated_mode: bool
+    python_isolated_source_cache: bool
+    python_no_site_mode: bool
     runelite_build: str
     windows_version: str
     windows_scaling_percent: int
@@ -272,11 +433,15 @@ class IndependentValidationEnvironment:
     theme: str
     renderer: str
     window_class: str
+    window_handle: int
+    _capture_execution_head_git_committed_at_utc: str
+    _live_authorization_git_committed_at_utc: str
 
     def to_dict(self) -> dict[str, object]:
         return {
             "capture_build_sha": self.capture_build_sha,
             "capture_configuration_id": self.capture_configuration_id,
+            "capture_execution_head_sha": self.capture_execution_head_sha,
             "client_mode": self.client_mode,
             "frame": {
                 "height": SUPPORTED_FRAME_HEIGHT,
@@ -284,10 +449,21 @@ class IndependentValidationEnvironment:
                 "profile_id": SUPPORTED_PROFILE_ID,
                 "width": SUPPORTED_FRAME_WIDTH,
             },
+            "host_reservation_sha256": self.host_reservation_sha256,
+            "live_authorization_id": self.live_authorization_id,
+            "live_authorization_git_blob": self.live_authorization_git_blob,
+            "live_authorization_git_commit_sha": (
+                self.live_authorization_git_commit_sha
+            ),
             "renderer": self.renderer,
+            "protocol_lock_git_commit_sha": self.protocol_lock_git_commit_sha,
+            "python_isolated_mode": self.python_isolated_mode,
+            "python_isolated_source_cache": self.python_isolated_source_cache,
+            "python_no_site_mode": self.python_no_site_mode,
             "runelite_build": self.runelite_build,
             "theme": self.theme,
             "window_class": self.window_class,
+            "window_handle": self.window_handle,
             "windows_dpi": self.windows_dpi,
             "windows_scaling_percent": self.windows_scaling_percent,
             "windows_version": self.windows_version,
@@ -354,6 +530,9 @@ class IndependentValidationCase:
     frame_region_path: str
     frame_region_sha256: str
     frame_region_payload: bytes
+    full_frame_path: str
+    full_frame_sha256: str
+    full_frame_size_bytes: int
     truth: IndependentValidationTruth
 
 
@@ -374,6 +553,7 @@ class IndependentValidationDataset:
     package_sha256: str
     campaign_manifest_sha256: str
     reviewer_truth_sha256: str
+    source_completion_seal_sha256: str
     source_session_report_sha256: str
     prior_campaigns: tuple[Mapping[str, object], ...]
     _snapshots: tuple[tuple[Path, bytes], ...]
@@ -393,6 +573,7 @@ class _ApprovedCampaignBinding:
     package_sha256: str
     campaign_manifest_sha256: str
     reviewer_truth_sha256: str
+    source_completion_seal_sha256: str
     source_session_report_sha256: str
     registry_sha256: str
 
@@ -408,6 +589,9 @@ class _ApprovedCampaignBinding:
             "package_sha256": self.package_sha256,
             "reviewer": self.reviewer,
             "reviewer_truth_sha256": self.reviewer_truth_sha256,
+            "source_completion_seal_sha256": (
+                self.source_completion_seal_sha256
+            ),
             "source_session_report_sha256": self.source_session_report_sha256,
             "status": _APPROVAL_STATUS,
         }
@@ -421,6 +605,7 @@ class InventoryPositiveV3IndependentValidationCaseResult:
     planned_stage_id: str
     captured_at_utc: str
     frame_region_sha256: str
+    full_frame_sha256: str
     byte_identical_to_development_payload: bool
     reviewer_truth: Mapping[str, object]
     expected: Mapping[str, object]
@@ -454,6 +639,7 @@ class InventoryPositiveV3IndependentValidationCaseResult:
             "expected": dict(self.expected),
             "failure_reason": self.failure_reason,
             "frame_region_sha256": self.frame_region_sha256,
+            "full_frame_sha256": self.full_frame_sha256,
             "passed": self.passed,
             "planned_stage_id": self.planned_stage_id,
             "reviewer_truth": dict(self.reviewer_truth),
@@ -465,6 +651,7 @@ class InventoryPositiveV3IndependentValidationReport:
     """Canonical, permanently non-activating independent-validation report."""
 
     evaluator_git_head_sha: str
+    protocol_lock: _ValidationProtocolLockBinding
     preregistration_sha256: str
     candidate_binding: FrozenV3ModelBinding
     dataset: IndependentValidationDataset
@@ -485,6 +672,18 @@ class InventoryPositiveV3IndependentValidationReport:
         if self.candidate_binding != frozen_v3_model_binding():
             raise InventoryPositiveV3IndependentValidationError(
                 "report candidate binding differs from frozen V3"
+            )
+        if self.dataset.environment.protocol_lock_git_commit_sha != (
+            self.protocol_lock.lock_git_commit_sha
+        ):
+            raise InventoryPositiveV3IndependentValidationError(
+                "report campaign is not bound to its verified protocol lock"
+            )
+        if self.dataset.environment.capture_build_sha != (
+            self.protocol_lock.approved_passive_capture.build_sha
+        ):
+            raise InventoryPositiveV3IndependentValidationError(
+                "report campaign is not bound to its approved passive capture build"
             )
         if self.preregistration_sha256 != (
             INVENTORY_POSITIVE_V3_PREREGISTRATION_SHA256
@@ -522,6 +721,7 @@ class InventoryPositiveV3IndependentValidationReport:
                 or result.planned_stage_id != case.planned_stage_id
                 or result.captured_at_utc != case.captured_at_utc
                 or result.frame_region_sha256 != case.frame_region_sha256
+                or result.full_frame_sha256 != case.full_frame_sha256
                 or dict(result.reviewer_truth) != case.truth.to_dict()
                 or dict(result.expected) != _expected_result(case)
             ):
@@ -583,6 +783,9 @@ class InventoryPositiveV3IndependentValidationReport:
                 "reviewed_at_utc": self.dataset.reviewed_at_utc,
                 "reviewer": self.dataset.reviewer,
                 "session_id": self.dataset.session_id,
+                "source_completion_seal_sha256": (
+                    self.dataset.source_completion_seal_sha256
+                ),
                 "source_session_report_sha256": (
                     self.dataset.source_session_report_sha256
                 ),
@@ -613,6 +816,7 @@ class InventoryPositiveV3IndependentValidationReport:
             "preregistration_sha256": self.preregistration_sha256,
             "promotion_allowed": False,
             "report_schema": _REPORT_SCHEMA,
+            "validation_protocol_lock": self.protocol_lock.to_dict(),
             "validation_passed": self.validation_passed,
             "validation_status": self.validation_status,
         }
@@ -636,8 +840,13 @@ class _FrozenCandidate:
 class _SourceCaptureBinding:
     capture_id: str
     captured_at_utc: str
+    planned_stage_id: str
+    sequence_index: int
     report_path: str
     report_sha256: str
+    owned_full_frame_path: str
+    owned_full_frame_sha256: str
+    owned_full_frame_size_bytes: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -656,6 +865,9 @@ class _SourceRegionBinding:
     path: str
     sha256: str
     size_bytes: int
+    full_frame_path: str
+    full_frame_sha256: str
+    full_frame_size_bytes: int
 
 
 def frozen_v3_model_binding() -> FrozenV3ModelBinding:
@@ -724,6 +936,7 @@ def independent_validation_preregistration() -> Mapping[str, object]:
                     "package_sha256",
                     "campaign_manifest_sha256",
                     "reviewer_truth_sha256",
+                    "source_completion_seal_sha256",
                     "source_session_report_sha256",
                 ],
                 "required_distinct_roles": [
@@ -738,40 +951,74 @@ def independent_validation_preregistration() -> Mapping[str, object]:
                 "version": _EVALUATOR_VERSION,
             },
             "future_campaign": {
+                "approved_passive_capture": {
+                    "build_binding_source": _PROTOCOL_LOCK_PATH.as_posix(),
+                    "capture_configuration_id": (
+                        INVENTORY_POSITIVE_V3_APPROVED_CAPTURE_CONFIGURATION_ID
+                    ),
+                    "detector_execution_allowed_during_acquisition": False,
+                    "full_frame_retained": True,
+                    "input_automation_allowed": False,
+                    "inventory_region": list(SUPPORTED_REGION),
+                    "pixel_materialization": "fixed-bgra-row-slice-only",
+                    "pixel_value_transformation_allowed": False,
+                },
                 "count_contract": (
                     "reviewer truth must prove empty=0, "
                     "0<early-partial<mid-partial<near-full<28, full=28"
                 ),
                 "negative_case_sequence": list(_NEGATIVE_STAGES),
-                "optional_unsupported_presentations": [
-                    "drag",
-                    "gapped-inventory",
-                    "hover",
-                    "quantity-text",
-                    "selected-item",
-                    "unexpected-foreign-item",
-                ],
+                "live_capture_authorization": {
+                    "initial_state": "canonical-empty-before-protocol-lock",
+                    "path": _LIVE_AUTHORIZATION_PATH.as_posix(),
+                    "required_bindings": [
+                        "authorization_id",
+                        "capture_build_sha",
+                        "capture_configuration_id",
+                        "protocol_lock_git_commit_sha",
+                        "protocol_lock_sha256",
+                    ],
+                    "required_status": _LIVE_AUTHORIZATION_STATUS,
+                    "schema": _LIVE_AUTHORIZATION_SCHEMA,
+                    "timing": (
+                        "one source-owned registry change strictly after the "
+                        "protocol lock and at or before capture execution HEAD; "
+                        "session and captures strictly follow both commits"
+                    ),
+                },
                 "positive_case_sequence": list(_POSITIVE_STAGES),
                 "required_environment_fields": [
                     "capture_build_sha",
                     "capture_configuration_id",
+                    "capture_execution_head_sha",
                     "client_mode",
                     "frame.height",
                     "frame.pixel_format",
                     "frame.profile_id",
                     "frame.width",
+                    "host_reservation_sha256",
+                    "live_authorization_id",
+                    "live_authorization_git_blob",
+                    "live_authorization_git_commit_sha",
+                    "protocol_lock_git_commit_sha",
+                    "python_isolated_mode",
+                    "python_isolated_source_cache",
+                    "python_no_site_mode",
                     "renderer",
                     "runelite_build",
                     "theme",
                     "window_class",
+                    "window_handle",
                     "windows_dpi",
                     "windows_scaling_percent",
                     "windows_version",
                 ],
                 "selection_policy": _SELECTION_POLICY,
                 "session_policy": (
-                    "one natural-fill session; every owned capture evaluated; "
-                    "aborted/restarted work receives a new disclosed campaign id"
+                    "one natural-fill session under one irrevocable host-global "
+                    "authorization reservation; every owned capture evaluated; "
+                    "failure consumes protocol-v1 authorization and requires a "
+                    "new reviewed protocol version before another attempt"
                 ),
             },
             "model_firewall": {
@@ -785,7 +1032,11 @@ def independent_validation_preregistration() -> Mapping[str, object]:
             },
             "promotion_allowed": False,
             "preregistration": {
-                "effective_at_utc": _PREREGISTRATION_EFFECTIVE_AT_UTC,
+                "campaign_eligibility_source": (
+                    "immutable-protocol-lock-introduction-in-git-history"
+                ),
+                "protocol_lock_path": _PROTOCOL_LOCK_PATH.as_posix(),
+                "protocol_lock_schema": _PROTOCOL_LOCK_SCHEMA,
                 "repository_base_head_sha": _PREREGISTRATION_BASE_HEAD_SHA,
                 "source_path": _PREREGISTRATION_PATH.as_posix(),
             },
@@ -803,9 +1054,13 @@ def build_inventory_positive_v3_validation_readiness_report(
     """Verify the frozen model and return a zero-live-case readiness report."""
     _require_git_sha(evaluator_git_head_sha, "evaluator_git_head_sha")
     verified_root = _verify_repository_state(repository_root, evaluator_git_head_sha)
+    protocol_lock = _current_validation_protocol_lock(verified_root)
     candidate = _load_frozen_candidate(verified_root)
     preregistration_sha = _verify_repository_preregistration(verified_root)
-    approval_registry = _approval_registry_readiness(verified_root)
+    approval_registry = _approval_registry_readiness(
+        verified_root,
+        evaluator_git_head_sha,
+    )
     identity = _candidate_identity(candidate.analyzer)
     report = {
         "action_authority": _zero_action_authority(),
@@ -835,6 +1090,7 @@ def build_inventory_positive_v3_validation_readiness_report(
         "preregistration_sha256": preregistration_sha,
         "readiness_passed": True,
         "report_schema": _READINESS_REPORT_SCHEMA,
+        "validation_protocol_lock": protocol_lock.to_dict(),
         "validation_status": INVENTORY_POSITIVE_V3_VALIDATION_STATUS,
     }
     _verify_repository_state(repository_root, evaluator_git_head_sha)
@@ -844,13 +1100,39 @@ def build_inventory_positive_v3_validation_readiness_report(
 def load_independent_validation_dataset(
     package_directory: Path,
     *,
+    repository_root: Path,
+    evaluator_git_head_sha: str,
     expected_preregistration_sha256: str = (
         INVENTORY_POSITIVE_V3_PREREGISTRATION_SHA256
     ),
 ) -> IndependentValidationDataset:
-    """Load one finalized package without opening a model-update channel."""
+    """Load one package through a source-verified protocol-lock boundary."""
+    _require_git_sha(evaluator_git_head_sha, "evaluator_git_head_sha")
+    verified_root = _verify_repository_state(
+        repository_root,
+        evaluator_git_head_sha,
+    )
+    protocol_lock = _current_validation_protocol_lock(verified_root)
+    dataset = _load_independent_validation_dataset(
+        package_directory,
+        expected_preregistration_sha256=expected_preregistration_sha256,
+        protocol_lock=protocol_lock,
+    )
+    _verify_repository_state(verified_root, evaluator_git_head_sha)
+    return dataset
+
+
+def _load_independent_validation_dataset(
+    package_directory: Path,
+    *,
+    expected_preregistration_sha256: str,
+    protocol_lock: _ValidationProtocolLockBinding,
+) -> IndependentValidationDataset:
+    """Parse a package with a lock already verified by an owning entry point."""
     if not isinstance(package_directory, Path):
         raise TypeError("package_directory must be pathlib.Path")
+    if not isinstance(protocol_lock, _ValidationProtocolLockBinding):
+        raise TypeError("protocol_lock must be verified source-owned provenance")
     _require_sha256(
         expected_preregistration_sha256,
         "expected_preregistration_sha256",
@@ -929,6 +1211,7 @@ def load_independent_validation_dataset(
         review,
         review_sha,
         snapshots,
+        protocol_lock=protocol_lock,
     )
     return IndependentValidationDataset(
         package_directory=root,
@@ -944,6 +1227,9 @@ def load_independent_validation_dataset(
         package_sha256=_sha256(package_bytes),
         campaign_manifest_sha256=manifest_sha,
         reviewer_truth_sha256=review_sha,
+        source_completion_seal_sha256=(
+            dataset.source_completion_seal_sha256
+        ),
         source_session_report_sha256=dataset.source_session_report_sha256,
         prior_campaigns=dataset.prior_campaigns,
         _snapshots=tuple(snapshots),
@@ -959,6 +1245,7 @@ def evaluate_frozen_v3_independent_validation(
     """Evaluate a separate validation package with the frozen V3 candidate."""
     _require_git_sha(evaluator_git_head_sha, "evaluator_git_head_sha")
     verified_root = _verify_repository_state(repository_root, evaluator_git_head_sha)
+    protocol_lock = _current_validation_protocol_lock(verified_root)
     _verify_analyzer_runtime_sentinels(verified_root)
     # The analyzer is fully constructed and identity-checked before any
     # validation bytes or reviewer truth are opened.
@@ -971,18 +1258,33 @@ def evaluate_frozen_v3_independent_validation(
             "runtime V3 analyzer state differs from the frozen source-owned state"
         )
     _reject_development_path_reuse(package_directory, candidate)
-    dataset = load_independent_validation_dataset(
+    dataset = _load_independent_validation_dataset(
         package_directory,
         expected_preregistration_sha256=preregistration_sha,
+        protocol_lock=protocol_lock,
     )
     _reject_development_identity_reuse(dataset, candidate)
     approval, approval_registry_sha256 = _load_approved_campaign_binding(
         verified_root,
         dataset,
+        evaluator_git_head_sha,
     )
 
     results: list[InventoryPositiveV3IndependentValidationCaseResult] = []
+    full_frame_snapshots: list[tuple[Path, bytes]] = []
     for frame_id, item in enumerate(dataset.cases, start=1):
+        full_frame = _read_case_full_frame(
+            dataset.package_directory,
+            item,
+            full_frame_snapshots,
+        )
+        if _fixed_inventory_region_from_full_frame(full_frame) != (
+            item.frame_region_payload
+        ):
+            raise InventoryPositiveV3IndependentValidationError(
+                f"{item.case_id} inventory region is not the exact fixed "
+                "full-frame row slice"
+            )
         frame = _frame_from_region(item.frame_region_payload, frame_id=frame_id)
         actual = candidate.analyzer.analyze(frame)
         expected = _expected_result(item)
@@ -993,6 +1295,7 @@ def evaluate_frozen_v3_independent_validation(
                 planned_stage_id=item.planned_stage_id,
                 captured_at_utc=item.captured_at_utc,
                 frame_region_sha256=item.frame_region_sha256,
+                full_frame_sha256=item.full_frame_sha256,
                 byte_identical_to_development_payload=(
                     item.frame_region_sha256
                     in candidate.development_payload_sha256s
@@ -1006,6 +1309,7 @@ def evaluate_frozen_v3_independent_validation(
         )
 
     _assert_snapshot_files_unchanged(dataset._snapshots)
+    _assert_snapshot_files_unchanged(tuple(full_frame_snapshots))
     _verify_analyzer_runtime_sentinels(verified_root)
     after = _candidate_identity(candidate.analyzer)
     analyzer_state_after = _analyzer_runtime_state_sha256(candidate.analyzer)
@@ -1020,6 +1324,7 @@ def evaluate_frozen_v3_independent_validation(
     _verify_repository_state(repository_root, evaluator_git_head_sha)
     return InventoryPositiveV3IndependentValidationReport(
         evaluator_git_head_sha=evaluator_git_head_sha,
+        protocol_lock=protocol_lock,
         preregistration_sha256=preregistration_sha,
         candidate_binding=candidate.binding,
         dataset=dataset,
@@ -1113,43 +1418,86 @@ def _load_frozen_candidate(repository_root: Path) -> _FrozenCandidate:
     )
 
 
+def _git(
+    root: Path,
+    *arguments: str,
+    allow_failure: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    completed = subprocess.run(
+        ("git", "-C", str(root), *arguments),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0 and not allow_failure:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise InventoryPositiveV3IndependentValidationError(
+            f"Git command failed: {detail}"
+        )
+    return completed
+
+
+def _git_bytes(
+    root: Path,
+    *arguments: str,
+    allow_failure: bool = False,
+) -> subprocess.CompletedProcess[bytes]:
+    completed = subprocess.run(
+        ("git", "-C", str(root), *arguments),
+        check=False,
+        capture_output=True,
+    )
+    if completed.returncode != 0 and not allow_failure:
+        detail = (completed.stderr or completed.stdout).decode(
+            "utf-8", errors="replace"
+        ).strip()
+        raise InventoryPositiveV3IndependentValidationError(
+            f"Git command failed: {detail}"
+        )
+    return completed
+
+
 def _verify_repository_state(repository_root: Path, expected_head: str) -> Path:
-    """Bind every report-producing API to one clean repository head."""
+    """Bind every report-producing API to one clean, protocol-locked head."""
     if not isinstance(repository_root, Path):
         raise TypeError("repository_root must be pathlib.Path")
     root = repository_root.resolve(strict=True)
 
-    def git(*arguments: str, allow_failure: bool = False) -> subprocess.CompletedProcess[str]:
-        completed = subprocess.run(
-            ("git", "-C", str(root), *arguments),
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if completed.returncode != 0 and not allow_failure:
-            detail = completed.stderr.strip() or completed.stdout.strip()
-            raise InventoryPositiveV3IndependentValidationError(
-                f"Git command failed: {detail}"
-            )
-        return completed
-
-    actual_root = Path(git("rev-parse", "--show-toplevel").stdout.strip()).resolve(
-        strict=True
-    )
+    actual_root = Path(
+        _git(root, "rev-parse", "--show-toplevel").stdout.strip()
+    ).resolve(strict=True)
     if actual_root != root:
         raise InventoryPositiveV3IndependentValidationError(
             "repository_root is not the exact Git worktree root"
         )
-    actual_head = git("rev-parse", "HEAD").stdout.strip()
+    actual_head = _git(root, "rev-parse", "HEAD").stdout.strip()
     if actual_head != expected_head:
         raise InventoryPositiveV3IndependentValidationError(
             f"Git HEAD mismatch: expected {expected_head}, got {actual_head}"
         )
-    if git("status", "--porcelain=v1").stdout.strip():
+    if _git(root, "status", "--porcelain=v1").stdout.strip():
         raise InventoryPositiveV3IndependentValidationError(
             "worktree changes prevent exact-head independent-validation evidence"
         )
-    ancestor = git(
+    if _git(root, "rev-parse", "--is-shallow-repository").stdout.strip() != "false":
+        raise InventoryPositiveV3IndependentValidationError(
+            "full Git history is required to verify the validation protocol lock"
+        )
+    if _git(root, "replace", "-l").stdout.strip():
+        raise InventoryPositiveV3IndependentValidationError(
+            "Git replacement refs cannot establish validation provenance"
+        )
+    grafts = Path(
+        _git(root, "rev-parse", "--git-path", "info/grafts").stdout.strip()
+    )
+    if not grafts.is_absolute():
+        grafts = root / grafts
+    if grafts.is_file() and grafts.read_bytes().strip():
+        raise InventoryPositiveV3IndependentValidationError(
+            "legacy Git grafts cannot establish validation provenance"
+        )
+    ancestor = _git(
+        root,
         "merge-base",
         "--is-ancestor",
         INVENTORY_POSITIVE_V3_FROZEN_HEAD_SHA,
@@ -1161,12 +1509,618 @@ def _verify_repository_state(repository_root: Path, expected_head: str) -> Path:
             "evaluator head is not descended from the frozen V3 candidate"
         )
     for path, expected_blob in _FROZEN_GIT_BLOBS:
-        actual_blob = git("rev-parse", f"HEAD:{path}").stdout.strip()
+        actual_blob = _git(root, "rev-parse", f"HEAD:{path}").stdout.strip()
         if actual_blob != expected_blob:
             raise InventoryPositiveV3IndependentValidationError(
                 f"frozen V3 transitive source changed: {path}"
             )
+    expected_runtime_path = root.joinpath(*_EVALUATOR_SOURCE_PATH.parts)
+    if Path(__file__).resolve(strict=True) != expected_runtime_path.resolve(strict=True):
+        raise InventoryPositiveV3IndependentValidationError(
+            "validation evaluator runtime is not owned by the verified repository"
+        )
+    _verify_validation_protocol_lock(root, actual_head)
     return root
+
+
+def _current_validation_protocol_lock(
+    repository_root: Path,
+) -> _ValidationProtocolLockBinding:
+    root = repository_root.resolve(strict=True)
+    actual_head = _git(root, "rev-parse", "HEAD").stdout.strip()
+    return _verify_validation_protocol_lock(root, actual_head)
+
+
+def _verify_validation_protocol_lock(
+    repository_root: Path,
+    actual_head: str,
+) -> _ValidationProtocolLockBinding:
+    """Verify the immutable first-introduction lock and every bound Git blob."""
+    root = repository_root.resolve(strict=True)
+    _require_git_sha(actual_head, "actual protocol evaluator head")
+    if _git(root, "rev-parse", "--is-shallow-repository").stdout.strip() != "false":
+        raise InventoryPositiveV3IndependentValidationError(
+            "full Git history is required to verify the validation protocol lock"
+        )
+
+    lock_path = root.joinpath(*_PROTOCOL_LOCK_PATH.parts)
+    lock_payload = _read_bytes(lock_path, "source-owned validation protocol lock")
+    try:
+        decoded = json.loads(lock_payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise InventoryPositiveV3IndependentValidationError(
+            "source-owned validation protocol lock is not canonical JSON"
+        ) from exc
+    lock = _require_mapping(decoded, "source-owned validation protocol lock")
+    if _canonical_bytes(lock) != lock_payload:
+        raise InventoryPositiveV3IndependentValidationError(
+            "source-owned validation protocol lock is not canonical JSON"
+        )
+    lock_sha256 = _sha256(lock_payload)
+    sidecar_path = lock_path.with_suffix(".sha256")
+    sidecar_payload = _read_bytes(
+        sidecar_path,
+        "source-owned validation protocol lock sidecar",
+    )
+    expected_sidecar = f"{lock_sha256}  {lock_path.name}\n".encode("ascii")
+    if sidecar_payload != expected_sidecar:
+        raise InventoryPositiveV3IndependentValidationError(
+            "source-owned validation protocol lock sidecar mismatch"
+        )
+
+    lock_relative = _PROTOCOL_LOCK_PATH.as_posix()
+    sidecar_relative = _PROTOCOL_LOCK_PATH.with_suffix(".sha256").as_posix()
+    lock_additions = _git(
+        root,
+        "log",
+        "--full-history",
+        "--diff-filter=A",
+        "--format=%H",
+        "--reverse",
+        "--",
+        lock_relative,
+    ).stdout.splitlines()
+    sidecar_additions = _git(
+        root,
+        "log",
+        "--full-history",
+        "--diff-filter=A",
+        "--format=%H",
+        "--reverse",
+        "--",
+        sidecar_relative,
+    ).stdout.splitlines()
+    if len(lock_additions) != 1 or sidecar_additions != lock_additions:
+        raise InventoryPositiveV3IndependentValidationError(
+            "validation protocol lock must have one unambiguous Git introduction"
+        )
+    lock_commit = lock_additions[0]
+    if _git(
+        root,
+        "merge-base",
+        "--is-ancestor",
+        lock_commit,
+        actual_head,
+        allow_failure=True,
+    ).returncode != 0:
+        raise InventoryPositiveV3IndependentValidationError(
+            "validation protocol lock commit is not an ancestor of evaluator HEAD"
+        )
+    if _git_bytes(root, "show", f"{lock_commit}:{lock_relative}").stdout != lock_payload:
+        raise InventoryPositiveV3IndependentValidationError(
+            "validation protocol lock changed after its Git introduction"
+        )
+    if (
+        _git_bytes(root, "show", f"{lock_commit}:{sidecar_relative}").stdout
+        != sidecar_payload
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            "validation protocol lock sidecar changed after its Git introduction"
+        )
+    for path in (lock_relative, sidecar_relative):
+        _reject_post_lock_history(root, lock_commit, actual_head, path)
+
+    _require_exact_keys(
+        lock,
+        {
+            "activation_allowed",
+            "approved_passive_capture",
+            "frozen_candidate_head_sha",
+            "live_validation_authorized",
+            "preregistration_sha256",
+            "protocol",
+            "schema",
+        },
+        "validation protocol lock",
+    )
+    if lock.get("schema") != _PROTOCOL_LOCK_SCHEMA:
+        raise InventoryPositiveV3IndependentValidationError(
+            "unsupported validation protocol lock schema"
+        )
+    if (
+        lock.get("activation_allowed") is not False
+        or lock.get("live_validation_authorized") is not False
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            "validation protocol lock cannot authorize activation or live capture"
+        )
+    if lock.get("frozen_candidate_head_sha") != INVENTORY_POSITIVE_V3_FROZEN_HEAD_SHA:
+        raise InventoryPositiveV3IndependentValidationError(
+            "validation protocol lock rebinds the frozen V3 candidate"
+        )
+    if lock.get("preregistration_sha256") != (
+        INVENTORY_POSITIVE_V3_PREREGISTRATION_SHA256
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            "validation protocol lock preregistration binding changed"
+        )
+
+    protocol = _require_object(lock, "protocol")
+    _require_exact_keys(
+        protocol,
+        {"id", "locked_git_blobs", "source_commit_sha", "version"},
+        "validation protocol",
+    )
+    if protocol.get("id") != _PROTOCOL_ID or protocol.get("version") != (
+        _PROTOCOL_VERSION
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            "validation protocol identity changed"
+        )
+    protocol_source_commit = _require_text(protocol, "source_commit_sha")
+    _require_git_sha(protocol_source_commit, "protocol source commit")
+    if _git(
+        root,
+        "merge-base",
+        "--is-ancestor",
+        INVENTORY_POSITIVE_V3_FROZEN_HEAD_SHA,
+        protocol_source_commit,
+        allow_failure=True,
+    ).returncode != 0:
+        raise InventoryPositiveV3IndependentValidationError(
+            "protocol source commit is not descended from the frozen V3 candidate"
+        )
+    parents = _git(root, "rev-list", "--parents", "-n", "1", lock_commit).stdout.split()
+    if len(parents) != 2 or parents[1] != protocol_source_commit:
+        raise InventoryPositiveV3IndependentValidationError(
+            "protocol lock is not a separate commit immediately after finalized rules"
+        )
+    lock_commit_paths = _git(
+        root,
+        "diff-tree",
+        "--no-commit-id",
+        "--name-only",
+        "-r",
+        lock_commit,
+    ).stdout.splitlines()
+    if tuple(lock_commit_paths) != (lock_relative, sidecar_relative):
+        raise InventoryPositiveV3IndependentValidationError(
+            "protocol lock commit must add only the lock and its sidecar"
+        )
+    locked_blobs = _parse_locked_git_blobs(
+        _require_list(protocol, "locked_git_blobs"),
+        expected_paths=_PROTOCOL_LOCKED_PATHS,
+        label="validation protocol locked_git_blobs",
+    )
+    _verify_bound_git_blobs(
+        root,
+        locked_blobs,
+        source_commit=protocol_source_commit,
+        lock_commit=lock_commit,
+        actual_head=actual_head,
+        label="validation protocol",
+    )
+
+    capture = _require_object(lock, "approved_passive_capture")
+    _require_exact_keys(
+        capture,
+        {"build_sha", "capture_configuration_id", "policy", "source_git_blobs"},
+        "approved passive capture",
+    )
+    capture_build_sha = _require_text(capture, "build_sha")
+    _require_git_sha(capture_build_sha, "approved passive capture build")
+    if capture_build_sha != protocol_source_commit:
+        raise InventoryPositiveV3IndependentValidationError(
+            "approved passive capture build is not the finalized protocol source commit"
+        )
+    if capture.get("capture_configuration_id") != (
+        INVENTORY_POSITIVE_V3_APPROVED_CAPTURE_CONFIGURATION_ID
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            "approved passive capture configuration identity changed"
+        )
+    policy = _require_object(capture, "policy")
+    _require_exact_keys(
+        policy,
+        {
+            "all_owned_captures_retained",
+            "detector_controls_capture_selection",
+            "detector_controls_inclusion",
+            "detector_controls_retry",
+            "detector_controls_stage_advancement",
+            "input_automation_allowed",
+            "inventory_region",
+            "pixel_materialization",
+            "pixel_value_transformation_allowed",
+        },
+        "approved passive capture policy",
+    )
+    expected_policy = _ApprovedPassiveCaptureBinding(
+        build_sha=capture_build_sha,
+        capture_configuration_id=(
+            INVENTORY_POSITIVE_V3_APPROVED_CAPTURE_CONFIGURATION_ID
+        ),
+        source_git_blobs=(),
+    ).to_dict()["policy"]
+    if dict(policy) != expected_policy:
+        raise InventoryPositiveV3IndependentValidationError(
+            "approved passive capture policy is not capture-only and fail-closed"
+        )
+    capture_blobs = _parse_locked_git_blobs(
+        _require_list(capture, "source_git_blobs"),
+        expected_paths=_APPROVED_CAPTURE_SOURCE_PATHS,
+        label="approved passive capture source_git_blobs",
+    )
+    _verify_bound_git_blobs(
+        root,
+        capture_blobs,
+        source_commit=capture_build_sha,
+        lock_commit=lock_commit,
+        actual_head=actual_head,
+        label="approved passive capture",
+    )
+    _reject_post_source_executable_history(
+        root,
+        protocol_source_commit,
+        actual_head,
+    )
+
+    lock_blob = _git(root, "rev-parse", f"{lock_commit}:{lock_relative}").stdout.strip()
+    committed_at = _parse_git_timestamp(
+        _git(root, "show", "-s", "--format=%cI", lock_commit).stdout.strip(),
+        "validation protocol lock Git commit time",
+    )
+    protocol_source_committed_at = _parse_git_timestamp(
+        _git(
+            root,
+            "show",
+            "-s",
+            "--format=%cI",
+            protocol_source_commit,
+        ).stdout.strip(),
+        "validation protocol source Git commit time",
+    )
+    if committed_at <= protocol_source_committed_at:
+        raise InventoryPositiveV3IndependentValidationError(
+            "protocol lock Git time must be later than its source commit"
+        )
+    return _ValidationProtocolLockBinding(
+        lock_git_commit_sha=lock_commit,
+        lock_git_committed_at_utc=(
+            committed_at.isoformat(timespec="seconds").replace("+00:00", "Z")
+        ),
+        lock_git_blob=lock_blob,
+        lock_sha256=lock_sha256,
+        protocol_source_commit_sha=protocol_source_commit,
+        locked_git_blobs=locked_blobs,
+        approved_passive_capture=_ApprovedPassiveCaptureBinding(
+            build_sha=capture_build_sha,
+            capture_configuration_id=(
+                INVENTORY_POSITIVE_V3_APPROVED_CAPTURE_CONFIGURATION_ID
+            ),
+            source_git_blobs=capture_blobs,
+        ),
+        evaluator_head_sha=actual_head,
+        repository_root=root,
+    )
+
+
+def _verify_capture_execution_authorization(
+    protocol_lock: _ValidationProtocolLockBinding,
+    *,
+    capture_execution_head_sha: str,
+    authorization_git_commit_sha: str,
+    authorization_git_blob: str,
+) -> tuple[str, str, str]:
+    """Verify the one post-lock passive-campaign authorization snapshot."""
+
+    root = protocol_lock.repository_root
+    evaluator_head = protocol_lock.evaluator_head_sha
+    for ancestor, descendant, label in (
+        (
+            protocol_lock.lock_git_commit_sha,
+            capture_execution_head_sha,
+            "capture execution HEAD predates the protocol lock",
+        ),
+        (
+            capture_execution_head_sha,
+            evaluator_head,
+            "capture execution HEAD is not an ancestor of evaluator HEAD",
+        ),
+        (
+            protocol_lock.lock_git_commit_sha,
+            authorization_git_commit_sha,
+            "live authorization predates the protocol lock",
+        ),
+        (
+            authorization_git_commit_sha,
+            capture_execution_head_sha,
+            "live authorization is not an ancestor of capture execution HEAD",
+        ),
+    ):
+        if _git(
+            root,
+            "merge-base",
+            "--is-ancestor",
+            ancestor,
+            descendant,
+            allow_failure=True,
+        ).returncode != 0:
+            raise InventoryPositiveV3IndependentValidationError(label)
+
+    relative = _LIVE_AUTHORIZATION_PATH.as_posix()
+    empty_registry = _canonical_bytes(
+        {
+            "activation_allowed": False,
+            "authorizations": [],
+            "schema": _LIVE_AUTHORIZATION_SCHEMA,
+        }
+    )
+    source_payload = _git_bytes(
+        root,
+        "show",
+        f"{protocol_lock.protocol_source_commit_sha}:{relative}",
+    ).stdout
+    if source_payload != empty_registry:
+        raise InventoryPositiveV3IndependentValidationError(
+            "pre-lock live campaign authorization registry was not empty"
+        )
+    execution_payload = _git_bytes(
+        root,
+        "show",
+        f"{capture_execution_head_sha}:{relative}",
+    ).stdout
+    execution_blob = _git(
+        root,
+        "rev-parse",
+        f"{capture_execution_head_sha}:{relative}",
+    ).stdout.strip()
+    if execution_blob != authorization_git_blob:
+        raise InventoryPositiveV3IndependentValidationError(
+            "reported live-authorization Git blob differs from capture HEAD"
+        )
+    touches = _git(
+        root,
+        "log",
+        "--full-history",
+        "--format=%H",
+        (
+            f"{protocol_lock.lock_git_commit_sha}.."
+            f"{capture_execution_head_sha}"
+        ),
+        "--",
+        relative,
+    ).stdout.splitlines()
+    if touches != [authorization_git_commit_sha]:
+        raise InventoryPositiveV3IndependentValidationError(
+            "live authorization must be the sole post-lock registry change"
+        )
+    try:
+        decoded = json.loads(execution_payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise InventoryPositiveV3IndependentValidationError(
+            "live campaign authorization registry is not canonical JSON"
+        ) from exc
+    registry = _require_mapping(decoded, "live campaign authorization registry")
+    if _canonical_bytes(registry) != execution_payload:
+        raise InventoryPositiveV3IndependentValidationError(
+            "live campaign authorization registry is not canonical JSON"
+        )
+    _require_exact_keys(
+        registry,
+        {"activation_allowed", "authorizations", "schema"},
+        "live campaign authorization registry",
+    )
+    if (
+        registry.get("activation_allowed") is not False
+        or registry.get("schema") != _LIVE_AUTHORIZATION_SCHEMA
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            "live campaign authorization registry identity changed"
+        )
+    authorizations = _require_list(registry, "authorizations")
+    expected = {
+        "capture_build_sha": protocol_lock.approved_passive_capture.build_sha,
+        "capture_configuration_id": (
+            protocol_lock.approved_passive_capture.capture_configuration_id
+        ),
+        "protocol_lock_git_commit_sha": protocol_lock.lock_git_commit_sha,
+        "protocol_lock_sha256": protocol_lock.lock_sha256,
+        "status": _LIVE_AUTHORIZATION_STATUS,
+    }
+    if len(authorizations) != 1:
+        raise InventoryPositiveV3IndependentValidationError(
+            "exactly one source-owned live campaign authorization is required"
+        )
+    entry = _require_mapping(authorizations[0], "live campaign authorization 0")
+    _require_exact_keys(
+        entry,
+        set(expected) | {"authorization_id"},
+        "live campaign authorization 0",
+    )
+    authorization_id = _require_nonempty_text(entry, "authorization_id")
+    if len(authorization_id) != 64 or any(
+        character not in "0123456789abcdef" for character in authorization_id
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            "live campaign authorization_id must be 64 lowercase hex characters"
+        )
+    if any(entry.get(key) != value for key, value in expected.items()):
+        raise InventoryPositiveV3IndependentValidationError(
+            "exact source-owned live campaign authorization binding differs"
+        )
+    authorization_time = _parse_git_timestamp(
+        _git(
+            root,
+            "show",
+            "-s",
+            "--format=%cI",
+            authorization_git_commit_sha,
+        ).stdout.strip(),
+        "live campaign authorization Git commit time",
+    )
+    lock_time = _parse_utc(
+        protocol_lock.lock_git_committed_at_utc,
+        "validation protocol lock Git commit time",
+    )
+    if authorization_time <= lock_time:
+        raise InventoryPositiveV3IndependentValidationError(
+            "live campaign authorization must be committed after the protocol lock"
+        )
+    execution_time = _parse_git_timestamp(
+        _git(
+            root,
+            "show",
+            "-s",
+            "--format=%cI",
+            capture_execution_head_sha,
+        ).stdout.strip(),
+        "capture execution HEAD Git commit time",
+    )
+    if execution_time < authorization_time:
+        raise InventoryPositiveV3IndependentValidationError(
+            "capture execution HEAD Git time predates live authorization"
+        )
+    return (
+        authorization_id,
+        authorization_time.isoformat(timespec="seconds").replace("+00:00", "Z"),
+        execution_time.isoformat(timespec="seconds").replace("+00:00", "Z"),
+    )
+
+
+def _parse_locked_git_blobs(
+    values: Sequence[object],
+    *,
+    expected_paths: Sequence[str],
+    label: str,
+) -> tuple[tuple[str, str], ...]:
+    entries: list[tuple[str, str]] = []
+    for index, value in enumerate(values):
+        entry = _require_mapping(value, f"{label}[{index}]")
+        _require_exact_keys(entry, {"git_blob", "path"}, f"{label}[{index}]")
+        path = _require_nonempty_text(entry, "path")
+        blob = _require_text(entry, "git_blob")
+        _require_git_sha(blob, f"{label}[{index}].git_blob")
+        entries.append((path, blob))
+    if tuple(path for path, _blob in entries) != tuple(expected_paths):
+        raise InventoryPositiveV3IndependentValidationError(
+            f"{label} does not contain the exact source-owned path set"
+        )
+    return tuple(entries)
+
+
+def _verify_bound_git_blobs(
+    root: Path,
+    entries: Sequence[tuple[str, str]],
+    *,
+    source_commit: str,
+    lock_commit: str,
+    actual_head: str,
+    label: str,
+) -> None:
+    for path, expected_blob in entries:
+        source_blob = _git(root, "rev-parse", f"{source_commit}:{path}").stdout.strip()
+        head_blob = _git(root, "rev-parse", f"{actual_head}:{path}").stdout.strip()
+        if source_blob != expected_blob or head_blob != expected_blob:
+            raise InventoryPositiveV3IndependentValidationError(
+                f"{label} Git blob changed: {path}"
+            )
+        worktree_path = root.joinpath(*PurePosixPath(path).parts)
+        if (
+            not worktree_path.is_file()
+            or worktree_path.is_symlink()
+            or worktree_path.resolve(strict=True) != worktree_path.absolute()
+            or worktree_path.read_bytes()
+            != _git_bytes(root, "show", f"{actual_head}:{path}").stdout
+        ):
+            raise InventoryPositiveV3IndependentValidationError(
+                f"{label} worktree bytes differ from Git: {path}"
+            )
+        _reject_post_lock_history(root, lock_commit, actual_head, path)
+    _reject_import_competitors(root, tuple(path for path, _blob in entries))
+
+
+def _reject_import_competitors(root: Path, paths: Sequence[str]) -> None:
+    for path in paths:
+        source = root.joinpath(*PurePosixPath(path).parts)
+        if source.suffix != ".py":
+            continue
+        if source.name == "__init__.py":
+            stem = source.parent.name
+            parent = source.parent.parent
+        else:
+            stem = source.stem
+            parent = source.parent
+            if (parent / stem).exists():
+                raise InventoryPositiveV3IndependentValidationError(
+                    f"competing import package exists beside locked source: {path}"
+                )
+        competitors = tuple(
+            candidate
+            for suffix in (".pyd", ".so", ".dll")
+            for candidate in parent.glob(f"{stem}*{suffix}")
+        )
+        if competitors:
+            raise InventoryPositiveV3IndependentValidationError(
+                f"competing native import exists beside locked source: {path}"
+            )
+
+
+def _reject_post_lock_history(
+    root: Path,
+    lock_commit: str,
+    actual_head: str,
+    path: str,
+) -> None:
+    touched = _git(
+        root,
+        "log",
+        "--full-history",
+        "--format=%H",
+        f"{lock_commit}..{actual_head}",
+        "--",
+        path,
+    ).stdout.strip()
+    if touched:
+        raise InventoryPositiveV3IndependentValidationError(
+            f"protocol-bound path changed after lock: {path}"
+        )
+
+
+def _reject_post_source_executable_history(
+    root: Path,
+    source_commit: str,
+    actual_head: str,
+) -> None:
+    touched = _git(
+        root,
+        "log",
+        "--full-history",
+        "--format=%H",
+        f"{source_commit}..{actual_head}",
+        "--",
+        "src/mining_automation",
+        "tools",
+        "pyproject.toml",
+        "setup.py",
+        "setup.cfg",
+        "sitecustomize.py",
+        "usercustomize.py",
+    ).stdout.strip()
+    if touched:
+        raise InventoryPositiveV3IndependentValidationError(
+            "source-owned executable paths changed after the protocol source commit"
+        )
 
 
 def _supported_profile() -> InventoryFrameProfile:
@@ -1377,8 +2331,12 @@ def _verify_repository_preregistration(repository_root: Path) -> str:
 def _load_approved_campaign_binding(
     repository_root: Path,
     dataset: IndependentValidationDataset,
+    evaluator_git_head_sha: str,
 ) -> tuple[_ApprovedCampaignBinding | None, str]:
-    registry, payload, snapshots = _read_approval_registry(repository_root)
+    registry, payload, snapshots = _read_approval_registry(
+        repository_root,
+        evaluator_git_head_sha,
+    )
     digest = _sha256(payload)
     result = _parse_approval_registry(
         _require_list(registry, "entries"),
@@ -1389,8 +2347,14 @@ def _load_approved_campaign_binding(
     return result, digest
 
 
-def _approval_registry_readiness(repository_root: Path) -> dict[str, object]:
-    registry, payload, snapshots = _read_approval_registry(repository_root)
+def _approval_registry_readiness(
+    repository_root: Path,
+    evaluator_git_head_sha: str,
+) -> dict[str, object]:
+    registry, payload, snapshots = _read_approval_registry(
+        repository_root,
+        evaluator_git_head_sha,
+    )
     entries = _require_list(registry, "entries")
     digest = _sha256(payload)
     _parse_approval_registry(entries, None, registry_sha256=digest)
@@ -1404,8 +2368,10 @@ def _approval_registry_readiness(repository_root: Path) -> dict[str, object]:
 
 def _read_approval_registry(
     repository_root: Path,
+    evaluator_git_head_sha: str,
 ) -> tuple[dict[str, object], bytes, list[tuple[Path, bytes]]]:
     root = repository_root.resolve(strict=True)
+    _require_git_sha(evaluator_git_head_sha, "approval evaluator Git HEAD")
     path = _owned_path(
         root,
         _APPROVAL_REGISTRY_PATH.as_posix(),
@@ -1419,6 +2385,43 @@ def _read_approval_registry(
         snapshots,
         owned_root=root,
     )
+    sidecar_path = _owned_path(
+        root,
+        _APPROVAL_REGISTRY_PATH.with_suffix(".json.sha256").as_posix(),
+        "source-owned approved-campaign registry sidecar",
+    )
+    sidecar_payload = _read_bytes(
+        sidecar_path,
+        "source-owned approved-campaign registry sidecar",
+    )
+    snapshots.append((sidecar_path, sidecar_payload))
+    registry_relative = _APPROVAL_REGISTRY_PATH.as_posix()
+    sidecar_relative = _APPROVAL_REGISTRY_PATH.with_suffix(
+        ".json.sha256"
+    ).as_posix()
+    if (
+        _git_bytes(
+            root,
+            "show",
+            f"{evaluator_git_head_sha}:{registry_relative}",
+        ).stdout
+        != payload
+        or _git_bytes(
+            root,
+            "show",
+            f"{evaluator_git_head_sha}:{sidecar_relative}",
+        ).stdout
+        != sidecar_payload
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            "approved-campaign registry differs from exact evaluator HEAD"
+        )
+    digest = _sha256(payload)
+    expected_sidecar = f"{digest}  {path.name}\n".encode("ascii")
+    if sidecar_payload != expected_sidecar:
+        raise InventoryPositiveV3IndependentValidationError(
+            "source-owned approved-campaign registry sidecar mismatch"
+        )
     _require_exact_keys(
         registry,
         {"activation_allowed", "entries", "promotion_allowed", "schema"},
@@ -1456,6 +2459,7 @@ def _parse_approval_registry(
         "package_sha256",
         "reviewer",
         "reviewer_truth_sha256",
+        "source_completion_seal_sha256",
         "source_session_report_sha256",
         "status",
     }
@@ -1504,6 +2508,9 @@ def _parse_approval_registry(
             reviewer_truth_sha256=_require_sha256_text(
                 value, "reviewer_truth_sha256"
             ),
+            source_completion_seal_sha256=_require_sha256_text(
+                value, "source_completion_seal_sha256"
+            ),
             source_session_report_sha256=_require_sha256_text(
                 value, "source_session_report_sha256"
             ),
@@ -1548,6 +2555,9 @@ def _require_approval_matches_dataset(
         "package_sha256": dataset.package_sha256,
         "reviewer": dataset.reviewer,
         "reviewer_truth_sha256": dataset.reviewer_truth_sha256,
+        "source_completion_seal_sha256": (
+            dataset.source_completion_seal_sha256
+        ),
         "source_session_report_sha256": dataset.source_session_report_sha256,
     }
     actual = {
@@ -1558,6 +2568,9 @@ def _require_approval_matches_dataset(
         "package_sha256": approval.package_sha256,
         "reviewer": approval.reviewer,
         "reviewer_truth_sha256": approval.reviewer_truth_sha256,
+        "source_completion_seal_sha256": (
+            approval.source_completion_seal_sha256
+        ),
         "source_session_report_sha256": approval.source_session_report_sha256,
     }
     if actual != expected or approval.registry_sha256 != registry_sha256:
@@ -1584,6 +2597,8 @@ def _parse_dataset(
     review: Mapping[str, object],
     review_sha: str,
     snapshots: list[tuple[Path, bytes]],
+    *,
+    protocol_lock: _ValidationProtocolLockBinding | None,
 ) -> IndependentValidationDataset:
     _require_exact_keys(
         manifest,
@@ -1605,6 +2620,7 @@ def _parse_dataset(
             "schema",
             "selection_policy",
             "session_id",
+            "source_completion_seal",
             "source_session_report",
             "training_allowed",
         },
@@ -1643,7 +2659,8 @@ def _parse_dataset(
             "development dataset cannot masquerade as independent validation"
         )
     environment = _parse_environment(
-        _require_object(manifest, "capture_environment")
+        _require_object(manifest, "capture_environment"),
+        protocol_lock=protocol_lock,
     )
     source_session_ref = _require_object(manifest, "source_session_report")
     _require_exact_keys(
@@ -1675,7 +2692,58 @@ def _parse_dataset(
         session_id=session_id,
         operator=operator,
         environment=environment,
+        root=root,
+        snapshots=snapshots,
     )
+    completion_seal_sha = _parse_source_completion_seal(
+        root,
+        _require_object(manifest, "source_completion_seal"),
+        source_session=source_session,
+        environment=environment,
+        snapshots=snapshots,
+    )
+    if protocol_lock is not None:
+        protocol_locked_at = _parse_utc(
+            protocol_lock.lock_git_committed_at_utc,
+            "validation protocol lock Git commit time",
+        )
+        authorization_committed_at = _parse_utc(
+            environment._live_authorization_git_committed_at_utc,
+            "live campaign authorization Git commit time",
+        )
+        execution_head_committed_at = _parse_utc(
+            environment._capture_execution_head_git_committed_at_utc,
+            "capture execution HEAD Git commit time",
+        )
+        evidence_not_before = max(
+            protocol_locked_at,
+            authorization_committed_at,
+            execution_head_committed_at,
+        )
+        source_started = _parse_utc(
+            source_session.started_at_utc,
+            "source session started_at_utc",
+        )
+        source_capture_times = tuple(
+            _parse_utc(item.captured_at_utc, "source capture captured_at_utc")
+            for item in source_session.captures
+        )
+        if source_started <= protocol_locked_at:
+            raise InventoryPositiveV3IndependentValidationError(
+                "source session must begin after the protocol lock existed in Git"
+            )
+        if any(item <= protocol_locked_at for item in source_capture_times):
+            raise InventoryPositiveV3IndependentValidationError(
+                "pre-protocol-lock evidence cannot be independent validation"
+            )
+        if source_started <= evidence_not_before:
+            raise InventoryPositiveV3IndependentValidationError(
+                "source session must begin after authorization and execution HEAD"
+            )
+        if any(item <= evidence_not_before for item in source_capture_times):
+            raise InventoryPositiveV3IndependentValidationError(
+                "source capture predates authorization or execution HEAD"
+            )
     if campaign_id != _content_bound_campaign_id(session_id):
         raise InventoryPositiveV3IndependentValidationError(
             "campaign_id is not derived from its session and preregistration"
@@ -1793,10 +2861,6 @@ def _parse_dataset(
         raise InventoryPositiveV3IndependentValidationError(
             "capture timestamps must be unique and strictly source ordered"
         )
-    preregistration_effective = _parse_utc(
-        _PREREGISTRATION_EFFECTIVE_AT_UTC,
-        "preregistration effective time",
-    )
     session_started = _parse_utc(
         source_session.started_at_utc,
         "source session started_at_utc",
@@ -1806,14 +2870,6 @@ def _parse_dataset(
         "source session completed_at_utc",
     )
     manifest_finalized = _parse_utc(finalized_at_text, "finalized_at_utc")
-    if session_started <= preregistration_effective:
-        raise InventoryPositiveV3IndependentValidationError(
-            "source session must begin after the preregistration became effective"
-        )
-    if any(item <= preregistration_effective for item in captured_times):
-        raise InventoryPositiveV3IndependentValidationError(
-            "pre-preregistration evidence cannot be independent validation"
-        )
     if not session_started < min(captured_times) <= max(captured_times) < session_completed:
         raise InventoryPositiveV3IndependentValidationError(
             "source session timing does not contain every ordered capture"
@@ -1837,6 +2893,7 @@ def _parse_dataset(
         package_sha256="",
         campaign_manifest_sha256=manifest_sha,
         reviewer_truth_sha256=review_sha,
+        source_completion_seal_sha256=completion_seal_sha,
         source_session_report_sha256=source_session.report_sha256,
         prior_campaigns=prior_campaigns,
         _snapshots=(),
@@ -1845,18 +2902,30 @@ def _parse_dataset(
 
 def _parse_environment(
     value: Mapping[str, object],
+    *,
+    protocol_lock: _ValidationProtocolLockBinding | None,
 ) -> IndependentValidationEnvironment:
     _require_exact_keys(
         value,
         {
             "capture_build_sha",
             "capture_configuration_id",
+            "capture_execution_head_sha",
             "client_mode",
             "frame",
+            "host_reservation_sha256",
+            "live_authorization_id",
+            "live_authorization_git_blob",
+            "live_authorization_git_commit_sha",
+            "protocol_lock_git_commit_sha",
+            "python_isolated_mode",
+            "python_isolated_source_cache",
+            "python_no_site_mode",
             "renderer",
             "runelite_build",
             "theme",
             "window_class",
+            "window_handle",
             "windows_dpi",
             "windows_scaling_percent",
             "windows_version",
@@ -1880,13 +2949,114 @@ def _parse_environment(
         )
     capture_build_sha = _require_text(value, "capture_build_sha")
     _require_git_sha(capture_build_sha, "capture_build_sha")
+    capture_configuration_id = _require_nonempty_text(
+        value, "capture_configuration_id"
+    )
+    capture_execution_head_sha = _require_text(
+        value, "capture_execution_head_sha"
+    )
+    _require_git_sha(capture_execution_head_sha, "capture_execution_head_sha")
+    live_authorization_git_blob = _require_text(
+        value, "live_authorization_git_blob"
+    )
+    _require_git_sha(live_authorization_git_blob, "live_authorization_git_blob")
+    live_authorization_git_commit_sha = _require_text(
+        value, "live_authorization_git_commit_sha"
+    )
+    _require_git_sha(
+        live_authorization_git_commit_sha,
+        "live_authorization_git_commit_sha",
+    )
+    live_authorization_id = _require_nonempty_text(
+        value,
+        "live_authorization_id",
+    )
+    host_reservation_sha256 = _require_sha256_text(
+        value,
+        "host_reservation_sha256",
+    )
+    if value.get("python_isolated_mode") is not True:
+        raise InventoryPositiveV3IndependentValidationError(
+            "capture was not produced through Python isolated mode"
+        )
+    if (
+        value.get("python_no_site_mode") is not True
+        or value.get("python_isolated_source_cache") is not True
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            "capture did not use the locked no-site isolated-source launcher"
+        )
+    protocol_lock_git_commit_sha = _require_text(
+        value, "protocol_lock_git_commit_sha"
+    )
+    _require_git_sha(
+        protocol_lock_git_commit_sha,
+        "protocol_lock_git_commit_sha",
+    )
+    authorization_committed_at_utc = ""
+    if protocol_lock is not None:
+        approved_capture = protocol_lock.approved_passive_capture
+        if capture_build_sha != approved_capture.build_sha:
+            raise InventoryPositiveV3IndependentValidationError(
+                "capture build differs from the source-approved passive build"
+            )
+        if capture_configuration_id != approved_capture.capture_configuration_id:
+            raise InventoryPositiveV3IndependentValidationError(
+                "capture configuration differs from the source-approved identity"
+            )
+        if protocol_lock_git_commit_sha != protocol_lock.lock_git_commit_sha:
+            raise InventoryPositiveV3IndependentValidationError(
+                "capture environment is bound to the wrong protocol lock commit"
+            )
+        (
+            verified_authorization_id,
+            authorization_committed_at_utc,
+            execution_head_committed_at_utc,
+        ) = _verify_capture_execution_authorization(
+            protocol_lock,
+            capture_execution_head_sha=capture_execution_head_sha,
+            authorization_git_commit_sha=live_authorization_git_commit_sha,
+            authorization_git_blob=live_authorization_git_blob,
+        )
+        if live_authorization_id != verified_authorization_id:
+            raise InventoryPositiveV3IndependentValidationError(
+                "capture environment live authorization identity differs from Git"
+            )
+        expected_reservation = {
+            "authorization_id": live_authorization_id,
+            "capture_build_sha": capture_build_sha,
+            "capture_configuration_id": capture_configuration_id,
+            "live_authorization_git_commit_sha": (
+                live_authorization_git_commit_sha
+            ),
+            "protocol_lock_git_commit_sha": protocol_lock.lock_git_commit_sha,
+            "protocol_lock_sha256": protocol_lock.lock_sha256,
+            "repository": _REPOSITORY_ID,
+            "schema": _HOST_RESERVATION_SCHEMA,
+            "status": "reserved-and-irrevocably-consumed",
+        }
+        if host_reservation_sha256 != _sha256(
+            _canonical_bytes(expected_reservation)
+        ):
+            raise InventoryPositiveV3IndependentValidationError(
+                "host reservation identity is not source-derived"
+            )
+    else:
+        execution_head_committed_at_utc = ""
     scaling = _require_positive_int(value, "windows_scaling_percent")
     dpi = _require_positive_int(value, "windows_dpi")
     return IndependentValidationEnvironment(
         capture_build_sha=capture_build_sha,
-        capture_configuration_id=_require_nonempty_text(
-            value, "capture_configuration_id"
-        ),
+        capture_configuration_id=capture_configuration_id,
+        capture_execution_head_sha=capture_execution_head_sha,
+        host_reservation_sha256=host_reservation_sha256,
+        live_authorization_id=live_authorization_id,
+        live_authorization_git_blob=live_authorization_git_blob,
+        live_authorization_git_commit_sha=live_authorization_git_commit_sha,
+        protocol_lock_git_commit_sha=protocol_lock_git_commit_sha,
+        python_isolated_mode=True,
+        python_isolated_source_cache=True,
+        python_no_site_mode=True,
         runelite_build=_require_nonempty_text(value, "runelite_build"),
         windows_version=_require_nonempty_text(value, "windows_version"),
         windows_scaling_percent=scaling,
@@ -1895,6 +3065,13 @@ def _parse_environment(
         theme=_require_nonempty_text(value, "theme"),
         renderer=_require_nonempty_text(value, "renderer"),
         window_class=_require_nonempty_text(value, "window_class"),
+        window_handle=_require_positive_int(value, "window_handle"),
+        _capture_execution_head_git_committed_at_utc=(
+            execution_head_committed_at_utc
+        ),
+        _live_authorization_git_committed_at_utc=(
+            authorization_committed_at_utc
+        ),
     )
 
 
@@ -1906,6 +3083,8 @@ def _parse_source_session(
     session_id: str,
     operator: str,
     environment: IndependentValidationEnvironment,
+    root: Path,
+    snapshots: list[tuple[Path, bytes]],
 ) -> _SourceSessionBinding:
     _require_exact_keys(
         value,
@@ -1917,6 +3096,7 @@ def _parse_source_session(
             "captures",
             "completed_at_utc",
             "operator",
+            "owned_attempts",
             "schema",
             "session_id",
             "started_at_utc",
@@ -1946,14 +3126,38 @@ def _parse_source_session(
         )
     captures: list[_SourceCaptureBinding] = []
     seen: set[str] = set()
-    for index, raw in enumerate(_require_list(value, "captures"), start=1):
+    raw_captures = _require_list(value, "captures")
+    raw_owned_attempts = _require_list(value, "owned_attempts")
+    if len(raw_captures) != len(raw_owned_attempts):
+        raise InventoryPositiveV3IndependentValidationError(
+            "completed source session must bind every owned attempt one-to-one"
+        )
+    for index, (raw, raw_owned) in enumerate(
+        zip(raw_captures, raw_owned_attempts, strict=True),
+        start=1,
+    ):
         item = _require_mapping(raw, f"source session capture {index}")
         _require_exact_keys(
             item,
-            {"capture_id", "captured_at_utc", "capture_report"},
+            {
+                "capture_id",
+                "captured_at_utc",
+                "capture_report",
+                "planned_stage_id",
+                "sequence_index",
+            },
             f"source session capture {index}",
         )
         capture_id = _require_nonempty_text(item, "capture_id")
+        if item.get("sequence_index") != index:
+            raise InventoryPositiveV3IndependentValidationError(
+                "source session sequence indexes must be contiguous"
+            )
+        planned_stage_id = _require_nonempty_text(item, "planned_stage_id")
+        if planned_stage_id not in _REQUIRED_STAGES:
+            raise InventoryPositiveV3IndependentValidationError(
+                f"unsupported source-session stage: {planned_stage_id}"
+            )
         if capture_id in seen:
             raise InventoryPositiveV3IndependentValidationError(
                 f"source session repeats capture id: {capture_id}"
@@ -1965,12 +3169,28 @@ def _parse_source_session(
             {"path", "sha256"},
             f"source capture report ref {capture_id}",
         )
+        owned_frame = _parse_owned_frame_binding(
+            root,
+            raw_owned,
+            index=index,
+            capture_id=capture_id,
+            captured_at_utc=_require_nonempty_text(item, "captured_at_utc"),
+            planned_stage_id=planned_stage_id,
+            session_id=session_id,
+            environment=environment,
+            snapshots=snapshots,
+        )
         captures.append(
             _SourceCaptureBinding(
                 capture_id=capture_id,
                 captured_at_utc=_require_nonempty_text(item, "captured_at_utc"),
+                planned_stage_id=planned_stage_id,
+                sequence_index=index,
                 report_path=_require_nonempty_text(report, "path"),
                 report_sha256=_require_sha256_text(report, "sha256"),
+                owned_full_frame_path=owned_frame[0],
+                owned_full_frame_sha256=owned_frame[1],
+                owned_full_frame_size_bytes=owned_frame[2],
             )
         )
     if not captures:
@@ -1986,6 +3206,218 @@ def _parse_source_session(
         captures=tuple(captures),
         report_sha256=report_sha256,
     )
+
+
+def _parse_owned_frame_binding(
+    root: Path,
+    raw: object,
+    *,
+    index: int,
+    capture_id: str,
+    captured_at_utc: str,
+    planned_stage_id: str,
+    session_id: str,
+    environment: IndependentValidationEnvironment,
+    snapshots: list[tuple[Path, bytes]],
+) -> tuple[str, str, int]:
+    item = _require_mapping(raw, f"owned attempt {index}")
+    _require_exact_keys(
+        item,
+        {
+            "capture_id",
+            "full_frame_attempt",
+            "owned_frame_report",
+            "planned_stage_id",
+            "sequence_index",
+            "status",
+        },
+        f"owned attempt {index}",
+    )
+    if (
+        item.get("capture_id") != capture_id
+        or item.get("planned_stage_id") != planned_stage_id
+        or item.get("sequence_index") != index
+        or item.get("status") != "owned-frame-finalized"
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            "owned attempt differs from its accepted source capture"
+        )
+    report_ref = _require_object(item, "owned_frame_report")
+    _require_exact_keys(
+        report_ref,
+        {"path", "sha256"},
+        f"owned frame report ref {capture_id}",
+    )
+    report_path = _owned_path(
+        root,
+        _require_nonempty_text(report_ref, "path"),
+        f"owned frame report {capture_id}",
+    )
+    report, report_payload = _read_canonical_path(
+        report_path,
+        _OWNED_FRAME_SCHEMA,
+        f"owned frame report {capture_id}",
+        snapshots,
+        owned_root=root,
+    )
+    if _sha256(report_payload) != _require_sha256_text(report_ref, "sha256"):
+        raise InventoryPositiveV3IndependentValidationError(
+            f"owned frame report SHA-256 mismatch: {capture_id}"
+        )
+    _require_exact_keys(
+        report,
+        {
+            "capture_id",
+            "captured_at_utc",
+            "frame",
+            "planned_stage_id",
+            "schema",
+            "sequence_index",
+            "session_id",
+            "status",
+            "window",
+        },
+        f"owned frame report {capture_id}",
+    )
+    if (
+        report.get("capture_id") != capture_id
+        or report.get("captured_at_utc") != captured_at_utc
+        or report.get("planned_stage_id") != planned_stage_id
+        or report.get("sequence_index") != index
+        or report.get("session_id") != session_id
+        or report.get("status") != "captured-unreviewed"
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            f"owned frame identity differs from source session: {capture_id}"
+        )
+    window = _require_object(report, "window")
+    _require_exact_keys(window, {"class", "handle", "windows_dpi"}, "owned window")
+    if (
+        window.get("class") != environment.window_class
+        or window.get("handle") != environment.window_handle
+        or window.get("windows_dpi") != environment.windows_dpi
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            f"owned frame window provenance changed: {capture_id}"
+        )
+    frame = _require_object(report, "frame")
+    _require_exact_keys(
+        frame,
+        {
+            "frame_id",
+            "height",
+            "path",
+            "pixel_format",
+            "sha256",
+            "size_bytes",
+            "width",
+        },
+        f"owned frame {capture_id}",
+    )
+    _require_positive_int(frame, "frame_id")
+    if (
+        frame.get("width") != SUPPORTED_FRAME_WIDTH
+        or frame.get("height") != SUPPORTED_FRAME_HEIGHT
+        or frame.get("pixel_format") != SUPPORTED_PIXEL_FORMAT
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            f"owned frame geometry differs from frozen V3: {capture_id}"
+        )
+    full_path_text = _require_nonempty_text(frame, "path")
+    full_sha = _require_sha256_text(frame, "sha256")
+    full_size = _require_positive_int(frame, "size_bytes")
+    full_attempt = _require_object(item, "full_frame_attempt")
+    _require_exact_keys(
+        full_attempt,
+        {"path", "sha256", "size_bytes"},
+        f"owned raw-frame attempt {capture_id}",
+    )
+    if (
+        full_attempt.get("path") != full_path_text
+        or full_attempt.get("sha256") != full_sha
+        or full_attempt.get("size_bytes") != full_size
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            f"owned raw-frame attempt differs from finalized report: {capture_id}"
+        )
+    full_path = _owned_path(root, full_path_text, f"owned full frame {capture_id}")
+    full_payload = _read_bytes(full_path, f"owned full frame {capture_id}")
+    snapshots.append((full_path, full_payload))
+    if len(full_payload) != full_size or _sha256(full_payload) != full_sha:
+        raise InventoryPositiveV3IndependentValidationError(
+            f"owned full frame bytes differ from their report: {capture_id}"
+        )
+    return full_path_text, full_sha, full_size
+
+
+def _parse_source_completion_seal(
+    root: Path,
+    reference: Mapping[str, object],
+    *,
+    source_session: _SourceSessionBinding,
+    environment: IndependentValidationEnvironment,
+    snapshots: list[tuple[Path, bytes]],
+) -> str:
+    _require_exact_keys(reference, {"path", "sha256"}, "source completion seal ref")
+    path = _owned_path(
+        root,
+        _require_nonempty_text(reference, "path"),
+        "source completion seal",
+    )
+    seal, payload = _read_canonical_path(
+        path,
+        _COMPLETION_SEAL_SCHEMA,
+        "source completion seal",
+        snapshots,
+        owned_root=root,
+    )
+    digest = _sha256(payload)
+    if digest != _require_sha256_text(reference, "sha256"):
+        raise InventoryPositiveV3IndependentValidationError(
+            "source completion seal SHA-256 mismatch"
+        )
+    _require_exact_keys(
+        seal,
+        {
+            "activation_allowed",
+            "authorization_id",
+            "campaign_id",
+            "capture_count",
+            "capture_execution_head_sha",
+            "completed_at_utc",
+            "host_reservation_sha256",
+            "live_authorization_git_commit_sha",
+            "protocol_lock_git_commit_sha",
+            "schema",
+            "session_id",
+            "source_session_report_sha256",
+            "status",
+        },
+        "source completion seal",
+    )
+    if (
+        seal.get("activation_allowed") is not False
+        or seal.get("status") != "complete-not-reviewed"
+        or seal.get("authorization_id") != environment.live_authorization_id
+        or seal.get("campaign_id") != source_session.campaign_id
+        or seal.get("session_id") != source_session.session_id
+        or seal.get("capture_count") != len(source_session.captures)
+        or seal.get("capture_execution_head_sha")
+        != environment.capture_execution_head_sha
+        or seal.get("host_reservation_sha256")
+        != environment.host_reservation_sha256
+        or seal.get("live_authorization_git_commit_sha")
+        != environment.live_authorization_git_commit_sha
+        or seal.get("protocol_lock_git_commit_sha")
+        != environment.protocol_lock_git_commit_sha
+        or seal.get("source_session_report_sha256")
+        != source_session.report_sha256
+        or seal.get("completed_at_utc") != source_session.completed_at_utc
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            "source completion seal is rebound or does not prove completed capture"
+        )
+    return digest
 
 
 def _content_bound_campaign_id(session_id: str) -> str:
@@ -2008,30 +3440,13 @@ def _content_bound_dataset_id(manifest: Mapping[str, object]) -> str:
 
 def _parse_prior_campaigns(
     values: Sequence[object],
-    current_campaign_id: str,
+    _current_campaign_id: str,
 ) -> tuple[Mapping[str, object], ...]:
-    parsed: list[Mapping[str, object]] = []
-    seen: set[str] = set()
-    for index, value in enumerate(values, start=1):
-        item = _require_mapping(value, f"prior campaign {index}")
-        _require_exact_keys(
-            item,
-            {"campaign_id", "manifest_sha256", "status"},
-            f"prior campaign {index}",
+    if values:
+        raise InventoryPositiveV3IndependentValidationError(
+            "protocol v1 permits one irrevocable authorized capture attempt only"
         )
-        campaign_id = _require_text(item, "campaign_id")
-        if campaign_id == current_campaign_id or campaign_id in seen:
-            raise InventoryPositiveV3IndependentValidationError(
-                "prior campaign disclosure has duplicate/current identity"
-            )
-        seen.add(campaign_id)
-        _require_sha256(_require_text(item, "manifest_sha256"), "prior manifest")
-        if item.get("status") not in {"aborted", "failed", "superseded"}:
-            raise InventoryPositiveV3IndependentValidationError(
-                "prior campaign status must disclose an unfinished/failed run"
-            )
-        parsed.append(copy.deepcopy(dict(item)))
-    return tuple(parsed)
+    return ()
 
 
 def _parse_truths(
@@ -2151,7 +3566,7 @@ def _parse_case(
             f"case identity is not owned by its session/capture: {case_id}"
         )
     planned_stage = _require_nonempty_text(value, "planned_stage_id")
-    if planned_stage not in {*_REQUIRED_STAGES, _OPTIONAL_STAGE}:
+    if planned_stage not in _REQUIRED_STAGES:
         raise InventoryPositiveV3IndependentValidationError(
             f"unsupported preregistered stage: {planned_stage}"
         )
@@ -2159,6 +3574,8 @@ def _parse_case(
     if (
         source_capture.capture_id != capture_id
         or source_capture.captured_at_utc != captured_at_utc
+        or source_capture.planned_stage_id != planned_stage
+        or source_capture.sequence_index != position
     ):
         raise InventoryPositiveV3IndependentValidationError(
             f"{case_id} differs from the source-session capture order"
@@ -2208,6 +3625,16 @@ def _parse_case(
         captured_at_utc=captured_at_utc,
         environment=environment,
     )
+    if (
+        source_region.full_frame_path != source_capture.owned_full_frame_path
+        or source_region.full_frame_sha256
+        != source_capture.owned_full_frame_sha256
+        or source_region.full_frame_size_bytes
+        != source_capture.owned_full_frame_size_bytes
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            f"{case_id} accepted capture differs from its first-owned full frame"
+        )
     frame_region = _require_object(value, "frame_region")
     _require_exact_keys(
         frame_region,
@@ -2263,6 +3690,9 @@ def _parse_case(
         frame_region_path=path_text,
         frame_region_sha256=digest,
         frame_region_payload=payload,
+        full_frame_path=source_region.full_frame_path,
+        full_frame_sha256=source_region.full_frame_sha256,
+        full_frame_size_bytes=source_region.full_frame_size_bytes,
         truth=truth,
     )
 
@@ -2280,9 +3710,11 @@ def _parse_source_capture_report(
         value,
         {
             "activation_allowed",
+            "capture_policy",
             "capture_environment",
             "capture_id",
             "captured_at_utc",
+            "full_frame",
             "inventory_region",
             "schema",
             "session_id",
@@ -2309,6 +3741,50 @@ def _parse_source_capture_report(
         raise InventoryPositiveV3IndependentValidationError(
             f"{case_id} source capture environment mismatch"
         )
+    capture_policy = _require_object(value, "capture_policy")
+    _require_exact_keys(
+        capture_policy,
+        {
+            "backend_attempts",
+            "detector_executed",
+            "input_automation_allowed",
+            "pixel_materialization",
+        },
+        f"{case_id} source capture policy",
+    )
+    if dict(capture_policy) != {
+        "backend_attempts": 1,
+        "detector_executed": False,
+        "input_automation_allowed": False,
+        "pixel_materialization": "fixed-bgra-row-slice-only",
+    }:
+        raise InventoryPositiveV3IndependentValidationError(
+            f"{case_id} source capture policy permits result-directed acquisition"
+        )
+    full_frame = _require_object(value, "full_frame")
+    _require_exact_keys(
+        full_frame,
+        {"height", "path", "pixel_format", "sha256", "size_bytes", "width"},
+        f"{case_id} source full frame",
+    )
+    if (
+        full_frame.get("width") != SUPPORTED_FRAME_WIDTH
+        or full_frame.get("height") != SUPPORTED_FRAME_HEIGHT
+        or full_frame.get("pixel_format") != SUPPORTED_PIXEL_FORMAT
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            f"{case_id} source full-frame geometry differs from the frozen profile"
+        )
+    expected_full_size = (
+        SUPPORTED_FRAME_WIDTH
+        * SUPPORTED_FRAME_HEIGHT
+        * PixelFormat.BGRA8888.bytes_per_pixel
+    )
+    full_frame_size = _require_positive_int(full_frame, "size_bytes")
+    if full_frame_size != expected_full_size:
+        raise InventoryPositiveV3IndependentValidationError(
+            f"{case_id} source full-frame size differs from the frozen profile"
+        )
     region = _require_object(value, "inventory_region")
     _require_exact_keys(
         region,
@@ -2333,10 +3809,65 @@ def _parse_source_capture_report(
         path=_require_nonempty_text(region, "path"),
         sha256=_require_sha256_text(region, "sha256"),
         size_bytes=size_bytes,
+        full_frame_path=_require_nonempty_text(full_frame, "path"),
+        full_frame_sha256=_require_sha256_text(full_frame, "sha256"),
+        full_frame_size_bytes=full_frame_size,
     )
 
 
+def _fixed_inventory_region_from_full_frame(payload: bytes) -> bytes:
+    expected = (
+        SUPPORTED_FRAME_WIDTH
+        * SUPPORTED_FRAME_HEIGHT
+        * PixelFormat.BGRA8888.bytes_per_pixel
+    )
+    if len(payload) != expected:
+        raise InventoryPositiveV3IndependentValidationError(
+            "full frame cannot be cropped outside the frozen capture geometry"
+        )
+    x, y, width, height = SUPPORTED_REGION
+    bytes_per_pixel = PixelFormat.BGRA8888.bytes_per_pixel
+    source_stride = SUPPORTED_FRAME_WIDTH * bytes_per_pixel
+    row_size = width * bytes_per_pixel
+    result = bytearray(row_size * height)
+    for row in range(height):
+        source_start = (y + row) * source_stride + x * bytes_per_pixel
+        destination_start = row * row_size
+        result[destination_start : destination_start + row_size] = payload[
+            source_start : source_start + row_size
+        ]
+    return bytes(result)
+
+
+def _read_case_full_frame(
+    package_root: Path,
+    case: IndependentValidationCase,
+    snapshots: list[tuple[Path, bytes]],
+) -> bytes:
+    path = _owned_path(
+        package_root,
+        case.full_frame_path,
+        f"{case.case_id} source full frame",
+    )
+    payload = _read_bytes(path, f"{case.case_id} source full frame")
+    snapshots.append((path, payload))
+    if (
+        len(payload) != case.full_frame_size_bytes
+        or _sha256(payload) != case.full_frame_sha256
+    ):
+        raise InventoryPositiveV3IndependentValidationError(
+            f"{case.case_id} source full-frame integrity mismatch"
+        )
+    return payload
+
+
 def _validate_stage_matrix(cases: tuple[IndependentValidationCase, ...]) -> None:
+    actual_stages = tuple(item.planned_stage_id for item in cases)
+    if actual_stages != _REQUIRED_STAGES:
+        raise InventoryPositiveV3IndependentValidationError(
+            "independent campaign must contain exactly the seven preregistered "
+            "stages in source order"
+        )
     stage_positions: dict[str, int] = {}
     for position, item in enumerate(cases):
         if item.planned_stage_id in _REQUIRED_STAGES:
@@ -2781,6 +4312,22 @@ def _parse_utc(value: str, label: str) -> datetime:
             f"{label} must be UTC"
         )
     return parsed
+
+
+def _parse_git_timestamp(value: str, label: str) -> datetime:
+    """Parse Git's strict ISO timestamp and normalize it to canonical UTC."""
+
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise InventoryPositiveV3IndependentValidationError(
+            f"{label} is not a strict ISO-8601 timestamp"
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise InventoryPositiveV3IndependentValidationError(
+            f"{label} must include an explicit UTC offset"
+        )
+    return parsed.astimezone(UTC)
 
 
 def _require_mapping(value: object, label: str) -> dict[str, object]:

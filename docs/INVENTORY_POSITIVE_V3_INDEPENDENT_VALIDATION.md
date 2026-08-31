@@ -79,7 +79,7 @@ envelope.
 
 The source-owned preregistration is
 `validation/inventory-positive-v3/preregistration.json`, with SHA-256
-`9cd485f6b095018763ea481144ea183e089d670148ed7a79d3c11126a9736518`.
+`47db5a775095b7828e1c10d19949519002d5c7540eaf8d3c18e0eb3154bd9130`.
 It binds the candidate, evidence roles, sequence, environment fields,
 all-captures selection rule, and model firewall before any independent campaign
 pixel exists.
@@ -89,8 +89,10 @@ The campaign contract is fixed in advance:
 - one natural-fill session;
 - every completed capture owned by the campaign is retained and evaluated in
   source order, with no result-based dropping or replacement;
-- an aborted or restarted attempt receives a new campaign ID and the prior
-  campaign is disclosed;
+- one source-owned authorization ID reserves exactly one fixed private campaign
+  directory and one OS-known, host-global protocol-lock reservation; an
+  aborted/rejected attempt consumes protocol v1. Another attempt requires a
+  new reviewed protocol version and lock, not merely another authorization ID;
 - operator stage labels are acquisition notes only and are unverified;
 - the finalized manifest records the operator identity;
 - truth is supplied after session completion through a separate review record
@@ -101,6 +103,40 @@ The campaign contract is fixed in advance:
 Changing the plan after seeing pixels invalidates independence. A new plan and
 new campaign would require explicit lead review; it cannot retroactively repair
 the observed campaign.
+
+## Immutable protocol and capture-source lock
+
+Preregistration eligibility is derived from Git history, never from a manually
+typed effective date. The evaluator and passive producer require a canonical
+`validation/inventory-positive-v3/protocol-lock.json` plus SHA-256 sidecar.
+The lock is introduced in its own commit immediately after the finalized
+protocol-source commit. That lock-only commit may add exactly those two files.
+It binds the exact Git blobs for the evaluator, evaluator CLI/tool,
+preregistration and sidecar, plus the complete passive capture closure and its
+fixed policy.
+
+The verified history must be complete. Any later commit that touches a locked
+path is rejected, including a change followed by a byte-identical revert on a
+linear or merged side branch. A docs/tests-only descendant may remain
+evaluable. The protocol-source commit must descend from the frozen V3 head, and
+the lock commit time must be strictly later than the source commit time.
+
+This P-then-L design intentionally preserves exact Git object identity. PR #37
+must be merged with ordinary history-preserving merge semantics. Squash,
+rebase, or cherry-pick changes those identities and requires a fresh reviewed
+protocol lock before any campaign. Full Git history is required in CI and on
+the capture/evaluation machine.
+
+The lock itself keeps `live_validation_authorized=false`. A separate mutable,
+source-owned registry at
+`validation/inventory-positive-v3/live-campaign-authorizations.json` begins
+canonical-empty in the protocol-source commit. The official capture command
+requires exactly one later Git change containing one exact authorization bound
+to the lock hash/commit, approved capture source commit, and capture
+configuration. That authorization includes a 256-bit source-owned ID, and the
+registry must contain that one entry only. Until that separately reviewed change exists, the command fails
+before creating an output directory or Windows backend. Actor-name fields are
+process assertions, not authentication or runtime authority.
 
 ## Durable independent evidence package
 
@@ -113,8 +149,10 @@ directory. A finalized package has three separately hashed evidence records:
    `training_allowed=false`, `prototype_eligible=false`, and
    `activation_allowed=false`.
 2. The campaign manifest binds a unique dataset ID, campaign ID, source session,
+   source completion seal,
    exact frozen candidate head, complete capture order, environment provenance,
-   prior attempts, and every owned case and artifact hash.
+   a mandatory empty prior-attempt list for this one-shot protocol, and every
+   owned case and artifact hash.
 3. The reviewer-truth record is created separately, identifies an independent
    reviewer, is bound to the finalized campaign-manifest SHA-256, and supplies
    the truth used for evaluation.
@@ -123,26 +161,40 @@ Those records can prove detector conformance, but cannot self-approve their own
 independence. A fourth, source-owned authority lives at
 `validation/inventory-positive-v3/approved-campaigns.json`. A lead-reviewed
 registry entry must bind the exact package, campaign manifest, reviewer truth,
-source session, campaign, and dataset hashes or IDs. Operator, reviewer, and
+source session, completion seal, campaign, and dataset hashes or IDs. Operator, reviewer, and
 approver identities must be pairwise distinct. The initially empty registry has
 SHA-256
 `a2bc8cb0fa829fddb9a8fe672d1fa93b835ae57e5d037bba880dfbb96f3fd4ad`.
 Dataset-local approval claims have no authority.
 
 Durable session provenance includes its session and campaign IDs, start and end
-UTC timestamps, operator identity, source-session report SHA-256, capture
-configuration identity, capture build SHA, RuneLite build, Windows
-version/scaling/DPI, client mode, theme, renderer, window class, frame geometry,
-pixel format, and profile ID. The campaign manifest records a finalization time
-after session completion; review must occur after finalization.
+UTC timestamps, operator identity, source-session report SHA-256, immutable
+capture-source commit, exact capture execution HEAD, capture configuration,
+protocol-lock commit, live-authorization commit/blob, source-derived host
+reservation SHA-256, Python isolated/no-site mode and isolated source-cache
+proof, RuneLite build, Windows
+version/scaling/DPI, client mode, theme, renderer, window class and stable HWND,
+frame geometry, pixel format, and profile ID. Session start and every capture
+must be strictly later than the Git times of the lock, authorization, and exact
+execution HEAD. The campaign manifest records a finalization time after session
+completion; review must occur after finalization.
 
 Durable capture provenance includes its unique capture and case IDs, capture
 UTC timestamp, planned stage, unverified operator label, source capture-report
-path and SHA-256, sanitized inventory-region path and SHA-256, and its position
-in the immutable session order. The canonical source capture report binds that
-region to the exact session, capture time, and environment. All canonical JSON
-documents and evidence artifacts are read as immutable byte snapshots during
-evaluation and checked again before the report is accepted.
+path and SHA-256, private full-frame path/hash/size, fixed inventory-region
+path/hash/size, and its position in the immutable session order. The region is
+only an exact BGRA row slice `(567, 569, 158, 248)` from the retained 1005x1078
+full frame; pixel values are never transformed. Every successful session also
+binds the exact first-owned frame reports one-to-one with its accepted captures.
+Only after final repository and authorization checks pass does the producer
+write a canonical completion seal; the evaluator rejects packages without that
+seal. Failed/rejected sessions instead receive a terminal retained-evidence
+record and are structurally ineligible. Evaluation independently
+rehashes the full frame and recomputes that crop. Every canonical source report
+has an adjacent sidecar. Full frames remain under the ignored private
+`diagnostics/inventory-positive-v3-independent-source/` tree and must never be
+committed. All canonical documents and evidence artifacts are read as immutable
+byte snapshots and checked again before a report is accepted.
 
 ## Contamination firewall
 
@@ -191,10 +243,11 @@ Required negative evidence follows the positive sequence:
 - `row-obstruction` must independently review as inventory obstructed with no
   count and must evaluate to UNKNOWN.
 
-Optional separately identified unsupported evidence may cover hover, drag,
-selected-item, quantity text, gapped inventory, unexpected foreign items, or
-another unexpected presentation. Unsupported or ambiguous cases must remain
-UNKNOWN with zero confidence and no action authority.
+The protocol accepts exactly these seven captures and no optional stage. If the
+reviewer observes hover, drag, selected-item, quantity text, gapped inventory,
+an unexpected foreign item, or another unsupported presentation in a fixed
+capture, that capture must remain UNKNOWN with zero action authority; it cannot
+be replaced or supplemented after the fact.
 
 ## Reviewer truth is not an operator label
 
@@ -219,8 +272,12 @@ independent-validation pass without the source-owned approval-registry entry.
 
 ## Deterministic readiness and evaluation artifacts
 
-The thin CLI is `tools/inventory_v3_independent_validation.py`. Both commands
-require an exact clean evaluator head. Output directories must be new. Reports
+The convenience tool is `tools/inventory_v3_independent_validation.py`. The
+official provenance commands use the locked direct launcher under Python
+isolated/no-site mode. Before importing project code, that launcher verifies
+the exact source closure against Git, rejects links and competing source/native
+imports, and redirects bytecode to an isolated cache. Both commands require an
+exact clean evaluator head. Output directories must be new. Reports
 are canonical, sorted JSON with LF line endings and adjacent `.sha256`
 sidecars.
 
@@ -236,23 +293,47 @@ replacement bytes are preserved and the run fails closed.
 Prepare the offline readiness bundle and templates with:
 
 ```powershell
-python tools/inventory_v3_independent_validation.py prepare --output diagnostics/inventory-positive-v3-independent-readiness/<exact-head> --expected-head <exact-clean-evaluator-head>
+python -I -S tools/inventory_v3_independent_validation.py prepare --output diagnostics/inventory-positive-v3-independent-readiness/<exact-head> --expected-head <exact-clean-evaluator-head>
 ```
 
 This writes the deterministic preregistration copy, campaign-manifest template,
-source-session and capture templates, reviewer-truth template, approval-entry
-template, validation-package template, readiness report, and a SHA-256 sidecar
-for each. The approval template is a review aid only; a dataset-local copy
+source-session, source-completion-seal, and capture templates, reviewer-truth template, approval-entry
+template, passive-capture command template, validation-package template,
+readiness report, and a SHA-256 sidecar for each. Template records target the
+v2 package/dataset/source-session/source-capture schemas. The approval template
+is a review aid only; a dataset-local copy
 cannot replace a committed source-owned registry entry. Readiness reports zero live cases,
 `campaign_execution_authorized=false`, `activation_allowed=false`, and deny-only
 action authority. Running `prepare` does not capture anything and does not
 authorize the future campaign.
 
+The future source-owned capture entry point is:
+
+```powershell
+python -I -S tools/capture_inventory_v3_independent.py --operator <identity> --runelite-build <build> --client-mode <mode> --theme <theme> --renderer <renderer>
+```
+
+It exposes environment assertions
+only; stage order, retry count, title selection, crop, build/configuration,
+output root, backend, clock, prompts, and detector behavior are not caller-overridable. It
+runs no detector and sends no RuneLite input. It captures one frame for each
+fixed stage and retains every successful owned frame before envelope checks.
+An interrupted or rejected attempt is retained as private evidence under its
+authorization-owned directory and cannot be retried with the same authorization;
+the protocol-lock reservation also prevents substituting a new authorization ID
+on the same host. There is no outcome-directed resume/drop operation. Any second
+attempt requires a newly reviewed protocol version and lock.
+
+**LIVE VALIDATION NOT YET AUTHORIZED.** The checked-in authorization registry
+is empty, so invoking the capture command now fails closed with zero captures
+and no output. No RuneLite/account/bank/item/tab/camera interaction is part of
+this readiness work.
+
 Only after a separately authorized passive campaign has been completed,
 finalized, and independently reviewed, evaluate its immutable package with:
 
 ```powershell
-python tools/inventory_v3_independent_validation.py evaluate --dataset <finalized-independent-package-directory> --output diagnostics/inventory-positive-v3-independent-results/<exact-head> --expected-head <exact-clean-evaluator-head>
+python -I -S tools/inventory_v3_independent_validation.py evaluate --dataset <finalized-independent-package-directory> --output diagnostics/inventory-positive-v3-independent-results/<exact-head> --expected-head <exact-clean-evaluator-head>
 ```
 
 Evaluation writes

@@ -1,5 +1,6 @@
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
 *.egg-info/
 
 .venv/
@@ -18,3 +19,4 @@ htmlcov/
 /diagnostics/inventory-fixture-dev*/
 /diagnostics/inventory-positive-v3-independent-readiness/
 /diagnostics/inventory-positive-v3-independent-results/
+/diagnostics/inventory-positive-v3-independent-source/

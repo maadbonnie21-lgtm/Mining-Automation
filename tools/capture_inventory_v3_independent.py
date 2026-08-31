@@ -1,4 +1,4 @@
-"""Hardened stdlib bootstrap for frozen Inventory V3 validation."""
+"""Hardened stdlib bootstrap for the locked passive Inventory V3 campaign."""
 
 from __future__ import annotations
 
@@ -7,38 +7,10 @@ import sys
 import tempfile
 from pathlib import Path, PurePosixPath
 
-_VALIDATION_SOURCE_PATHS = (
+_CAPTURE_SOURCE_PATHS = (
     ".gitattributes",
-    "src/mining_automation/__init__.py",
-    "src/mining_automation/capture/windows/bmp.py",
-    "src/mining_automation/perception/__init__.py",
-    "src/mining_automation/perception/detector.py",
-    "src/mining_automation/perception/errors.py",
-    "src/mining_automation/perception/evaluation.py",
-    "src/mining_automation/perception/inventory/__init__.py",
-    "src/mining_automation/perception/inventory/adapter.py",
-    "src/mining_automation/perception/inventory/classification.py",
-    "src/mining_automation/perception/inventory/configuration.py",
-    "src/mining_automation/perception/inventory/detector.py",
-    "src/mining_automation/perception/inventory/fixture_preparation.py",
-    "src/mining_automation/perception/inventory/geometry.py",
-    "src/mining_automation/perception/inventory/live_validation.py",
-    "src/mining_automation/perception/inventory/live_validation_session.py",
-    "src/mining_automation/perception/inventory/localization.py",
-    "src/mining_automation/perception/inventory/positive_classifier_v2.py",
-    "src/mining_automation/perception/inventory/positive_classifier_v3.py",
-    "src/mining_automation/perception/inventory/positive_v2_calibration.py",
-    "src/mining_automation/perception/inventory/positive_v2_evaluation.py",
-    "src/mining_automation/perception/inventory/positive_v3_independent_validation.py",
-    "src/mining_automation/perception/inventory/positive_v3_independent_validation_cli.py",
-    "src/mining_automation/perception/inventory/positive_v3_prototypes.py",
-    "src/mining_automation/perception/inventory/review_gate.py",
-    "src/mining_automation/perception/inventory/sanitized_replay.py",
-    "src/mining_automation/perception/replay.py",
-    "tools/inventory_v3_independent_validation.py",
-    "validation/inventory-positive-v3/preregistration.json",
-    "validation/inventory-positive-v3/preregistration.sha256",
     ".gitignore",
+    "src/mining_automation/__init__.py",
     "src/mining_automation/capture/__init__.py",
     "src/mining_automation/capture/backend.py",
     "src/mining_automation/capture/errors.py",
@@ -58,7 +30,7 @@ _VALIDATION_SOURCE_PATHS = (
     "src/mining_automation/validation/inventory_v3_capture_cli.py",
     "tools/capture_inventory_v3_independent.py",
 )
-_EXPECTED_LAUNCHER = PurePosixPath("tools/inventory_v3_independent_validation.py")
+_EXPECTED_LAUNCHER = PurePosixPath("tools/capture_inventory_v3_independent.py")
 _NATIVE_SUFFIXES = frozenset({".dll", ".pyd", ".so"})
 _SOURCELESS_SUFFIXES = frozenset({".pyc", ".pyo"})
 _ALLOWED_SOURCE_ROOT_NAMES = frozenset({"__pycache__", "mining_automation"})
@@ -107,7 +79,7 @@ def _reject_git_history_overrides(root: Path) -> None:
         raise _BootstrapError("Git returned non-text replacement-ref evidence")
     if replacements.strip():
         raise _BootstrapError(
-            "Git replacement refs are forbidden before validation imports"
+            "Git replacement refs are forbidden before capture imports"
         )
     grafts_text = _git(root, "rev-parse", "--git-path", "info/grafts")
     if not isinstance(grafts_text, str):  # pragma: no cover - binary=False
@@ -121,7 +93,7 @@ def _reject_git_history_overrides(root: Path) -> None:
         raise _BootstrapError("cannot inspect the legacy Git grafts file") from exc
     if nonempty_grafts:
         raise _BootstrapError(
-            "nonempty legacy Git grafts are forbidden before validation imports"
+            "nonempty legacy Git grafts are forbidden before capture imports"
         )
 
 
@@ -149,7 +121,7 @@ def _reject_competing_imports(source_root: Path) -> None:
             and "__pycache__" not in path.parts
         ):
             raise _BootstrapError("source import tree contains a sourceless competitor")
-    for relative in _VALIDATION_SOURCE_PATHS:
+    for relative in _CAPTURE_SOURCE_PATHS:
         source = source_root.parent.joinpath(*PurePosixPath(relative).parts)
         if source.suffix == ".py" and source.name != "__init__.py":
             if (source.parent / source.stem).exists():
@@ -163,28 +135,28 @@ def _verify_preimport_source(launcher_file: Path) -> tuple[Path, Path, str]:
     repository_root = launcher.parents[1]
     expected_launcher = repository_root.joinpath(*_EXPECTED_LAUNCHER.parts)
     if launcher != expected_launcher.resolve(strict=True):
-        raise _BootstrapError("validation launcher path differs from its fixed identity")
+        raise _BootstrapError("capture launcher path differs from its fixed identity")
     actual_root_text = _git(repository_root, "rev-parse", "--show-toplevel")
     if not isinstance(actual_root_text, str):  # pragma: no cover - binary=False
         raise _BootstrapError("Git returned non-text repository identity")
     actual_root = Path(actual_root_text.strip()).resolve(strict=True)
     if actual_root != repository_root:
-        raise _BootstrapError("validation launcher is not in the exact Git worktree root")
+        raise _BootstrapError("capture launcher is not in the exact Git worktree root")
     _reject_git_history_overrides(repository_root)
     head_text = _git(repository_root, "rev-parse", "HEAD")
     if not isinstance(head_text, str):  # pragma: no cover - binary=False
         raise _BootstrapError("Git returned non-text HEAD identity")
     head = head_text.strip()
     if len(head) != 40 or any(character not in "0123456789abcdef" for character in head):
-        raise _BootstrapError("validation launcher HEAD is not a full lowercase Git SHA")
-    for relative in _VALIDATION_SOURCE_PATHS:
+        raise _BootstrapError("capture launcher HEAD is not a full lowercase Git SHA")
+    for relative in _CAPTURE_SOURCE_PATHS:
         path = _unredirected_file(repository_root, relative)
         committed = _git(repository_root, "show", f"{head}:{relative}", binary=True)
         if not isinstance(committed, bytes):  # pragma: no cover - binary=True
             raise _BootstrapError("Git returned non-binary source bytes")
         if path.read_bytes() != committed:
             raise _BootstrapError(
-                f"worktree bytes differ from validation HEAD before import: {relative}"
+                f"worktree bytes differ from capture HEAD before import: {relative}"
             )
     source_root = repository_root / "src"
     _reject_competing_imports(source_root)
@@ -206,7 +178,7 @@ def _is_direct_launcher(launcher: Path, argv_zero: str, main_file: object) -> bo
 def main() -> int:
     if not sys.flags.isolated or not sys.flags.no_site:
         print(
-            "Inventory V3 validation requires the locked Python -I -S launcher.",
+            "Inventory V3 capture requires the locked Python -I -S launcher.",
             file=sys.stderr,
         )
         return 2
@@ -214,23 +186,25 @@ def main() -> int:
     main_file = getattr(sys.modules.get("__main__"), "__file__", None)
     if not _is_direct_launcher(launcher, sys.argv[0], main_file):
         print(
-            "Inventory V3 validation requires direct execution of the locked launcher.",
+            "Inventory V3 capture requires direct execution of the locked launcher.",
             file=sys.stderr,
         )
         return 2
     try:
         _repository_root, source_root, _head = _verify_preimport_source(launcher)
     except (OSError, _BootstrapError) as exc:
-        print(f"Inventory V3 validation bootstrap rejected: {exc}", file=sys.stderr)
+        print(f"Inventory V3 capture bootstrap rejected: {exc}", file=sys.stderr)
         return 2
-    cache = tempfile.mkdtemp(prefix="inventory-v3-validation-cache-")
+    cache = tempfile.mkdtemp(prefix="inventory-v3-capture-cache-")
     sys.pycache_prefix = cache
     sys.path.insert(0, str(source_root))
-    from mining_automation.perception.inventory.positive_v3_independent_validation_cli import (
-        main as validation_main,
+    from mining_automation.validation.inventory_v3_capture_cli import (
+        main as capture_main,
     )
 
-    return validation_main()
+    # The private cache is intentionally not cleaned up after capture_main:
+    # no fallible filesystem operation may follow a finalized completion seal.
+    return capture_main()
 
 
 if __name__ == "__main__":
