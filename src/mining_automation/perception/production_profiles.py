@@ -176,16 +176,21 @@ def build_varrock_east_iron_detector() -> ProfiledResourceDetector:
 
 def trust_varrock_east_iron_observations(
     observations: Sequence[Observation],
+    *,
+    current_frame: FrameRef,
 ) -> ProductionResourceTrustResult:
     """Validate one complete production detector ensemble without overrides.
 
     The generic resource adapters intentionally remain useful for diagnostics.
     This separate boundary is the controller-preparation contract: it accepts
     only the exact source-owned detector/profile/schema/location/resource
-    identity, one complete four-resource ensemble, and one identical frame.
+    identity, one complete four-resource ensemble, one internally identical
+    frame, and exact equality with the source-owned current capture identity.
     Any counterexample fails closed to zero states and zero actionable targets.
     """
 
+    if not isinstance(current_frame, FrameRef):
+        return _reject_resource_ensemble("malformed_current_frame_ref")
     if not isinstance(observations, Sequence) or isinstance(
         observations, (str, bytes, bytearray)
     ):
@@ -236,6 +241,8 @@ def trust_varrock_east_iron_observations(
             return _reject_resource_ensemble("duplicate_resource_id")
         by_resource_id[resource_id] = observation
 
+    if first_frame != current_frame:
+        return _reject_resource_ensemble("stale_resource_ensemble")
     if set(by_resource_id) != set(VARROCK_EAST_IRON_RESOURCE_IDS):
         return _reject_resource_ensemble("incomplete_resource_identity_set")
 

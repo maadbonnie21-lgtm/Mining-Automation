@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from mining_automation.contracts import Observation
+from mining_automation.contracts import FrameRef, Observation
 from mining_automation.perception import (
     RESOURCE_PROFILE_SCHEMA_VERSION,
     VARROCK_EAST_IRON_DETECTOR_ID,
@@ -18,7 +18,9 @@ from mining_automation.perception import (
     load_resource_detector_profile,
     materialize_gzip_replay_dataset,
     resource_states_from_observations,
-    trust_varrock_east_iron_observations,
+)
+from mining_automation.perception import (
+    trust_varrock_east_iron_observations as _production_trust,
 )
 
 _FIXTURE_ROOT = (
@@ -27,6 +29,32 @@ _FIXTURE_ROOT = (
     / "perception"
     / "varrock-east-iron-v1"
 )
+_DEFAULT_CURRENT_FRAME = FrameRef(
+    frame_id=1,
+    captured_monotonic_s=0.0,
+    width=1005,
+    height=1078,
+)
+
+
+def trust_varrock_east_iron_observations(
+    observations: Any,
+    *,
+    current_frame: FrameRef | None = None,
+):
+    """Keep counterexample setup concise while always supplying current identity."""
+
+    if current_frame is None and isinstance(observations, (tuple, list)):
+        first = next(
+            (item for item in observations if isinstance(item, Observation)),
+            None,
+        )
+        if first is not None and isinstance(first.frame, FrameRef):
+            current_frame = first.frame
+    return _production_trust(
+        observations,
+        current_frame=current_frame or _DEFAULT_CURRENT_FRAME,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -83,6 +111,67 @@ def test_exact_production_ensemble_is_trusted_in_source_owned_order(
         VARROCK_EAST_IRON_RESOURCE_IDS
     )
     assert all(target.interaction_region is not None for target in result.actionable_targets)
+
+
+def test_exact_current_frame_is_required_for_acceptance(
+    production_cases: dict[str, tuple[Observation, ...]],
+) -> None:
+    observations = production_cases["available-01"]
+
+    result = _production_trust(
+        observations,
+        current_frame=observations[0].frame,
+    )
+
+    assert result.accepted is True
+    assert result.frame == observations[0].frame
+    assert len(result.actionable_targets) == 4
+
+
+def test_current_frame_argument_cannot_be_omitted(
+    production_cases: dict[str, tuple[Observation, ...]],
+) -> None:
+    observations = production_cases["available-01"]
+
+    with pytest.raises(TypeError, match="current_frame"):
+        cast(Any, _production_trust)(observations)
+
+
+def test_self_consistent_previous_frame_is_rejected_as_stale(
+    production_cases: dict[str, tuple[Observation, ...]],
+) -> None:
+    observations = production_cases["available-01"]
+    current_frame = replace(
+        observations[0].frame,
+        frame_id=observations[0].frame.frame_id + 1,
+        captured_monotonic_s=observations[0].frame.captured_monotonic_s + 1.0,
+    )
+
+    result = _production_trust(observations, current_frame=current_frame)
+
+    assert result.accepted is False
+    assert result.reason == "stale_resource_ensemble"
+    assert result.frame is None
+    assert result.resources == ()
+    assert result.actionable_targets == ()
+
+
+def test_same_id_and_geometry_with_different_capture_time_is_stale(
+    production_cases: dict[str, tuple[Observation, ...]],
+) -> None:
+    observations = production_cases["available-01"]
+    current_frame = replace(
+        observations[0].frame,
+        captured_monotonic_s=observations[0].frame.captured_monotonic_s + 0.001,
+    )
+
+    result = _production_trust(observations, current_frame=current_frame)
+
+    assert result.accepted is False
+    assert result.reason == "stale_resource_ensemble"
+    assert result.frame is None
+    assert result.resources == ()
+    assert result.actionable_targets == ()
 
 
 def test_only_available_states_survive_as_actionable_targets(

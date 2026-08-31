@@ -38,8 +38,11 @@ runtime or CLI overrides. It requires the exact
 `profiled-resource:varrock-east-iron-v1@2.1.0` detector identity, schema v3,
 `varrock-east-iron-v1` profile, `varrock-east-mine` location, all four expected
 resource IDs exactly once, and one identical `FrameRef`. Any incomplete, mixed,
-malformed, or identity-mismatched ensemble returns zero resource states and zero
-actionable targets. In an accepted complete ensemble, only an **available**
+malformed, stale, or identity-mismatched ensemble returns zero resource states
+and zero actionable targets. The caller must supply the source-owned current
+capture `FrameRef`; all four observations must equal that exact identity. This
+uses no inferred age threshold or configurable freshness window. In an accepted
+complete ensemble, only an **available**
 resource with its exact packaged frame-local candidate region is actionable;
 depleted and uncertain resources never expose interaction regions. This is a
 typed contract for later controller work, not WorldState or controller activation.
