@@ -170,6 +170,10 @@ def test_cleanup_preserves_a_concurrent_same_path_replacement(tmp_path: Path) ->
     owned_records: list[cli._OwnedArtifact] = []
     cli._write_text_and_sidecar(output, target.name, "owned\n", owned_records)
 
+    # The production path keeps an identity handle open, which prevents this
+    # replacement on Windows and prevents inode reuse on POSIX.  Closing this
+    # one handle forces the adverse fallback case deterministically on both.
+    next(record for record in owned_records if record.path == target).close()
     target.unlink()
     target.write_bytes(b"foreign-winner")
     cli._remove_owned_output(output, owned_records)
@@ -177,6 +181,20 @@ def test_cleanup_preserves_a_concurrent_same_path_replacement(tmp_path: Path) ->
     assert target.read_bytes() == b"foreign-winner"
     assert not target.with_suffix(".json.sha256").exists()
     assert output.is_dir()
+
+
+def test_cleanup_removes_an_owned_incomplete_write(tmp_path: Path) -> None:
+    output = tmp_path / "owned-output"
+    output.mkdir()
+    target = output / "partial.json"
+    handle = target.open("xb")
+    owned = cli._OwnedArtifact.from_open_file(target, handle, b"complete-payload")
+    handle.write(b"partial")
+    handle.flush()
+
+    cli._remove_owned_output(output, [owned])
+
+    assert not output.exists()
 
 
 def test_prepare_rechecks_exact_head_after_writing_and_rolls_back(

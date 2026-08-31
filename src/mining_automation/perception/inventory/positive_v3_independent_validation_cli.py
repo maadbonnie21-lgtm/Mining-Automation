@@ -23,27 +23,90 @@ from .positive_v3_independent_validation import (
 )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class _OwnedArtifact:
     """Filesystem identity of one path exclusively created by this invocation."""
 
     path: Path
     device: int
     inode: int
+    expected_sha256: str
+    handle: BinaryIO
+    modified_ns: int
+    size_bytes: int
+    complete: bool = False
 
     @classmethod
-    def from_open_file(cls, path: Path, handle: BinaryIO) -> _OwnedArtifact:
+    def from_open_file(
+        cls,
+        path: Path,
+        handle: BinaryIO,
+        payload: bytes,
+    ) -> _OwnedArtifact:
         stat = os.fstat(handle.fileno())
-        return cls(path=path, device=stat.st_dev, inode=stat.st_ino)
+        return cls(
+            path=path,
+            device=stat.st_dev,
+            inode=stat.st_ino,
+            expected_sha256=hashlib.sha256(payload).hexdigest(),
+            handle=handle,
+            modified_ns=stat.st_mtime_ns,
+            size_bytes=len(payload),
+        )
+
+    def mark_complete(self) -> None:
+        stat = os.fstat(self.handle.fileno())
+        self.modified_ns = stat.st_mtime_ns
+        self.complete = True
+
+    def current_path_matches_recorded_artifact(self) -> bool:
+        if not self.current_path_matches_recorded_identity():
+            return False
+        try:
+            payload_sha256 = hashlib.sha256(self.path.read_bytes()).hexdigest()
+        except OSError:
+            return False
+        return payload_sha256 == self.expected_sha256
+
+    def current_path_matches_recorded_identity(self) -> bool:
+        try:
+            stat = self.path.stat(follow_symlinks=False)
+        except (OSError, ValueError):
+            return False
+        return (
+            stat.st_dev == self.device
+            and stat.st_ino == self.inode
+            and stat.st_mtime_ns == self.modified_ns
+            and stat.st_size == self.size_bytes
+        )
 
     def still_owns_path(self) -> bool:
         try:
+            held = os.fstat(self.handle.fileno())
             stat = self.path.stat(follow_symlinks=False)
         except FileNotFoundError:
             return False
-        except OSError:
+        except (OSError, ValueError):
             return False
-        return stat.st_dev == self.device and stat.st_ino == self.inode
+        identity_matches = (
+            held.st_dev == self.device
+            and held.st_ino == self.inode
+            and stat.st_dev == self.device
+            and stat.st_ino == self.inode
+        )
+        if not identity_matches:
+            return False
+        if not self.complete:
+            self.modified_ns = held.st_mtime_ns
+            self.size_bytes = held.st_size
+            return identity_matches
+        return self.current_path_matches_recorded_artifact()
+
+    def close(self) -> None:
+        try:
+            self.handle.close()
+        except OSError:
+            pass
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -139,17 +202,25 @@ def _write_text_and_sidecar(
 ) -> tuple[Path, str]:
     path = output / filename
     payload = text.encode("utf-8")
-    with path.open("xb") as handle:
-        owned_paths.append(_OwnedArtifact.from_open_file(path, handle))
-        handle.write(payload)
-        handle.flush()
+    handle = path.open("xb")
+    owned = _OwnedArtifact.from_open_file(path, handle, payload)
+    owned_paths.append(owned)
+    handle.write(payload)
+    handle.flush()
+    owned.mark_complete()
     digest = hashlib.sha256(payload).hexdigest()
     sidecar = path.with_suffix(path.suffix + ".sha256")
     sidecar_payload = f"{digest}  {path.name}\n".encode("ascii")
-    with sidecar.open("xb") as handle:
-        owned_paths.append(_OwnedArtifact.from_open_file(sidecar, handle))
-        handle.write(sidecar_payload)
-        handle.flush()
+    sidecar_handle = sidecar.open("xb")
+    owned_sidecar = _OwnedArtifact.from_open_file(
+        sidecar,
+        sidecar_handle,
+        sidecar_payload,
+    )
+    owned_paths.append(owned_sidecar)
+    sidecar_handle.write(sidecar_payload)
+    sidecar_handle.flush()
+    owned_sidecar.mark_complete()
     if path.read_bytes() != payload or sidecar.read_bytes() != sidecar_payload:
         raise InventoryPositiveV3IndependentValidationError(
             f"written artifact failed readback verification: {path.name}"
@@ -161,16 +232,50 @@ def _remove_owned_output(output: Path, owned_paths: list[_OwnedArtifact]) -> Non
     """Roll back only artifacts this invocation created exclusively."""
 
     for owned in reversed(owned_paths):
-        if not owned.still_owns_path():
+        should_unlink = owned.still_owns_path()
+        if not should_unlink:
+            owned.close()
             continue
         try:
             owned.path.unlink(missing_ok=True)
         except OSError:
-            pass
+            # Windows keeps the path locked while the identity handle is open.
+            # Close only after proving ownership, then recheck the full recorded
+            # fingerprint before the platform fallback unlink.
+            owned.close()
+            still_owned = (
+                owned.current_path_matches_recorded_artifact()
+                if owned.complete
+                else owned.current_path_matches_recorded_identity()
+            )
+            if not still_owned:
+                continue
+            try:
+                owned.path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        else:
+            owned.close()
     try:
         output.rmdir()
     except OSError:
         pass
+
+
+def _release_owned_output(owned_paths: list[_OwnedArtifact]) -> None:
+    """Release the identity handles after successful materialization."""
+
+    for owned in reversed(owned_paths):
+        owned.close()
+
+
+def _create_output_directory(output: Path) -> None:
+    try:
+        output.mkdir(exist_ok=False)
+    except FileExistsError as error:
+        raise InventoryPositiveV3IndependentValidationError(
+            f"output already exists: {output}"
+        ) from error
 
 
 def _prepare_templates() -> Mapping[str, Mapping[str, object]]:
@@ -285,7 +390,7 @@ def _prepare(output: Path, expected_head: str) -> int:
     )
     _verify_clean_head(expected_head)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.mkdir(exist_ok=False)
+    _create_output_directory(output)
     owned_paths: list[_OwnedArtifact] = []
     try:
         prereg_path, prereg_digest = _write_text_and_sidecar(
@@ -311,6 +416,8 @@ def _prepare(output: Path, expected_head: str) -> int:
     except Exception:
         _remove_owned_output(output, owned_paths)
         raise
+    else:
+        _release_owned_output(owned_paths)
     print("Inventory V3 independent-validation readiness: PASS")
     print("Live validation authorized: false")
     print("Activation allowed: false")
@@ -330,7 +437,7 @@ def _evaluate(dataset: Path, output: Path, expected_head: str) -> int:
     )
     _verify_clean_head(expected_head)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.mkdir(exist_ok=False)
+    _create_output_directory(output)
     owned_paths: list[_OwnedArtifact] = []
     try:
         report_path, report_digest = _write_text_and_sidecar(
@@ -343,6 +450,8 @@ def _evaluate(dataset: Path, output: Path, expected_head: str) -> int:
     except Exception:
         _remove_owned_output(output, owned_paths)
         raise
+    else:
+        _release_owned_output(owned_paths)
     status = "PASS" if report.validation_passed else "NOT APPROVED"
     print(f"Inventory V3 independent validation: {status}")
     print(
