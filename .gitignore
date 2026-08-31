@@ -16,3 +16,5 @@ htmlcov/
 /diagnostics/inventory-review-gate-dev*/
 /diagnostics/inventory-review-gate-result-dev*/
 /diagnostics/inventory-fixture-dev*/
+/diagnostics/inventory-positive-v3-independent-readiness/
+/diagnostics/inventory-positive-v3-independent-results/
