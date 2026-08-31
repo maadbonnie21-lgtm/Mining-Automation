@@ -249,6 +249,7 @@ class ResourceDetectorProfile:
     scene_landmarks: tuple[SceneLandmarkProfile, ...] = ()
     minimum_landmark_quorum: int = 0
     minimum_landmark_zones: int = 0
+    schema_version: int = RESOURCE_PROFILE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         for field_name, value in (
@@ -264,6 +265,11 @@ class ResourceDetectorProfile:
             raise ValueError("frame_height must be a positive integer")
         if not isinstance(self.pixel_format, PixelFormat):
             raise ValueError("pixel_format must be PixelFormat")
+        if not _is_integer(self.schema_version) or self.schema_version not in {
+            _LEGACY_RESOURCE_PROFILE_SCHEMA_VERSION,
+            RESOURCE_PROFILE_SCHEMA_VERSION,
+        }:
+            raise ValueError("schema_version must be a supported resource profile version")
         if (
             not isinstance(self.anchors, tuple)
             or not self.anchors
@@ -574,9 +580,11 @@ class ProfiledResourceDetector:
             reason = "depleted_signature_matched"
 
         evidence: dict[str, object] = {
+            "detector_id": self._metadata.detector_id,
             "label": self._profile.ore_label,
             "location_id": self._profile.location_id,
             "profile_id": self._profile.profile_id,
+            "profile_schema_version": self._profile.schema_version,
             "resource_id": candidate.resource_id,
             "state": state.value,
             "region": candidate.region,
@@ -662,9 +670,11 @@ class ProfiledResourceDetector:
             )
 
         evidence: dict[str, object] = {
+            "detector_id": self._metadata.detector_id,
             "label": self._profile.ore_label,
             "location_id": self._profile.location_id,
             "profile_id": self._profile.profile_id,
+            "profile_schema_version": self._profile.schema_version,
             "resource_id": candidate.resource_id,
             "state": state.value,
             "region": candidate.region,
@@ -699,9 +709,11 @@ class ProfiledResourceDetector:
         landmark_distances: dict[str, float] | None = None,
     ) -> Observation:
         evidence: dict[str, object] = {
+            "detector_id": self._metadata.detector_id,
             "label": self._profile.ore_label,
             "location_id": self._profile.location_id,
             "profile_id": self._profile.profile_id,
+            "profile_schema_version": self._profile.schema_version,
             "resource_id": candidate.resource_id,
             "state": ResourceVisualState.UNCERTAIN.value,
             "scene_confidence": round(scene_confidence, 6),
@@ -880,6 +892,7 @@ def load_resource_detector_profile(path: Path) -> ResourceDetectorProfile:
             scene_landmarks=scene_landmarks,
             minimum_landmark_quorum=minimum_landmark_quorum,
             minimum_landmark_zones=minimum_landmark_zones,
+            schema_version=schema_version,
         )
     except (TypeError, ValueError) as exc:
         raise ValueError(f"invalid resource profile: {exc}") from exc
