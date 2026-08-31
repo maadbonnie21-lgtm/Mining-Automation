@@ -39,9 +39,12 @@ the original file.
 The committed frame payloads use deterministic gzip only to keep repository and CI
 size reasonable. `manifest.json` remains ordinary replay schema v1 and names the
 exact `.raw` payloads. `materialize_gzip_replay_dataset()` expands each adjacent
-`.raw.gz` file, enforces the declared decompressed byte count, writes the raw files
-exclusively, and only then hands the ordinary manifest to the merged replay loader.
-No lossy image encoding or pixel conversion occurs.
+`.raw.gz` file, enforces the declared decompressed byte count, computes the exact
+decompressed SHA-256, and requires equality with that case's reviewed
+`provenance.sanitized_sha256`. It writes the raw files exclusively and only then
+hands the ordinary manifest to the merged replay loader. A same-length one-byte
+change is rejected and all partial output is removed. No lossy image encoding or
+pixel conversion occurs.
 
 ## Profile regions
 

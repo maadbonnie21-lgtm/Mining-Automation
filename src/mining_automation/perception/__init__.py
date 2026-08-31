@@ -24,11 +24,15 @@ from .evaluation import (
 )
 from .fixture_materialization import materialize_gzip_replay_dataset
 from .production_profiles import (
+    VARROCK_EAST_IRON_DETECTOR_ID,
     VARROCK_EAST_IRON_DETECTOR_VERSION,
     VARROCK_EAST_IRON_FIXED_UI_REGIONS,
     VARROCK_EAST_IRON_PROFILE_ID,
+    VARROCK_EAST_IRON_RESOURCE_IDS,
+    ProductionResourceTrustResult,
     build_varrock_east_iron_detector,
     load_varrock_east_iron_profile,
+    trust_varrock_east_iron_observations,
     varrock_east_iron_scene_excluded_regions,
 )
 from .replay import (
@@ -110,8 +114,10 @@ __all__ = [
     "RESOURCE_OBSERVATION_PREFIX",
     "RESOURCE_PROFILE_SCHEMA_VERSION",
     "VARROCK_EAST_IRON_DETECTOR_VERSION",
+    "VARROCK_EAST_IRON_DETECTOR_ID",
     "VARROCK_EAST_IRON_FIXED_UI_REGIONS",
     "VARROCK_EAST_IRON_PROFILE_ID",
+    "VARROCK_EAST_IRON_RESOURCE_IDS",
     "CaseEvaluation",
     "ColorSignature",
     "ConfidenceRange",
@@ -133,6 +139,7 @@ __all__ = [
     "MissingFixtureError",
     "PerceptionError",
     "ProfiledResourceDetector",
+    "ProductionResourceTrustResult",
     "ReacquisitionConclusion",
     "ReacquisitionDiagnosis",
     "ReplayDataset",
@@ -176,6 +183,7 @@ __all__ = [
     "run_detector",
     "save_resource_detector_profile",
     "save_resource_fixture_draft",
+    "trust_varrock_east_iron_observations",
     "validate_detector",
     "varrock_east_iron_scene_excluded_regions",
     "write_resource_fixture_draft",

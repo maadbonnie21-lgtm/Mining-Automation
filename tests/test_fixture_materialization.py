@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 from pathlib import Path
 
@@ -19,6 +20,8 @@ def _write_source(
     *,
     payload: bytes | None = b"\x01\x02\x03\x04\x05\x06",
     compressed_bytes: bytes | None = None,
+    sanitized_sha256: str | None = None,
+    include_sanitized_sha256: bool = True,
 ) -> Path:
     frames = root / "frames"
     frames.mkdir(parents=True)
@@ -43,7 +46,18 @@ def _write_source(
                 },
                 "expected_observations": [],
                 "tags": ["synthetic"],
-                "provenance": {"source": "unit-test"},
+                "provenance": {
+                    "source": "unit-test",
+                    **(
+                        {
+                            "sanitized_sha256": sanitized_sha256
+                            if sanitized_sha256 is not None
+                            else hashlib.sha256(payload).hexdigest()
+                        }
+                        if payload is not None and include_sanitized_sha256
+                        else {}
+                    ),
+                },
                 "notes": "",
             }
         ],
@@ -117,4 +131,82 @@ def test_existing_materialized_target_is_not_overwritten(tmp_path: Path) -> None
         materialize_gzip_replay_dataset(source_manifest, destination)
 
     assert target.read_bytes() == b"keep-me"
+    assert not (destination / "manifest.json").exists()
+
+
+def test_same_length_one_byte_corruption_is_rejected_and_removed(tmp_path: Path) -> None:
+    reviewed = b"\x01\x02\x03\x04\x05\x06"
+    corrupted = b"\x01\x02\x03\x04\x05\x07"
+    source_manifest = _write_source(
+        tmp_path / "source",
+        payload=corrupted,
+        sanitized_sha256=hashlib.sha256(reviewed).hexdigest(),
+    )
+    destination = tmp_path / "materialized"
+
+    with pytest.raises(CorruptFixtureError, match="SHA-256 mismatch"):
+        materialize_gzip_replay_dataset(source_manifest, destination)
+
+    assert not (destination / "frames" / "case.raw").exists()
+    assert not (destination / "manifest.json").exists()
+
+
+def test_late_hash_mismatch_removes_earlier_materialized_case(tmp_path: Path) -> None:
+    payload = b"\x01\x02\x03\x04\x05\x06"
+    source_manifest = _write_source(tmp_path / "source", payload=payload)
+    manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
+    second_case = dict(manifest["cases"][0])
+    second_case["case_id"] = "case-2"
+    second_case["frame"] = {**second_case["frame"], "path": "frames/case-2.raw"}
+    second_case["provenance"] = {
+        **second_case["provenance"],
+        "sanitized_sha256": hashlib.sha256(b"reviewed").hexdigest(),
+    }
+    manifest["cases"].append(second_case)
+    source_manifest.write_text(json.dumps(manifest), encoding="utf-8")
+    (source_manifest.parent / "frames" / "case-2.raw.gz").write_bytes(
+        gzip.compress(payload, compresslevel=9, mtime=0)
+    )
+    destination = tmp_path / "materialized"
+
+    with pytest.raises(CorruptFixtureError, match="SHA-256 mismatch"):
+        materialize_gzip_replay_dataset(source_manifest, destination)
+
+    assert not (destination / "frames" / "case.raw").exists()
+    assert not (destination / "frames" / "case-2.raw").exists()
+    assert not (destination / "manifest.json").exists()
+
+
+@pytest.mark.parametrize(
+    "sanitized_sha256",
+    ["0" * 63, "0" * 65, "G" * 64, "A" * 64],
+)
+def test_noncanonical_sanitized_hash_is_rejected(
+    tmp_path: Path,
+    sanitized_sha256: str,
+) -> None:
+    source_manifest = _write_source(
+        tmp_path / "source",
+        sanitized_sha256=sanitized_sha256,
+    )
+    destination = tmp_path / "materialized"
+
+    with pytest.raises(CorruptFixtureError, match="sanitized_sha256"):
+        materialize_gzip_replay_dataset(source_manifest, destination)
+
+    assert not (destination / "frames" / "case.raw").exists()
+    assert not (destination / "manifest.json").exists()
+
+
+def test_missing_sanitized_hash_is_rejected(tmp_path: Path) -> None:
+    source_manifest = _write_source(
+        tmp_path / "source",
+        include_sanitized_sha256=False,
+    )
+    destination = tmp_path / "materialized"
+
+    with pytest.raises(CorruptFixtureError, match="sanitized_sha256"):
+        materialize_gzip_replay_dataset(source_manifest, destination)
+
+    assert not (destination / "frames" / "case.raw").exists()
     assert not (destination / "manifest.json").exists()

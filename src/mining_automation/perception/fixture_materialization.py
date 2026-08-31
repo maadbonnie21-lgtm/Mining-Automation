@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 from pathlib import Path
 
 from .errors import CorruptFixtureError, MissingFixtureError
@@ -21,16 +22,17 @@ def materialize_gzip_replay_dataset(
 
     The committed manifest remains an ordinary replay schema v1 manifest whose
     frame paths end in ``.raw``. At rest, each source payload is stored beside
-    it as ``<path>.gz``. This function verifies safe paths and exact decompressed
-    byte counts, writes every target exclusively, and installs the manifest only
-    after all payloads succeed. The returned manifest can be passed directly to
-    :func:`load_replay_dataset`.
+    it as ``<path>.gz``. This function verifies safe paths, exact decompressed
+    byte counts, and exact SHA-256 equality with the reviewed
+    ``provenance.sanitized_sha256``. It writes every target exclusively and
+    installs the manifest only after all payloads succeed. The returned manifest
+    can be passed directly to :func:`load_replay_dataset`.
 
     Raises:
         MissingFixtureError: a required gzip payload is absent.
         CorruptFixtureError: gzip data is invalid, expands beyond the declared
-            geometry, is truncated, escapes its dataset root, or targets an
-            already-existing materialized file.
+            geometry, has the wrong reviewed digest, is truncated, escapes its
+            dataset root, or targets an already-existing materialized file.
     """
 
     source_manifest = Path(source_manifest)
@@ -79,8 +81,19 @@ def materialize_gzip_replay_dataset(
                 * case.frame.height
                 * case.frame.pixel_format.bytes_per_pixel
             )
+            expected_sha256 = case.provenance.get("sanitized_sha256")
+            if (
+                not isinstance(expected_sha256, str)
+                or len(expected_sha256) != 64
+                or any(character not in "0123456789abcdef" for character in expected_sha256)
+            ):
+                raise CorruptFixtureError(
+                    f"compressed fixture {relative_path!r} requires a canonical "
+                    "provenance.sanitized_sha256"
+                )
             target.parent.mkdir(parents=True, exist_ok=True)
             written = 0
+            digest = hashlib.sha256()
             try:
                 with gzip.open(compressed, "rb") as source, target.open("xb") as output:
                     while chunk := source.read(_CHUNK_BYTES):
@@ -90,6 +103,7 @@ def materialize_gzip_replay_dataset(
                                 f"compressed fixture {relative_path!r} expands beyond "
                                 f"the declared {expected} bytes"
                             )
+                        digest.update(chunk)
                         output.write(chunk)
             except (OSError, EOFError) as exc:
                 target.unlink(missing_ok=True)
@@ -105,6 +119,13 @@ def materialize_gzip_replay_dataset(
                 raise CorruptFixtureError(
                     f"compressed fixture {relative_path!r} expands to {written} bytes; "
                     f"expected {expected}"
+                )
+            actual_sha256 = digest.hexdigest()
+            if actual_sha256 != expected_sha256:
+                target.unlink(missing_ok=True)
+                raise CorruptFixtureError(
+                    f"compressed fixture {relative_path!r} SHA-256 mismatch: "
+                    f"expected {expected_sha256}, got {actual_sha256}"
                 )
             created.append(target)
 
