@@ -78,6 +78,49 @@ def test_fixture_capture_never_overwrites(tmp_path: Path) -> None:
         write_resource_fixture_draft(frame, tmp_path, **kwargs)
 
 
+@pytest.mark.parametrize("winning_path", ["frame", "preview", "draft"])
+def test_concurrent_fixture_writer_winner_is_preserved_exactly(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    winning_path: str,
+) -> None:
+    frame = make_bgra_frame([(0, 0, 0)] * 8, 4, 2)
+    paths = {
+        "frame": tmp_path / "frames" / "case-1.raw",
+        "preview": tmp_path / "previews" / "case-1.bmp",
+        "draft": tmp_path / "drafts" / "case-1.json",
+    }
+    target = paths[winning_path]
+    winner_payload = f"concurrent-{winning_path}-winner".encode()
+    real_open = Path.open
+
+    def open_after_concurrent_win(
+        path: Path,
+        mode: str = "r",
+        *args: object,
+        **kwargs: object,
+    ):
+        if path == target and mode == "xb":
+            with real_open(path, "wb") as winner:
+                winner.write(winner_payload)
+            raise FileExistsError(f"simulated concurrent winner: {path}")
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_after_concurrent_win)
+
+    with pytest.raises(FileExistsError, match="simulated concurrent winner"):
+        write_resource_fixture_draft(
+            frame,
+            tmp_path,
+            dataset_id="dataset",
+            case_id="case-1",
+            location_id="mine",
+        )
+
+    assert target.read_bytes() == winner_payload
+    assert all(not path.exists() for name, path in paths.items() if name != winning_path)
+
+
 def test_unreviewed_fixture_cannot_enter_replay_manifest(tmp_path: Path) -> None:
     frame = make_bgra_frame([(0, 0, 0)] * 8, 4, 2)
     paths = write_resource_fixture_draft(

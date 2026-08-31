@@ -562,13 +562,18 @@ def _draft_json_bytes(draft: ResourceFixtureDraft) -> bytes:
 
 def _exclusive_write_bytes(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    # A failed exclusive open means another invocation owns the path.  Only a
+    # successful create grants this helper permission to clean it up.
+    owned = False
     try:
         with path.open("xb") as output:
+            owned = True
             output.write(payload)
             output.flush()
             os.fsync(output.fileno())
     except Exception:
-        path.unlink(missing_ok=True)
+        if owned:
+            path.unlink(missing_ok=True)
         raise
 
 

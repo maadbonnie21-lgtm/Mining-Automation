@@ -47,7 +47,11 @@ def materialize_gzip_replay_dataset(
     destination_root_resolved = destination_root.resolve()
     destination_manifest = destination_root / source_manifest.name
 
-    created: list[Path] = []
+    # A path enters this collection immediately after this invocation wins its
+    # atomic exclusive create.  Cleanup is deliberately limited to these
+    # owned paths: a concurrent writer that wins ``open("xb")`` must retain
+    # its bytes untouched.
+    owned_paths: list[Path] = []
     seen_paths: set[str] = set()
     try:
         for case in manifest.cases:
@@ -99,53 +103,58 @@ def materialize_gzip_replay_dataset(
             written = 0
             digest = hashlib.sha256()
             try:
-                with gzip.open(compressed, "rb") as source, target.open("xb") as output:
-                    while chunk := source.read(_CHUNK_BYTES):
-                        written += len(chunk)
-                        if written > expected:
-                            raise CorruptFixtureError(
-                                f"compressed fixture {relative_path!r} expands beyond "
-                                f"the declared {expected} bytes"
-                            )
-                        digest.update(chunk)
-                        output.write(chunk)
+                with gzip.open(compressed, "rb") as source:
+                    try:
+                        output = target.open("xb")
+                    except FileExistsError as exc:
+                        raise CorruptFixtureError(
+                            f"materialized fixture already exists: {relative_path}"
+                        ) from exc
+                    owned_paths.append(target)
+                    with output:
+                        while chunk := source.read(_CHUNK_BYTES):
+                            written += len(chunk)
+                            if written > expected:
+                                raise CorruptFixtureError(
+                                    f"compressed fixture {relative_path!r} expands beyond "
+                                    f"the declared {expected} bytes"
+                                )
+                            digest.update(chunk)
+                            output.write(chunk)
+            except CorruptFixtureError:
+                raise
             except (OSError, EOFError) as exc:
-                target.unlink(missing_ok=True)
                 raise CorruptFixtureError(
                     f"compressed fixture cannot be decoded: {relative_path}.gz"
                 ) from exc
-            except Exception:
-                target.unlink(missing_ok=True)
-                raise
 
             if written != expected:
-                target.unlink(missing_ok=True)
                 raise CorruptFixtureError(
                     f"compressed fixture {relative_path!r} expands to {written} bytes; "
                     f"expected {expected}"
                 )
             actual_sha256 = digest.hexdigest()
             if actual_sha256 != expected_sha256:
-                target.unlink(missing_ok=True)
                 raise CorruptFixtureError(
                     f"compressed fixture {relative_path!r} SHA-256 mismatch: "
                     f"expected {expected_sha256}, got {actual_sha256}"
                 )
-            created.append(target)
 
         if destination_manifest.exists():
             raise CorruptFixtureError(
                 f"materialized manifest already exists: {destination_manifest}"
             )
         try:
-            with destination_manifest.open("xb") as output:
-                output.write(manifest_bytes)
-        except Exception:
-            destination_manifest.unlink(missing_ok=True)
-            raise
-        created.append(destination_manifest)
+            output = destination_manifest.open("xb")
+        except FileExistsError as exc:
+            raise CorruptFixtureError(
+                f"materialized manifest already exists: {destination_manifest}"
+            ) from exc
+        owned_paths.append(destination_manifest)
+        with output:
+            output.write(manifest_bytes)
     except Exception:
-        for path in reversed(created):
+        for path in reversed(owned_paths):
             path.unlink(missing_ok=True)
         raise
 
