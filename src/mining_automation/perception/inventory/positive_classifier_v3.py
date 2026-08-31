@@ -6,6 +6,7 @@ Observation implementation. Its results cannot enter the production adapter.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from collections.abc import Mapping
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from ...capture import Frame, PixelFormat
+from . import classification as _classification
 from .classification import (
     ClassificationPolicy,
     CorePixels,
@@ -70,6 +72,8 @@ _ACTIVATION_ALLOWED: Final[bool] = False
 _PUBLICATION_FLOOR: Final[float] = 0.8
 _STRONG_EXTERNAL_PIXEL_THRESHOLD: Final[int] = 24
 _MAX_STRONG_EXTERNAL_CHANGED_PIXELS: Final[int] = 0
+_EXACT_PROTOTYPE_CONFIDENCE: Final[float] = 1.0
+_UNKNOWN_CONFIDENCE: Final[float] = 0.0
 _MODEL_SCHEMA: Final[str] = "inventory-positive-v3-development-analyzer-v1"
 
 
@@ -100,6 +104,7 @@ def inventory_positive_v3_model_configuration() -> dict[str, object]:
         "full_slot_policy": {
             "authoritative_pixels_per_slot": 1024,
             "empty_requires_exact_reference_rgb": True,
+            "exact_prototype_confidence": _EXACT_PROTOTYPE_CONFIDENCE,
             "occupied_requires_exact_prototype_rgb": True,
             "prototype_distance": "exact SHA-256 equality (distance 0 only)",
             "prototype_generation_algorithm": PROTOTYPE_GENERATION_ALGORITHM,
@@ -114,6 +119,7 @@ def inventory_positive_v3_model_configuration() -> dict[str, object]:
                 )
             ],
             "prototype_schema": PROTOTYPE_SCHEMA,
+            "unknown_confidence": _UNKNOWN_CONFIDENCE,
         },
         "model_artifact_sha256": MODEL_ARTIFACT_SHA256,
         "prototype_source_artifacts": [
@@ -142,10 +148,11 @@ def inventory_positive_v3_model_configuration() -> dict[str, object]:
         },
         "publication_floor": _PUBLICATION_FLOOR,
         "raw_v1_policy": {
-            "core_inset": policy.core_inset,
-            "empty_max_score": policy.empty_max_score,
-            "occupied_min_score": policy.occupied_min_score,
-            "pixel_difference_threshold": policy.pixel_difference_threshold,
+            "classification_policy": _classification._policy_data(policy),
+            "score_weights": {
+                "changed_fraction": _classification._CHANGED_FRACTION_WEIGHT,
+                "mean_color_delta": _classification._MEAN_COLOR_DELTA_WEIGHT,
+            },
         },
         "schema": _MODEL_SCHEMA,
         "slot_ensemble_policy": {
@@ -313,9 +320,10 @@ class InventoryPositiveV3DevelopmentAnalyzer:
             }
             for index, by_digest in prototypes.items()
         }
+        self._model_configuration = inventory_positive_v3_model_configuration()
         identity: dict[str, object] = {
             "baseline_configuration_id": self._baseline.configuration_id,
-            "model_configuration": inventory_positive_v3_model_configuration(),
+            "model_configuration": self._model_configuration,
         }
         self._configuration_id = "inventory-positive-v3-development-" + hashlib.sha256(
             _canonical_bytes(identity)
@@ -327,7 +335,7 @@ class InventoryPositiveV3DevelopmentAnalyzer:
 
     @property
     def model_configuration(self) -> Mapping[str, object]:
-        return inventory_positive_v3_model_configuration()
+        return copy.deepcopy(self._model_configuration)
 
     def analyze(self, frame: Frame) -> InventoryPositiveV3DevelopmentResult:
         """Analyze one frame without creating a Detector or Observation."""
@@ -374,13 +382,13 @@ class InventoryPositiveV3DevelopmentAnalyzer:
                     reason = "full_slot_not_exact_reference"
             elif decision.state is SlotOccupancy.OCCUPIED:
                 if exact_prototype:
-                    confidence = 1.0
+                    confidence = _EXACT_PROTOTYPE_CONFIDENCE
                 else:
                     state = SlotOccupancy.UNCERTAIN
-                    confidence = 0.0
+                    confidence = _UNKNOWN_CONFIDENCE
                     reason = "full_slot_rgb_not_in_exact_development_prototypes"
             else:
-                confidence = 0.0
+                confidence = _UNKNOWN_CONFIDENCE
                 reason = "raw_v1_uncertain"
             results.append(
                 InventoryPositiveV3SlotDevelopmentResult(
@@ -433,7 +441,7 @@ class InventoryPositiveV3DevelopmentAnalyzer:
             configuration_id=self.configuration_id,
             occupied_slots=None,
             label="unknown",
-            confidence=0.0,
+            confidence=_UNKNOWN_CONFIDENCE,
             reason=reason,
             slots=slots,
         )

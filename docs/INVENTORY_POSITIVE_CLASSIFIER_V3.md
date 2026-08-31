@@ -51,7 +51,9 @@ V3 uses a frozen exact-appearance allowlist rather than another shape
 heuristic:
 
 1. The unchanged V1 classifier and its empty/occupied thresholds remain the
-   binary gate.
+   binary gate. V3's configuration identity also binds the complete V1 policy
+   and the inherited `0.7` changed-fraction / `0.3` mean-color-delta score
+   weights, so a behavioral dependency change cannot reuse the same identity.
 2. Each authoritative 32x32 slot is converted to canonical semantic RGB,
    covering all 1,024 owned pixels.
 3. A slot that exactly matches its corresponding reviewed empty-reference slot

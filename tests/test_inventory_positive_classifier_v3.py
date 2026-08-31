@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from mining_automation.capture import Frame, PixelFormat, RawFrame
+from mining_automation.perception.inventory import classification as classification_module
 from mining_automation.perception.inventory.classification import (
     InventoryClassificationError,
 )
@@ -86,6 +87,27 @@ def test_v3_configuration_id_binds_complete_model_configuration(
     assert analyzer.configuration_id == (
         "inventory-positive-v3-development-"
         + hashlib.sha256(_canonical_bytes(identity)).hexdigest()
+    )
+
+
+@pytest.mark.parametrize(
+    "weight_name",
+    ["_CHANGED_FRACTION_WEIGHT", "_MEAN_COLOR_DELTA_WEIGHT"],
+)
+def test_v3_configuration_identity_changes_with_each_raw_score_weight(
+    analyzer_and_reference: tuple[InventoryPositiveV3DevelopmentAnalyzer, Frame],
+    monkeypatch: pytest.MonkeyPatch,
+    weight_name: str,
+) -> None:
+    analyzer, reference = analyzer_and_reference
+    original = getattr(classification_module, weight_name)
+    monkeypatch.setattr(classification_module, weight_name, original / 2.0)
+
+    changed = InventoryPositiveV3DevelopmentAnalyzer(analyzer._profile, reference)
+
+    assert changed.configuration_id != analyzer.configuration_id
+    assert changed.model_configuration["raw_v1_policy"] != (
+        analyzer.model_configuration["raw_v1_policy"]
     )
 
 
@@ -273,6 +295,25 @@ def test_v3_model_identity_binds_external_guard_and_gapped_policy(
             "per-slot truth; a non-prefix exact ensemble cannot be safely counted"
         ),
     }
+    assert analyzer.model_configuration["raw_v1_policy"] == {
+        "classification_policy": {
+            "core_inset": 4,
+            "empty_max_score": 0.08,
+            "max_guard_changed_fraction": 0.5,
+            "max_row_guard_changed_fraction": 0.0,
+            "minimum_slot_confidence": 0.5,
+            "occupied_min_score": 0.22,
+            "pixel_difference_threshold": 24,
+        },
+        "score_weights": {
+            "changed_fraction": 0.7,
+            "mean_color_delta": 0.3,
+        },
+    }
+    full_slot_policy = analyzer.model_configuration["full_slot_policy"]
+    assert isinstance(full_slot_policy, dict)
+    assert full_slot_policy["exact_prototype_confidence"] == 1.0
+    assert full_slot_policy["unknown_confidence"] == 0.0
 
 
 def test_v3_report_discloses_zero_independent_validation(
