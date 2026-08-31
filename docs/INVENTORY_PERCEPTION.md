@@ -17,6 +17,12 @@ through `inventory_detector_from_profile`.
 Unsupported frame geometry is reported as an unknown inventory; it is never
 silently assigned a guessed count.
 
+The separately identified, non-activating positive-classifier V2 candidate is
+documented in `INVENTORY_POSITIVE_CLASSIFIER_V2.md`. It diagnoses the current
+real clean-positive confidence defect while leaving this V1 factory and all V1
+replay expectations unchanged. Its frozen held-out run failed safely on a new
+presentation guard, so it is not an approved production factory.
+
 This boundary is intentional. Issue #9 establishes that a slot owns a 32 by 32
 pixel interaction/counting region in a four-column by seven-row inventory. It
 does not establish the live client anchor, row or column pitch, display mode,
@@ -183,6 +189,13 @@ makes the aggregate weak. If any condition fails, `occupied_slots` is `null`,
 the label is `unknown`, and aggregate confidence is `0.0`. Per-slot evidence is
 retained when classification produced it; earlier localization or obstruction
 failures retain their typed reason and configuration identity instead.
+
+V2 does not lower this `0.8` publication requirement. Its fixed, separate
+classifier requires the same raw occupied state plus distributed support across
+the slot core and every coarse row/column. Seven-cell support clears `0.8`,
+six-cell support remains below it, and raw ambiguity remains uncertain
+regardless of spatial coverage. Publication still fails closed when any V2
+presentation guard rejects the frame.
 
 Known labels are `empty` for zero slots, `full` for 28, and `partial` otherwise.
 The detector's shipped, uncalibrated localization threshold is `0.9`; both the

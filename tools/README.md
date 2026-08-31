@@ -67,3 +67,11 @@ profile-review draft summarize cross-case geometry, hashes, provenance,
 detector identity, missing evidence, and review blockers. See
 `docs/INVENTORY_VALIDATION_SESSION.md` for the complete safety and review
 contract.
+
+## Inventory positive classifier V2
+
+`evaluate_inventory_positive_v2.py` runs the frozen first-campaign calibration
+and second-campaign held-out classifier report entirely offline. It requires an
+exact clean Git head and writes canonical JSON plus a SHA-256 sidecar. The V2
+candidate remains non-activating. See
+`docs/INVENTORY_POSITIVE_CLASSIFIER_V2.md`.

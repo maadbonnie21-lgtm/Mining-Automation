@@ -19,7 +19,7 @@ _FIXTURE = (
 _HEAD = "9985c9ad2522ef869efff6fe2dfd4979c69d1c79"
 
 
-def test_cli_writes_canonical_report_and_matching_sidecar(
+def test_cli_writes_canonical_failure_report_and_matching_sidecar(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -42,12 +42,12 @@ def test_cli_writes_canonical_report_and_matching_sidecar(
         ]
     )
 
-    assert result == 0
+    assert result == 1
     report = output / "inventory-positive-v2-report.json"
     sidecar = output / "inventory-positive-v2-report.sha256"
     digest = hashlib.sha256(report.read_bytes()).hexdigest()
     assert sidecar.read_text(encoding="ascii") == f"{digest}  {report.name}\n"
-    assert "Inventory positive V2: PASS" in capsys.readouterr().out
+    assert "Inventory positive V2: FAIL" in capsys.readouterr().out
 
 
 def test_cli_refuses_to_replace_an_existing_output_directory(

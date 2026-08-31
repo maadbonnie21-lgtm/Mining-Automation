@@ -8,16 +8,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from ...capture import Frame
 from .adapter import inventory_detection_from_observation
-from .classification import InventoryObstructionError, SlotOccupancy
+from .classification import InventoryObstructionError, SlotOccupancy, _read_core
 from .configuration import inventory_positive_detector_v2_from_profile
 from .detector import InventoryDetection
-from .geometry import InventoryGridLayout
+from .geometry import InventoryGridLayout, Region
 from .localization import InventoryFrameProfile
 from .positive_classifier_v2 import (
     INVENTORY_POSITIVE_V2_CALIBRATION_SHA256,
     PositiveReferenceInventoryClassifierV2,
     PositiveSlotFeaturesV2,
+    _slot_features,
 )
 from .positive_v2_calibration import (
     INVENTORY_POSITIVE_V2_CALIBRATION_SESSION_ID,
@@ -78,6 +80,7 @@ class InventoryPositiveV2CaseResult:
     v2_actual: Mapping[str, object]
     expected_v2: Mapping[str, object]
     slot_root_cause: tuple[Mapping[str, object], ...]
+    v2_analysis_failure_reason: str | None
     passed: bool
 
     def to_dict(self) -> dict[str, object]:
@@ -90,6 +93,7 @@ class InventoryPositiveV2CaseResult:
             "slot_root_cause": [dict(item) for item in self.slot_root_cause],
             "v1_actual": dict(self.v1_actual),
             "v2_actual": dict(self.v2_actual),
+            "v2_analysis_failure_reason": self.v2_analysis_failure_reason,
         }
 
 
@@ -137,6 +141,18 @@ class InventoryPositiveV2EvaluationReport:
     def to_dict(self) -> dict[str, object]:
         return {
             "activation_allowed": False,
+            "acceptance_failures": [
+                {
+                    "case_id": item.case_id,
+                    "expected_v2": dict(item.expected_v2),
+                    "v2_actual": dict(item.v2_actual),
+                    "v2_analysis_failure_reason": (
+                        item.v2_analysis_failure_reason
+                    ),
+                }
+                for item in self.cases
+                if not item.passed
+            ],
             "calibration": {
                 "case_ids": [item.case_id for item in self.calibration_cases],
                 "evidence_sha256": self.calibration_evidence_sha256,
@@ -155,7 +171,15 @@ class InventoryPositiveV2EvaluationReport:
                 "case_ids": [item.case_id for item in self.held_out_cases],
                 "evaluated_model_freeze_git_sha": self.model_freeze_git_sha,
                 "session_id": INVENTORY_POSITIVE_V2_HELD_OUT_SESSION_ID,
+                "tuning_after_evaluation_allowed": False,
             },
+            "held_out_conclusion": (
+                "The frozen spatial confidence feature clears the 0.8 floor "
+                "for every clean held-out occupied slot, but the first-batch "
+                "slot-perimeter presentation guard rejects clean varied art. "
+                "The candidate remains non-activating and this second batch "
+                "must not be used for post-hoc tuning."
+            ),
             "model": {
                 "configuration": dict(self.model_configuration),
                 "configuration_sha256": self.model_configuration_sha256,
@@ -252,12 +276,20 @@ def evaluate_inventory_positive_v2(
         v2_actual = _detection_dict(detection)
         expected_v2 = _expected_v2(item.reviewer_truth)
         passed = _matches_expected(detection, expected_v2)
+        clean = _is_clean_inventory(item.reviewer_truth)
         features: tuple[PositiveSlotFeaturesV2, ...] = ()
+        analysis_failure_reason: str | None = None
         try:
             features = classifier.analyze(frame, campaign.profile.region)
-        except InventoryObstructionError:
-            pass
-        clean = _is_clean_inventory(item.reviewer_truth)
+        except InventoryObstructionError as exc:
+            analysis_failure_reason = str(exc)
+            if clean:
+                features = _diagnostic_slot_features(
+                    classifier,
+                    reference,
+                    frame,
+                    campaign.profile.region,
+                )
         slot_report = (
             _slot_root_cause(features, item.reviewer_truth, detection)
             if clean
@@ -277,6 +309,7 @@ def evaluate_inventory_positive_v2(
                 v2_actual=v2_actual,
                 expected_v2=expected_v2,
                 slot_root_cause=slot_report,
+                v2_analysis_failure_reason=analysis_failure_reason,
                 passed=passed,
             )
         )
@@ -535,6 +568,26 @@ def _slot_root_cause(
             }
         )
     return tuple(rows)
+
+
+def _diagnostic_slot_features(
+    classifier: PositiveReferenceInventoryClassifierV2,
+    reference: Frame,
+    candidate: Frame,
+    region: Region,
+) -> tuple[PositiveSlotFeaturesV2, ...]:
+    """Compute non-authoritative root-cause rows after a fail-closed guard."""
+    slots = classifier.layout.all_slot_regions(region)
+    return tuple(
+        _slot_features(
+            index,
+            slot,
+            _read_core(reference, slot, classifier.policy.core_inset),
+            _read_core(candidate, slot, classifier.policy.core_inset),
+            classifier.policy,
+        )
+        for index, slot in enumerate(slots)
+    )
 
 
 def _detection_dict(detection: InventoryDetection) -> dict[str, object]:

@@ -16,6 +16,12 @@ Unknown results for low-confidence real sprites remain release blockers; they
 must not be converted into known counts by weakening thresholds or confidence
 policy.
 
+The later offline positive-classifier V2 campaign consumes this gate's immutable
+sanitized output without rewriting reviewer truth or the V1 safety expectation.
+See `INVENTORY_POSITIVE_CLASSIFIER_V2.md`. The first frozen V2 held-out report
+failed safely; even a future green report would remain non-activating and would
+not grant this gate factory/production authority.
+
 ## Authority boundaries
 
 The workflow keeps three kinds of information separate:

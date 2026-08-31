@@ -27,8 +27,8 @@ def report():  # type: ignore[no-untyped-def]
     return evaluate_inventory_positive_v2(_FIXTURE, git_head_sha=_HEAD)
 
 
-def test_frozen_v2_passes_calibration_and_one_shot_held_out_campaign(report) -> None:  # type: ignore[no-untyped-def]
-    assert report.passed
+def test_frozen_v2_records_the_one_shot_held_out_failure(report) -> None:  # type: ignore[no-untyped-def]
+    assert not report.passed
     assert len(report.calibration_cases) == 8
     assert len(report.held_out_cases) == 8
     assert report.calibration_evidence_sha256 == (
@@ -50,12 +50,22 @@ def test_frozen_v2_passes_calibration_and_one_shot_held_out_campaign(report) -> 
         None,
         0,
         0,
-        5,
-        28,
         None,
         None,
         None,
         None,
+        None,
+        None,
+    ]
+    assert [item.case_id for item in report.cases if not item.passed] == [
+        (
+            "20260830T222938.820219Z-inventory-session/"
+            "20260830T223251.020375Z-partial"
+        ),
+        (
+            "20260830T222938.820219Z-inventory-session/"
+            "20260830T223429.224578Z-full"
+        ),
     ]
 
 
@@ -94,16 +104,34 @@ def test_v2_clean_root_cause_rows_explain_the_v1_publication_failure(report) -> 
     assert calibration_partial["v2_meets_publication_floor"] is True
 
 
-def test_v2_held_out_clean_counts_clear_the_unchanged_floor(report) -> None:  # type: ignore[no-untyped-def]
+def test_v2_held_out_clean_feature_succeeds_but_guard_fails_closed(report) -> None:  # type: ignore[no-untyped-def]
     held_out_partial = report.cases[10].v2_actual
     held_out_full = report.cases[11].v2_actual
 
-    assert held_out_partial["occupied_slots"] == 5
-    assert held_out_partial["confidence"] == pytest.approx(0.9287749287749287)
-    assert held_out_full["occupied_slots"] == 28
-    assert held_out_full["confidence"] == pytest.approx(0.8575498575498576)
-    assert min(item["confidence"] for item in held_out_partial["slots"]) >= 0.8  # type: ignore[index,union-attr]
-    assert min(item["confidence"] for item in held_out_full["slots"]) >= 0.8  # type: ignore[index,union-attr]
+    for actual in (held_out_partial, held_out_full):
+        assert actual["occupied_slots"] is None
+        assert actual["confidence"] == 0.0
+        assert "slot 1 perimeter has 4 pixels at or above D=61" in str(
+            actual["reason"]
+        )
+    assert report.cases[10].v2_analysis_failure_reason == (
+        "inventory V2 unsupported presentation: slot 1 perimeter has 4 pixels "
+        "at or above D=61"
+    )
+    assert report.cases[11].v2_analysis_failure_reason == (
+        report.cases[10].v2_analysis_failure_reason
+    )
+
+    partial_occupied = report.cases[10].slot_root_cause[:5]
+    full_occupied = report.cases[11].slot_root_cause
+    assert all(item["v2_meets_publication_floor"] is True for item in partial_occupied)
+    assert all(item["v2_meets_publication_floor"] is True for item in full_occupied)
+    assert min(item["v2_confidence"] for item in partial_occupied) == pytest.approx(
+        0.9287749287749287
+    )
+    assert min(item["v2_confidence"] for item in full_occupied) == pytest.approx(
+        0.8575498575498576
+    )
 
 
 def test_v2_wrong_tab_and_obstruction_remain_fail_closed(report) -> None:  # type: ignore[no-untyped-def]
@@ -160,7 +188,7 @@ def test_v2_report_is_canonical_and_deterministic(report) -> None:  # type: igno
     assert first == second
     assert first.endswith("\n")
     decoded = json.loads(first)
-    assert decoded["passed"] is True
+    assert decoded["passed"] is False
     assert decoded["model"]["configuration_sha256"] == (
         "cd916de0f7b7201ecfd25646b34e09855bc4641f5a041be6f6665837f719acc2"
     )
