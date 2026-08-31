@@ -20,7 +20,10 @@ from .classification import (
     SlotDecision,
     SlotOccupancy,
 )
-from .configuration import inventory_detector_from_profile
+from .configuration import (
+    inventory_detector_from_profile,
+    inventory_positive_detector_v2_from_profile,
+)
 from .detector import (
     INVENTORY_EVIDENCE_SCHEMA_VERSION,
     INVENTORY_OBSERVATION_KIND,
@@ -58,6 +61,21 @@ from .localization import (
     InventoryLocalization,
     InventoryRegionLocator,
 )
+from .positive_classifier_v2 import (
+    INVENTORY_POSITIVE_V2_CALIBRATION_SHA256,
+    INVENTORY_POSITIVE_V2_CLASSIFIER_ID,
+    INVENTORY_POSITIVE_V2_CLASSIFIER_VERSION,
+    INVENTORY_POSITIVE_V2_DETECTOR_METADATA,
+    InventoryPositiveDetectorV2,
+    PositiveReferenceInventoryClassifierV2,
+    PositiveSlotFeaturesV2,
+)
+from .positive_v2_calibration import (
+    INVENTORY_POSITIVE_V2_CALIBRATION_SESSION_ID,
+    INVENTORY_POSITIVE_V2_HELD_OUT_SESSION_ID,
+    InventoryPositiveV2CalibrationError,
+    compute_inventory_positive_v2_calibration_sha256,
+)
 from .review_gate import (
     CandidateInventoryProfile,
     InventoryCaseReview,
@@ -88,6 +106,12 @@ __all__ = [
     "INVENTORY_COLUMNS",
     "INVENTORY_EVIDENCE_SCHEMA_VERSION",
     "INVENTORY_OBSERVATION_KIND",
+    "INVENTORY_POSITIVE_V2_CALIBRATION_SHA256",
+    "INVENTORY_POSITIVE_V2_CLASSIFIER_ID",
+    "INVENTORY_POSITIVE_V2_CLASSIFIER_VERSION",
+    "INVENTORY_POSITIVE_V2_CALIBRATION_SESSION_ID",
+    "INVENTORY_POSITIVE_V2_DETECTOR_METADATA",
+    "INVENTORY_POSITIVE_V2_HELD_OUT_SESSION_ID",
     "INVENTORY_ROWS",
     "INVENTORY_SLOT_SIZE",
     "OPTIONAL_INVENTORY_VALIDATION_CASES",
@@ -106,6 +130,8 @@ __all__ = [
     "InventoryLocalization",
     "InventoryObstructionError",
     "InventoryObservationError",
+    "InventoryPositiveDetectorV2",
+    "InventoryPositiveV2CalibrationError",
     "InventoryRegionLocator",
     "InventoryReviewDecision",
     "InventoryReviewGateError",
@@ -125,13 +151,17 @@ __all__ = [
     "InventoryValidationSessionStatus",
     "InventoryValidationSplit",
     "PreparedInventoryFrame",
+    "PositiveReferenceInventoryClassifierV2",
+    "PositiveSlotFeaturesV2",
     "ReferenceInventoryClassifier",
     "Region",
     "SlotDecision",
     "SlotOccupancy",
     "extract_capture_bmp",
+    "compute_inventory_positive_v2_calibration_sha256",
     "inventory_detection_from_observation",
     "inventory_detector_from_profile",
+    "inventory_positive_detector_v2_from_profile",
     "inventory_state_from_observation",
     "load_inventory_validation_session",
     "load_inventory_review_package",

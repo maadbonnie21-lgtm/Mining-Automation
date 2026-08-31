@@ -10,8 +10,15 @@ from .classification import (
 )
 from .detector import InventoryDetector
 from .localization import ExactProfileInventoryLocator, InventoryFrameProfile
+from .positive_classifier_v2 import (
+    InventoryPositiveDetectorV2,
+    PositiveReferenceInventoryClassifierV2,
+)
 
-__all__ = ["inventory_detector_from_profile"]
+__all__ = [
+    "inventory_detector_from_profile",
+    "inventory_positive_detector_v2_from_profile",
+]
 
 
 def inventory_detector_from_profile(
@@ -57,4 +64,28 @@ def inventory_detector_from_profile(
         classifier=classifier,
         localization_threshold=localization_threshold,
         minimum_slot_confidence=minimum_slot_confidence,
+    )
+
+
+def inventory_positive_detector_v2_from_profile(
+    profile: InventoryFrameProfile,
+    empty_reference: Frame,
+) -> InventoryPositiveDetectorV2:
+    """Build the frozen, non-activating positive-classifier V2 candidate.
+
+    This factory intentionally has no policy or threshold parameters.  It
+    reuses the reviewed profile/reference validation from the V1 factory while
+    preserving the fixed 0.8 detector publication floor.
+    """
+    baseline = inventory_detector_from_profile(profile, empty_reference)
+    classifier = PositiveReferenceInventoryClassifierV2(
+        empty_reference,
+        profile.region,
+        profile.layout,
+    )
+    return InventoryPositiveDetectorV2(
+        locator=baseline.locator,
+        classifier=classifier,
+        localization_threshold=baseline.localization_threshold,
+        minimum_slot_confidence=baseline.minimum_slot_confidence,
     )
