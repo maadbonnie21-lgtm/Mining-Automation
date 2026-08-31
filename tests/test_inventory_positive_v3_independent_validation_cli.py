@@ -4,7 +4,10 @@ import hashlib
 import json
 import subprocess
 from collections.abc import Iterator
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
+from threading import Barrier, Event
+from typing import BinaryIO, cast
 
 import pytest
 
@@ -21,6 +24,51 @@ from mining_automation.perception.inventory.positive_v3_independent_validation i
 
 _ROOT = Path(__file__).resolve().parent.parent
 _HEAD = "a" * 40
+
+
+class _StallingWriter:
+    """Delegate one partial write, then report zero progress without raising."""
+
+    def __init__(self, handle: BinaryIO) -> None:
+        self._handle = handle
+        self._write_calls = 0
+
+    def write(self, payload: bytes) -> int:
+        self._write_calls += 1
+        if self._write_calls > 1:
+            return 0
+        return self._handle.write(payload[: max(1, len(payload) // 2)])
+
+    def fileno(self) -> int:
+        return self._handle.fileno()
+
+    def flush(self) -> None:
+        self._handle.flush()
+
+    def close(self) -> None:
+        self._handle.close()
+
+    @property
+    def closed(self) -> bool:
+        return self._handle.closed
+
+
+class _CloseErrorAfterRelease:
+    """Close the real handle, then report one synthetic close failure."""
+
+    def __init__(self, handle: BinaryIO) -> None:
+        self._handle = handle
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+        self._handle.close()
+        if self.close_calls == 1:
+            raise OSError("synthetic close failure")
+
+    @property
+    def closed(self) -> bool:
+        return self._handle.closed
 
 
 @pytest.fixture(autouse=True)
@@ -149,13 +197,14 @@ def test_cleanup_removes_only_owned_artifacts(
 ) -> None:
     output = tmp_path / "owned-output"
     output.mkdir()
+    owned_output = cli._OwnedOutputDirectory.from_path(output)
     owned = output / "owned.json"
     foreign = output / "foreign.json"
     owned_records: list[cli._OwnedArtifact] = []
     cli._write_text_and_sidecar(output, "owned.json", "owned\n", owned_records)
     foreign.write_bytes(b"foreign")
 
-    cli._remove_owned_output(output, owned_records)
+    cli._remove_owned_output(owned_output, owned_records)
 
     assert not owned.exists()
     assert not owned.with_suffix(".json.sha256").exists()
@@ -166,6 +215,7 @@ def test_cleanup_removes_only_owned_artifacts(
 def test_cleanup_preserves_a_concurrent_same_path_replacement(tmp_path: Path) -> None:
     output = tmp_path / "owned-output"
     output.mkdir()
+    owned_output = cli._OwnedOutputDirectory.from_path(output)
     target = output / "report.json"
     owned_records: list[cli._OwnedArtifact] = []
     cli._write_text_and_sidecar(output, target.name, "owned\n", owned_records)
@@ -176,7 +226,7 @@ def test_cleanup_preserves_a_concurrent_same_path_replacement(tmp_path: Path) ->
     next(record for record in owned_records if record.path == target).close()
     target.unlink()
     target.write_bytes(b"foreign-winner")
-    cli._remove_owned_output(output, owned_records)
+    cli._remove_owned_output(owned_output, owned_records)
 
     assert target.read_bytes() == b"foreign-winner"
     assert not target.with_suffix(".json.sha256").exists()
@@ -186,15 +236,187 @@ def test_cleanup_preserves_a_concurrent_same_path_replacement(tmp_path: Path) ->
 def test_cleanup_removes_an_owned_incomplete_write(tmp_path: Path) -> None:
     output = tmp_path / "owned-output"
     output.mkdir()
+    owned_output = cli._OwnedOutputDirectory.from_path(output)
     target = output / "partial.json"
     handle = target.open("xb")
     owned = cli._OwnedArtifact.from_open_file(target, handle, b"complete-payload")
     handle.write(b"partial")
     handle.flush()
 
-    cli._remove_owned_output(output, [owned])
+    cli._remove_owned_output(owned_output, [owned])
 
     assert not output.exists()
+
+
+def test_cleanup_preserves_a_replaced_output_directory(tmp_path: Path) -> None:
+    output = tmp_path / "owned-output"
+    owned_output = cli._create_output_directory(output)
+    output.rmdir()
+    output.mkdir()
+    foreign = output / "foreign-winner.txt"
+    foreign.write_bytes(b"foreign-winner")
+
+    cli._remove_owned_output(owned_output, [])
+
+    assert foreign.read_bytes() == b"foreign-winner"
+    assert output.is_dir()
+
+
+@pytest.mark.parametrize("stall_sidecar", [False, True])
+def test_short_write_never_marks_complete_and_rolls_back_owned_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stall_sidecar: bool,
+) -> None:
+    output = tmp_path / "owned-output"
+    owned_output = cli._create_output_directory(output)
+    owned_records: list[cli._OwnedArtifact] = []
+    real_open = cli._open_exclusive
+
+    def open_with_stall(path: Path) -> BinaryIO:
+        handle = real_open(path)
+        is_sidecar = path.name.endswith(".sha256")
+        if is_sidecar == stall_sidecar:
+            return cast(BinaryIO, _StallingWriter(handle))
+        return handle
+
+    monkeypatch.setattr(cli, "_open_exclusive", open_with_stall)
+
+    with pytest.raises(
+        InventoryPositiveV3IndependentValidationError,
+        match="short write",
+    ):
+        cli._write_text_and_sidecar(output, "report.json", "payload\n", owned_records)
+    assert any(not record.complete for record in owned_records)
+
+    cli._remove_owned_output(owned_output, owned_records)
+
+    assert all(record.handle.closed for record in owned_records)
+    assert not output.exists()
+
+
+def test_successful_materialization_releases_every_identity_handle(tmp_path: Path) -> None:
+    output = tmp_path / "owned-output"
+    output.mkdir()
+    owned_records: list[cli._OwnedArtifact] = []
+
+    cli._write_text_and_sidecar(output, "report.json", "payload\n", owned_records)
+    assert all(not record.handle.closed for record in owned_records)
+
+    cli._release_owned_output(owned_records)
+
+    assert all(record.handle.closed for record in owned_records)
+
+
+def test_pre_registration_failure_closes_the_exclusive_handle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "owned-output"
+    output.mkdir()
+    opened: list[BinaryIO] = []
+    real_open = cli._open_exclusive
+
+    def tracked_open(path: Path) -> BinaryIO:
+        handle = real_open(path)
+        opened.append(handle)
+        return handle
+
+    def reject_registration(
+        _cls: type[cli._OwnedArtifact],
+        _path: Path,
+        _handle: BinaryIO,
+        _payload: bytes,
+    ) -> cli._OwnedArtifact:
+        raise OSError("synthetic fstat failure")
+
+    monkeypatch.setattr(cli, "_open_exclusive", tracked_open)
+    monkeypatch.setattr(
+        cli._OwnedArtifact,
+        "from_open_file",
+        classmethod(reject_registration),
+    )
+
+    with pytest.raises(OSError, match="synthetic fstat failure"):
+        cli._write_text_and_sidecar(output, "report.json", "payload\n", [])
+
+    assert len(opened) == 1
+    assert opened[0].closed
+    assert (output / "report.json").is_file()
+
+
+def test_release_failure_is_reported_after_every_handle_is_attempted(tmp_path: Path) -> None:
+    output = tmp_path / "owned-output"
+    output.mkdir()
+    owned_records: list[cli._OwnedArtifact] = []
+    cli._write_text_and_sidecar(output, "report.json", "payload\n", owned_records)
+    proxy = _CloseErrorAfterRelease(owned_records[-1].handle)
+    owned_records[-1].handle = cast(BinaryIO, proxy)
+
+    with pytest.raises(
+        InventoryPositiveV3IndependentValidationError,
+        match="artifact handle release failed",
+    ):
+        cli._release_owned_output(owned_records)
+
+    assert proxy.close_calls >= 2
+    assert all(record.handle.closed for record in owned_records)
+
+
+def test_two_public_cli_invocations_share_one_output_reservation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli, "_verify_clean_head", lambda expected: (_HEAD, _ROOT))
+    output = tmp_path / "one-winner"
+    start = Barrier(2)
+    winner_reserved = Event()
+    release_winner = Event()
+    real_create = cli._create_output_directory
+
+    def create_and_hold(path: Path) -> cli._OwnedOutputDirectory:
+        owned_output = real_create(path)
+        winner_reserved.set()
+        if not release_winner.wait(timeout=10):
+            raise RuntimeError("test did not release the output reservation")
+        return owned_output
+
+    monkeypatch.setattr(cli, "_create_output_directory", create_and_hold)
+
+    def invoke() -> int:
+        start.wait()
+        return cli.main(
+            [
+                "prepare",
+                "--output",
+                str(output),
+                "--expected-head",
+                _HEAD,
+            ]
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = tuple(executor.submit(invoke) for _index in range(2))
+        assert winner_reserved.wait(timeout=10)
+        finished, _pending = wait(
+            futures,
+            timeout=10,
+            return_when=FIRST_COMPLETED,
+        )
+        try:
+            assert len(finished) == 1
+            assert next(iter(finished)).result() == 2
+        finally:
+            release_winner.set()
+        results = tuple(future.result(timeout=20) for future in futures)
+
+    assert sorted(results) == [0, 2]
+    report = output / "inventory-positive-v3-validation-readiness-report.json"
+    assert report.is_file()
+    digest = hashlib.sha256(report.read_bytes()).hexdigest()
+    assert report.with_suffix(".json.sha256").read_text(encoding="ascii") == (
+        f"{digest}  {report.name}\n"
+    )
 
 
 def test_prepare_rechecks_exact_head_after_writing_and_rolls_back(

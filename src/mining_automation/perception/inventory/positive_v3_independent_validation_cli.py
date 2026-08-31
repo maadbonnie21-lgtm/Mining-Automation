@@ -32,7 +32,6 @@ class _OwnedArtifact:
     inode: int
     expected_sha256: str
     handle: BinaryIO
-    modified_ns: int
     size_bytes: int
     complete: bool = False
 
@@ -50,13 +49,15 @@ class _OwnedArtifact:
             inode=stat.st_ino,
             expected_sha256=hashlib.sha256(payload).hexdigest(),
             handle=handle,
-            modified_ns=stat.st_mtime_ns,
             size_bytes=len(payload),
         )
 
     def mark_complete(self) -> None:
         stat = os.fstat(self.handle.fileno())
-        self.modified_ns = stat.st_mtime_ns
+        if stat.st_size != self.size_bytes:
+            raise InventoryPositiveV3IndependentValidationError(
+                f"artifact size differs after write: {self.path.name}"
+            )
         self.complete = True
 
     def current_path_matches_recorded_artifact(self) -> bool:
@@ -76,7 +77,6 @@ class _OwnedArtifact:
         return (
             stat.st_dev == self.device
             and stat.st_ino == self.inode
-            and stat.st_mtime_ns == self.modified_ns
             and stat.st_size == self.size_bytes
         )
 
@@ -97,7 +97,6 @@ class _OwnedArtifact:
         if not identity_matches:
             return False
         if not self.complete:
-            self.modified_ns = held.st_mtime_ns
             self.size_bytes = held.st_size
             return identity_matches
         return self.current_path_matches_recorded_artifact()
@@ -107,6 +106,34 @@ class _OwnedArtifact:
             self.handle.close()
         except OSError:
             pass
+
+    def release(self) -> None:
+        self.handle.close()
+        if not self.handle.closed:
+            raise InventoryPositiveV3IndependentValidationError(
+                f"artifact handle did not close: {self.path.name}"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class _OwnedOutputDirectory:
+    """Identity of the directory reservation won by this invocation."""
+
+    path: Path
+    device: int
+    inode: int
+
+    @classmethod
+    def from_path(cls, path: Path) -> _OwnedOutputDirectory:
+        stat = path.stat(follow_symlinks=False)
+        return cls(path=path, device=stat.st_dev, inode=stat.st_ino)
+
+    def still_owns_path(self) -> bool:
+        try:
+            stat = self.path.stat(follow_symlinks=False)
+        except OSError:
+            return False
+        return stat.st_dev == self.device and stat.st_ino == self.inode
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -194,6 +221,44 @@ def _canonical_json(value: object) -> str:
     )
 
 
+def _open_exclusive(path: Path) -> BinaryIO:
+    # Unbuffered exclusive writes make short-write state visible to the
+    # identity handle immediately and avoid a late buffered flush at close.
+    return path.open("xb", buffering=0)
+
+
+def _write_owned_payload(
+    path: Path,
+    payload: bytes,
+    owned_paths: list[_OwnedArtifact],
+) -> _OwnedArtifact:
+    handle = _open_exclusive(path)
+    try:
+        owned = _OwnedArtifact.from_open_file(path, handle, payload)
+    except Exception:
+        try:
+            handle.close()
+        except OSError:
+            pass
+        raise
+    owned_paths.append(owned)
+    offset = 0
+    while offset < len(payload):
+        written = handle.write(payload[offset:])
+        if written <= 0 or written > len(payload) - offset:
+            raise InventoryPositiveV3IndependentValidationError(
+                f"short write while materializing artifact: {path.name}"
+            )
+        offset += written
+    handle.flush()
+    if path.read_bytes() != payload:
+        raise InventoryPositiveV3IndependentValidationError(
+            f"written artifact failed readback verification: {path.name}"
+        )
+    owned.mark_complete()
+    return owned
+
+
 def _write_text_and_sidecar(
     output: Path,
     filename: str,
@@ -202,25 +267,11 @@ def _write_text_and_sidecar(
 ) -> tuple[Path, str]:
     path = output / filename
     payload = text.encode("utf-8")
-    handle = path.open("xb")
-    owned = _OwnedArtifact.from_open_file(path, handle, payload)
-    owned_paths.append(owned)
-    handle.write(payload)
-    handle.flush()
-    owned.mark_complete()
+    _write_owned_payload(path, payload, owned_paths)
     digest = hashlib.sha256(payload).hexdigest()
     sidecar = path.with_suffix(path.suffix + ".sha256")
     sidecar_payload = f"{digest}  {path.name}\n".encode("ascii")
-    sidecar_handle = sidecar.open("xb")
-    owned_sidecar = _OwnedArtifact.from_open_file(
-        sidecar,
-        sidecar_handle,
-        sidecar_payload,
-    )
-    owned_paths.append(owned_sidecar)
-    sidecar_handle.write(sidecar_payload)
-    sidecar_handle.flush()
-    owned_sidecar.mark_complete()
+    _write_owned_payload(sidecar, sidecar_payload, owned_paths)
     if path.read_bytes() != payload or sidecar.read_bytes() != sidecar_payload:
         raise InventoryPositiveV3IndependentValidationError(
             f"written artifact failed readback verification: {path.name}"
@@ -228,7 +279,10 @@ def _write_text_and_sidecar(
     return path, digest
 
 
-def _remove_owned_output(output: Path, owned_paths: list[_OwnedArtifact]) -> None:
+def _remove_owned_output(
+    output: _OwnedOutputDirectory,
+    owned_paths: list[_OwnedArtifact],
+) -> None:
     """Roll back only artifacts this invocation created exclusively."""
 
     for owned in reversed(owned_paths):
@@ -257,7 +311,8 @@ def _remove_owned_output(output: Path, owned_paths: list[_OwnedArtifact]) -> Non
         else:
             owned.close()
     try:
-        output.rmdir()
+        if output.still_owns_path():
+            output.path.rmdir()
     except OSError:
         pass
 
@@ -265,17 +320,27 @@ def _remove_owned_output(output: Path, owned_paths: list[_OwnedArtifact]) -> Non
 def _release_owned_output(owned_paths: list[_OwnedArtifact]) -> None:
     """Release the identity handles after successful materialization."""
 
+    errors: list[str] = []
     for owned in reversed(owned_paths):
-        owned.close()
+        try:
+            owned.release()
+        except (OSError, InventoryPositiveV3IndependentValidationError) as error:
+            errors.append(f"{owned.path.name}: {error}")
+            owned.close()
+    if errors:
+        raise InventoryPositiveV3IndependentValidationError(
+            "artifact handle release failed: " + "; ".join(errors)
+        )
 
 
-def _create_output_directory(output: Path) -> None:
+def _create_output_directory(output: Path) -> _OwnedOutputDirectory:
     try:
         output.mkdir(exist_ok=False)
     except FileExistsError as error:
         raise InventoryPositiveV3IndependentValidationError(
             f"output already exists: {output}"
         ) from error
+    return _OwnedOutputDirectory.from_path(output)
 
 
 def _prepare_templates() -> Mapping[str, Mapping[str, object]]:
@@ -390,7 +455,7 @@ def _prepare(output: Path, expected_head: str) -> int:
     )
     _verify_clean_head(expected_head)
     output.parent.mkdir(parents=True, exist_ok=True)
-    _create_output_directory(output)
+    owned_output = _create_output_directory(output)
     owned_paths: list[_OwnedArtifact] = []
     try:
         prereg_path, prereg_digest = _write_text_and_sidecar(
@@ -414,7 +479,7 @@ def _prepare(output: Path, expected_head: str) -> int:
         )
         _verify_clean_head(expected_head)
     except Exception:
-        _remove_owned_output(output, owned_paths)
+        _remove_owned_output(owned_output, owned_paths)
         raise
     else:
         _release_owned_output(owned_paths)
@@ -437,7 +502,7 @@ def _evaluate(dataset: Path, output: Path, expected_head: str) -> int:
     )
     _verify_clean_head(expected_head)
     output.parent.mkdir(parents=True, exist_ok=True)
-    _create_output_directory(output)
+    owned_output = _create_output_directory(output)
     owned_paths: list[_OwnedArtifact] = []
     try:
         report_path, report_digest = _write_text_and_sidecar(
@@ -448,7 +513,7 @@ def _evaluate(dataset: Path, output: Path, expected_head: str) -> int:
         )
         _verify_clean_head(expected_head)
     except Exception:
-        _remove_owned_output(output, owned_paths)
+        _remove_owned_output(owned_output, owned_paths)
         raise
     else:
         _release_owned_output(owned_paths)

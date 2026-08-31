@@ -224,6 +224,15 @@ require an exact clean evaluator head. Output directories must be new. Reports
 are canonical, sorted JSON with LF line endings and adjacent `.sha256`
 sidecars.
 
+Exclusive output-directory creation is the transaction reservation shared by
+normal tool invocations. Exactly one invocation can own a requested output;
+losers stop before opening an artifact, and rollback only considers paths
+recorded after that winner's exclusive create. Handles and full-write/readback
+fingerprints remain live through the final exact-head check. Replacement by an
+arbitrary process that ignores this reservation is treated as external
+filesystem tampering, not as a second valid tool invocation; detected
+replacement bytes are preserved and the run fails closed.
+
 Prepare the offline readiness bundle and templates with:
 
 ```powershell
