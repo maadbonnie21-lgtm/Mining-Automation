@@ -35,6 +35,7 @@ from .production_profiles import (
     trust_varrock_east_iron_observations,
     varrock_east_iron_scene_excluded_regions,
 )
+from .production_resource_pipeline import capture_detect_trust_varrock_east_iron
 from .replay import (
     MANIFEST_SCHEMA_VERSION,
     ConfidenceRange,
@@ -166,6 +167,7 @@ __all__ = [
     "analyze_wide_scene_registration",
     "build_replay_manifest",
     "build_varrock_east_iron_detector",
+    "capture_detect_trust_varrock_east_iron",
     "classify_reacquisition",
     "compare_scene_frames",
     "evaluate_dataset",
