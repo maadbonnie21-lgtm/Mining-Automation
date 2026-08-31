@@ -1,0 +1,1442 @@
+{
+  "activation_allowed": false,
+  "candidate": {
+    "activation_allowed": false,
+    "candidate_kind": "inventory-live-profile-candidate",
+    "candidate_schema_version": 1,
+    "detector": {
+      "configuration_id": "inventory-detector-config-5991ca1c46bb5b6e5bb31330730c668ede3463740c1e8f26a4d433c1c2753c4e",
+      "detector_id": "inventory-baseline",
+      "detector_version": "1.0.0",
+      "minimum_slot_confidence": 0.8
+    },
+    "evidence": {
+      "package_manifest_sha256": "04077b1443849aa245449d6ee1543f4fc5c305a30a8ae021801d70f3d6ca8fb6",
+      "reference_capture_id": "20260830T183116.108869Z-empty-reference",
+      "reference_payload_sha256": "01bdec679aa8402e54c0ac7c36414dd6489058b1b3f3721124d1c5e6aaf136f8",
+      "reference_region_sha256": "c46c43ecf972c05a34b968f5f232c886cb253eb511bd916f5f36670defad1df3",
+      "reference_session_id": "20260830T183057.424897Z-inventory-session",
+      "review_record_sha256": "24e938afbf0538111c2379207c647f5e07f6f183bf6e3aaf96a85e09c52c1f2a"
+    },
+    "frame": {
+      "height": 1078,
+      "pixel_format": "bgra8888",
+      "width": 1005
+    },
+    "profile": {
+      "column_stride": 42,
+      "columns": 4,
+      "profile_id": "candidate-live-inventory-348867800b28a54e",
+      "region": [
+        567,
+        569,
+        158,
+        248
+      ],
+      "row_stride": 36,
+      "rows": 7,
+      "slot_size": 32
+    },
+    "review_status": "candidate-awaiting-release-approval"
+  },
+  "cases": [
+    {
+      "case_id": "20260830T183057.424897Z-inventory-session/20260830T183116.108869Z-empty-reference",
+      "current_safety_expectation": {
+        "confidence": 1.0,
+        "configuration_id": "inventory-detector-config-5991ca1c46bb5b6e5bb31330730c668ede3463740c1e8f26a4d433c1c2753c4e",
+        "label": "empty",
+        "localization_confidence": 1.0,
+        "occupied_slots": 0,
+        "profile_id": "candidate-live-inventory-348867800b28a54e",
+        "reason": null,
+        "region": [
+          567,
+          569,
+          158,
+          248
+        ],
+        "slots": [
+          {
+            "confidence": 1.0,
+            "index": 0,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 1,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 2,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 3,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 4,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 5,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 6,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 7,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 8,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 9,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 10,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 11,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 12,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 13,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 14,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 15,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 16,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 17,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 18,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 19,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 20,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 21,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 22,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 23,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 24,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 25,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 26,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 27,
+            "score": 0.0,
+            "state": "empty"
+          }
+        ]
+      },
+      "frame_region": {
+        "path": "frames/001-20260830T183116.108869Z-empty-reference.region.bgra",
+        "sha256": "c46c43ecf972c05a34b968f5f232c886cb253eb511bd916f5f36670defad1df3"
+      },
+      "review_truth": {
+        "artwork_tags": [],
+        "capture_id": "20260830T183116.108869Z-empty-reference",
+        "decision": "approved",
+        "drag_visible": false,
+        "geometry_source": false,
+        "occupied_slots": 0,
+        "operator_intent_confirmed": true,
+        "panel_raw_sha256": "0c3172e9e78d1156186fbd9052dadf053b4e47fe68631ec8b02590d2906b3223",
+        "quantity_text_visible": false,
+        "rejection_reason": null,
+        "selected_item_visible": false,
+        "session_id": "20260830T183057.424897Z-inventory-session",
+        "validation_split": "reference",
+        "visibility": "inventory-visible"
+      },
+      "source": {
+        "payload_sha256": "01bdec679aa8402e54c0ac7c36414dd6489058b1b3f3721124d1c5e6aaf136f8",
+        "report_sha256": "108ff177a1705b43b418b971c20c9c92d96102bca286121eab058d4126fa8b73",
+        "session_report_sha256": "83e9eb2283b3e15e653e98e1f67e53ee104f443b987679a1c0a7945d075fcb4a"
+      }
+    },
+    {
+      "case_id": "20260830T183057.424897Z-inventory-session/20260830T183124.595093Z-empty-validation",
+      "current_safety_expectation": {
+        "confidence": 1.0,
+        "configuration_id": "inventory-detector-config-5991ca1c46bb5b6e5bb31330730c668ede3463740c1e8f26a4d433c1c2753c4e",
+        "label": "empty",
+        "localization_confidence": 1.0,
+        "occupied_slots": 0,
+        "profile_id": "candidate-live-inventory-348867800b28a54e",
+        "reason": null,
+        "region": [
+          567,
+          569,
+          158,
+          248
+        ],
+        "slots": [
+          {
+            "confidence": 1.0,
+            "index": 0,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 1,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 2,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 3,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 4,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 5,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 6,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 7,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 8,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 9,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 10,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 11,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 12,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 13,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 14,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 15,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 16,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 17,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 18,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 19,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 20,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 21,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 22,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 23,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 24,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 25,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 26,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 27,
+            "score": 0.0,
+            "state": "empty"
+          }
+        ]
+      },
+      "frame_region": {
+        "path": "frames/002-20260830T183124.595093Z-empty-validation.region.bgra",
+        "sha256": "c46c43ecf972c05a34b968f5f232c886cb253eb511bd916f5f36670defad1df3"
+      },
+      "review_truth": {
+        "artwork_tags": [],
+        "capture_id": "20260830T183124.595093Z-empty-validation",
+        "decision": "approved",
+        "drag_visible": false,
+        "geometry_source": false,
+        "occupied_slots": 0,
+        "operator_intent_confirmed": true,
+        "panel_raw_sha256": "85bf421272e80298491f23cd1838f7911e26a954c95a76c14bf9e4a76fbfc843",
+        "quantity_text_visible": false,
+        "rejection_reason": null,
+        "selected_item_visible": false,
+        "session_id": "20260830T183057.424897Z-inventory-session",
+        "validation_split": "held-out",
+        "visibility": "inventory-visible"
+      },
+      "source": {
+        "payload_sha256": "a1919c0edd0e1b5e4a996977bbb9aab722f51cfb26374f504dca8f2ea580b336",
+        "report_sha256": "a8a546c36c556e1a7e4b3a5d01c64dda166b36a0528b787c6cd3a7f49615b91a",
+        "session_report_sha256": "83e9eb2283b3e15e653e98e1f67e53ee104f443b987679a1c0a7945d075fcb4a"
+      }
+    },
+    {
+      "case_id": "20260830T183057.424897Z-inventory-session/20260830T183146.765045Z-partial",
+      "current_safety_expectation": {
+        "confidence": 0.0,
+        "configuration_id": "inventory-detector-config-5991ca1c46bb5b6e5bb31330730c668ede3463740c1e8f26a4d433c1c2753c4e",
+        "label": "unknown",
+        "localization_confidence": 1.0,
+        "occupied_slots": null,
+        "profile_id": "candidate-live-inventory-348867800b28a54e",
+        "reason": "slot_confidence_below_threshold: 0",
+        "region": [
+          567,
+          569,
+          158,
+          248
+        ],
+        "slots": [
+          {
+            "confidence": 0.6327077572481984,
+            "index": 0,
+            "score": 0.42702410130718954,
+            "state": "occupied"
+          },
+          {
+            "confidence": 1.0,
+            "index": 1,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 2,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 3,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 4,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 5,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 6,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 7,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 8,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 9,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 10,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 11,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 12,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 13,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 14,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 15,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 16,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 17,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 18,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 19,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 20,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 21,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 22,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 23,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 24,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 25,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 26,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 27,
+            "score": 0.0,
+            "state": "empty"
+          }
+        ]
+      },
+      "frame_region": {
+        "path": "frames/003-20260830T183146.765045Z-partial.region.bgra",
+        "sha256": "98e46326316319b4fe27c558e24e224564030aea32ffca04204e579cd386659f"
+      },
+      "review_truth": {
+        "artwork_tags": [
+          "iron-ore",
+          "single-item"
+        ],
+        "capture_id": "20260830T183146.765045Z-partial",
+        "decision": "approved",
+        "drag_visible": false,
+        "geometry_source": false,
+        "occupied_slots": 1,
+        "operator_intent_confirmed": true,
+        "panel_raw_sha256": "821fc81061ffc64c5c7390b633875a6df83ad44a3361df7c2f030abc7fe653d0",
+        "quantity_text_visible": false,
+        "rejection_reason": null,
+        "selected_item_visible": false,
+        "session_id": "20260830T183057.424897Z-inventory-session",
+        "validation_split": "calibration",
+        "visibility": "inventory-visible"
+      },
+      "source": {
+        "payload_sha256": "4fb8e376536e4d0ed4610c95f89d74d03dedc407531bbc7830cd988ab13dc345",
+        "report_sha256": "aa5a95b4df1dcc6b1151a103eaf0347be43ef1dc093002f3234b4eb36a8428f9",
+        "session_report_sha256": "83e9eb2283b3e15e653e98e1f67e53ee104f443b987679a1c0a7945d075fcb4a"
+      }
+    },
+    {
+      "case_id": "20260830T183057.424897Z-inventory-session/20260830T184604.267640Z-full",
+      "current_safety_expectation": {
+        "confidence": 0.0,
+        "configuration_id": "inventory-detector-config-5991ca1c46bb5b6e5bb31330730c668ede3463740c1e8f26a4d433c1c2753c4e",
+        "label": "unknown",
+        "localization_confidence": 1.0,
+        "occupied_slots": null,
+        "profile_id": "candidate-live-inventory-348867800b28a54e",
+        "reason": "slot_confidence_below_threshold: 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27",
+        "region": [
+          567,
+          569,
+          158,
+          248
+        ],
+        "slots": [
+          {
+            "confidence": 0.6327077572481984,
+            "index": 0,
+            "score": 0.42702410130718954,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6342514035528741,
+            "index": 1,
+            "score": 0.42943218954248363,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6341885579017932,
+            "index": 2,
+            "score": 0.42933415032679734,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6349837299592201,
+            "index": 3,
+            "score": 0.4305746187363834,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6342666785375118,
+            "index": 4,
+            "score": 0.4294560185185185,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6381199025194123,
+            "index": 5,
+            "score": 0.43546704793028324,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6397124287749287,
+            "index": 6,
+            "score": 0.43795138888888885,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.637302036199095,
+            "index": 7,
+            "score": 0.4341911764705882,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.639721157337579,
+            "index": 8,
+            "score": 0.4379650054466231,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6365753833584715,
+            "index": 9,
+            "score": 0.4330575980392157,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.638900236020334,
+            "index": 10,
+            "score": 0.4366843681917211,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6388090225406402,
+            "index": 11,
+            "score": 0.43654207516339866,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6373862668286687,
+            "index": 12,
+            "score": 0.43432257625272325,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6381473974917602,
+            "index": 13,
+            "score": 0.43550994008714594,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6412338172448466,
+            "index": 14,
+            "score": 0.44032475490196077,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6404822880006703,
+            "index": 15,
+            "score": 0.4391523692810457,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6365806204960617,
+            "index": 16,
+            "score": 0.4330657679738562,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6388155689626277,
+            "index": 17,
+            "score": 0.4365522875816993,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6405324772359086,
+            "index": 18,
+            "score": 0.4392306644880174,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6372186784257863,
+            "index": 19,
+            "score": 0.43406113834422655,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.638100699681582,
+            "index": 20,
+            "score": 0.435437091503268,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6404342809060946,
+            "index": 21,
+            "score": 0.43907747821350757,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6388072768281101,
+            "index": 22,
+            "score": 0.4365393518518518,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6403906380928439,
+            "index": 23,
+            "score": 0.4390093954248365,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6396762052399307,
+            "index": 24,
+            "score": 0.4378948801742919,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6411932294285235,
+            "index": 25,
+            "score": 0.4402614379084967,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6451289383274678,
+            "index": 26,
+            "score": 0.44640114379084966,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6411661708843082,
+            "index": 27,
+            "score": 0.4402192265795207,
+            "state": "occupied"
+          }
+        ]
+      },
+      "frame_region": {
+        "path": "frames/004-20260830T184604.267640Z-full.region.bgra",
+        "sha256": "f97f030cf54f8be39e949d8d190a3dfe533539bceabb7a881ea20931064b04fb"
+      },
+      "review_truth": {
+        "artwork_tags": [
+          "iron-ore",
+          "low-contrast",
+          "repeated-art"
+        ],
+        "capture_id": "20260830T184604.267640Z-full",
+        "decision": "approved",
+        "drag_visible": false,
+        "geometry_source": true,
+        "occupied_slots": 28,
+        "operator_intent_confirmed": true,
+        "panel_raw_sha256": "07b15ecacf834dfa216653fb82bc0576f4b6f6d72ace1f29923cfeea74ceebda",
+        "quantity_text_visible": false,
+        "rejection_reason": null,
+        "selected_item_visible": false,
+        "session_id": "20260830T183057.424897Z-inventory-session",
+        "validation_split": "calibration",
+        "visibility": "inventory-visible"
+      },
+      "source": {
+        "payload_sha256": "1fc7be73207b42216ba7879f6768902ccde344059451f954106832830f3d3ead",
+        "report_sha256": "b4e810243b4322909ad6f726c20d7ff7044edd0b4201f217b6e2c6db5cf11f6d",
+        "session_report_sha256": "83e9eb2283b3e15e653e98e1f67e53ee104f443b987679a1c0a7945d075fcb4a"
+      }
+    },
+    {
+      "case_id": "20260830T183057.424897Z-inventory-session/20260830T184613.513325Z-wrong-tab",
+      "current_safety_expectation": {
+        "confidence": 0.0,
+        "configuration_id": "inventory-detector-config-5991ca1c46bb5b6e5bb31330730c668ede3463740c1e8f26a4d433c1c2753c4e",
+        "label": "unknown",
+        "localization_confidence": 1.0,
+        "occupied_slots": null,
+        "profile_id": "candidate-live-inventory-348867800b28a54e",
+        "reason": "inventory_obstructed: inventory guard changed fraction 0.893075 exceeds configured maximum 0.500000",
+        "region": [
+          567,
+          569,
+          158,
+          248
+        ],
+        "slots": []
+      },
+      "frame_region": {
+        "path": "frames/005-20260830T184613.513325Z-wrong-tab.region.bgra",
+        "sha256": "ebcf1d2595fc49b4b98fde92596babf725b52ce775c9c98f516508a42660a54e"
+      },
+      "review_truth": {
+        "artwork_tags": [],
+        "capture_id": "20260830T184613.513325Z-wrong-tab",
+        "decision": "approved",
+        "drag_visible": false,
+        "geometry_source": false,
+        "occupied_slots": null,
+        "operator_intent_confirmed": true,
+        "panel_raw_sha256": "d7da3e24501ebbe4f3c4b11d763b23fca45616fdccbbe99acd90ef7d225265bd",
+        "quantity_text_visible": false,
+        "rejection_reason": null,
+        "selected_item_visible": false,
+        "session_id": "20260830T183057.424897Z-inventory-session",
+        "validation_split": "negative",
+        "visibility": "wrong-tab-visible"
+      },
+      "source": {
+        "payload_sha256": "6d0c7a9915107e7478c2bc87dcc0eb0931a5d5e876067830128b37fb426c2f7c",
+        "report_sha256": "57341845d8ada1bf0f3b8c5431b3828a18ab5125dfb64305ae56078cb7cf45b9",
+        "session_report_sha256": "83e9eb2283b3e15e653e98e1f67e53ee104f443b987679a1c0a7945d075fcb4a"
+      }
+    },
+    {
+      "case_id": "20260830T183057.424897Z-inventory-session/20260830T184628.891977Z-obstructed",
+      "current_safety_expectation": {
+        "confidence": 0.0,
+        "configuration_id": "inventory-detector-config-5991ca1c46bb5b6e5bb31330730c668ede3463740c1e8f26a4d433c1c2753c4e",
+        "label": "unknown",
+        "localization_confidence": 1.0,
+        "occupied_slots": null,
+        "profile_id": "candidate-live-inventory-348867800b28a54e",
+        "reason": "inventory_obstructed: inventory row guard changed fraction 0.116825 exceeds configured maximum 0.000000",
+        "region": [
+          567,
+          569,
+          158,
+          248
+        ],
+        "slots": []
+      },
+      "frame_region": {
+        "path": "frames/006-20260830T184628.891977Z-obstructed.region.bgra",
+        "sha256": "f7838841735cabd3140ad39be847283bf94999c301d1b62514b07ceb6fb732aa"
+      },
+      "review_truth": {
+        "artwork_tags": [
+          "context-menu"
+        ],
+        "capture_id": "20260830T184628.891977Z-obstructed",
+        "decision": "approved",
+        "drag_visible": false,
+        "geometry_source": false,
+        "occupied_slots": null,
+        "operator_intent_confirmed": true,
+        "panel_raw_sha256": "a103c70c7deebcfd3c25e9370ff0398c59740210c5b122a77d655c2230afb481",
+        "quantity_text_visible": false,
+        "rejection_reason": null,
+        "selected_item_visible": false,
+        "session_id": "20260830T183057.424897Z-inventory-session",
+        "validation_split": "negative",
+        "visibility": "inventory-obstructed"
+      },
+      "source": {
+        "payload_sha256": "632e5a2374fc65c229f6f48a34f2e1fa571ae72562cb1d1c32a69aba43cd37f7",
+        "report_sha256": "79b25b5b385d16ac00faf8f62a5e1f6716461c9cc7202a480ebdbc4efcae4dd1",
+        "session_report_sha256": "83e9eb2283b3e15e653e98e1f67e53ee104f443b987679a1c0a7945d075fcb4a"
+      }
+    },
+    {
+      "case_id": "20260830T183057.424897Z-inventory-session/20260830T184642.926662Z-hover-drag",
+      "current_safety_expectation": {
+        "confidence": 0.0,
+        "configuration_id": "inventory-detector-config-5991ca1c46bb5b6e5bb31330730c668ede3463740c1e8f26a4d433c1c2753c4e",
+        "label": "unknown",
+        "localization_confidence": 1.0,
+        "occupied_slots": null,
+        "profile_id": "candidate-live-inventory-348867800b28a54e",
+        "reason": "slot_confidence_below_threshold: 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27",
+        "region": [
+          567,
+          569,
+          158,
+          248
+        ],
+        "slots": [
+          {
+            "confidence": 0.7152123135579017,
+            "index": 0,
+            "score": 0.5557312091503267,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6342514035528741,
+            "index": 1,
+            "score": 0.42943218954248363,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6341885579017932,
+            "index": 2,
+            "score": 0.42933415032679734,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6349837299592201,
+            "index": 3,
+            "score": 0.4305746187363834,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6342666785375118,
+            "index": 4,
+            "score": 0.4294560185185185,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6381199025194123,
+            "index": 5,
+            "score": 0.43546704793028324,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6397124287749287,
+            "index": 6,
+            "score": 0.43795138888888885,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.637302036199095,
+            "index": 7,
+            "score": 0.4341911764705882,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.639721157337579,
+            "index": 8,
+            "score": 0.4379650054466231,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6365753833584715,
+            "index": 9,
+            "score": 0.4330575980392157,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.638900236020334,
+            "index": 10,
+            "score": 0.4366843681917211,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6388090225406402,
+            "index": 11,
+            "score": 0.43654207516339866,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6373862668286687,
+            "index": 12,
+            "score": 0.43432257625272325,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6381473974917602,
+            "index": 13,
+            "score": 0.43550994008714594,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6412338172448466,
+            "index": 14,
+            "score": 0.44032475490196077,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6404822880006703,
+            "index": 15,
+            "score": 0.4391523692810457,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6365806204960617,
+            "index": 16,
+            "score": 0.4330657679738562,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6388155689626277,
+            "index": 17,
+            "score": 0.4365522875816993,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6405324772359086,
+            "index": 18,
+            "score": 0.4392306644880174,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6372186784257863,
+            "index": 19,
+            "score": 0.43406113834422655,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.638100699681582,
+            "index": 20,
+            "score": 0.435437091503268,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6404342809060946,
+            "index": 21,
+            "score": 0.43907747821350757,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6388072768281101,
+            "index": 22,
+            "score": 0.4365393518518518,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6403906380928439,
+            "index": 23,
+            "score": 0.4390093954248365,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6396762052399307,
+            "index": 24,
+            "score": 0.4378948801742919,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6411932294285235,
+            "index": 25,
+            "score": 0.4402614379084967,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6451289383274678,
+            "index": 26,
+            "score": 0.44640114379084966,
+            "state": "occupied"
+          },
+          {
+            "confidence": 0.6411661708843082,
+            "index": 27,
+            "score": 0.4402192265795207,
+            "state": "occupied"
+          }
+        ]
+      },
+      "frame_region": {
+        "path": "frames/007-20260830T184642.926662Z-hover-drag.region.bgra",
+        "sha256": "c60da57ee249bcb82f65e05b2092ed1703d0a04e83a18f6cc00b0a1c59bac49c"
+      },
+      "review_truth": {
+        "artwork_tags": [
+          "iron-ore",
+          "repeated-art",
+          "selected-item"
+        ],
+        "capture_id": "20260830T184642.926662Z-hover-drag",
+        "decision": "approved",
+        "drag_visible": false,
+        "geometry_source": false,
+        "occupied_slots": 28,
+        "operator_intent_confirmed": false,
+        "panel_raw_sha256": "5fb5bfa0c1c211475ce87a10e4b902889b62aed32eb409dd91997625f6dfc142",
+        "quantity_text_visible": false,
+        "rejection_reason": null,
+        "selected_item_visible": true,
+        "session_id": "20260830T183057.424897Z-inventory-session",
+        "validation_split": "adversarial",
+        "visibility": "inventory-visible"
+      },
+      "source": {
+        "payload_sha256": "372eec3d1fc4c518f7738f60397d8481f601f7effc6a9bda37f987038f3bdc60",
+        "report_sha256": "418804f0aad3595460325edef5ddf1be870834a05428f3ae1469050df9a8cc72",
+        "session_report_sha256": "83e9eb2283b3e15e653e98e1f67e53ee104f443b987679a1c0a7945d075fcb4a"
+      }
+    },
+    {
+      "case_id": "20260830T183057.424897Z-inventory-session/20260830T185539.015871Z-quantity-text",
+      "current_safety_expectation": {
+        "confidence": 0.0,
+        "configuration_id": "inventory-detector-config-5991ca1c46bb5b6e5bb31330730c668ede3463740c1e8f26a4d433c1c2753c4e",
+        "label": "unknown",
+        "localization_confidence": 1.0,
+        "occupied_slots": null,
+        "profile_id": "candidate-live-inventory-348867800b28a54e",
+        "reason": "slot_confidence_below_threshold: 0",
+        "region": [
+          567,
+          569,
+          158,
+          248
+        ],
+        "slots": [
+          {
+            "confidence": 0.5857166673649516,
+            "index": 0,
+            "score": 0.35371800108932455,
+            "state": "occupied"
+          },
+          {
+            "confidence": 1.0,
+            "index": 1,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 2,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 3,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 4,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 5,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 6,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 7,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 8,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 9,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 10,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 11,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 12,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 13,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 14,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 15,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 16,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 17,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 18,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 19,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 20,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 21,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 22,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 23,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 24,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 25,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 26,
+            "score": 0.0,
+            "state": "empty"
+          },
+          {
+            "confidence": 1.0,
+            "index": 27,
+            "score": 0.0,
+            "state": "empty"
+          }
+        ]
+      },
+      "frame_region": {
+        "path": "frames/008-20260830T185539.015871Z-quantity-text.region.bgra",
+        "sha256": "1d00585937b82baea11797926419ee99c8e03037c13fd28ca788c8cb7c992d3a"
+      },
+      "review_truth": {
+        "artwork_tags": [
+          "coins",
+          "quantity-text"
+        ],
+        "capture_id": "20260830T185539.015871Z-quantity-text",
+        "decision": "approved",
+        "drag_visible": false,
+        "geometry_source": false,
+        "occupied_slots": 1,
+        "operator_intent_confirmed": true,
+        "panel_raw_sha256": "a482cfec9fe6a207285bdada5df08fad64bee7e4fbf3dd9890b5055d0e030de2",
+        "quantity_text_visible": true,
+        "rejection_reason": null,
+        "selected_item_visible": false,
+        "session_id": "20260830T183057.424897Z-inventory-session",
+        "validation_split": "adversarial",
+        "visibility": "inventory-visible"
+      },
+      "source": {
+        "payload_sha256": "968eaf221114ff4f9aa9419a61ac74b69282559898aa1700db64ec2b65a62d5f",
+        "report_sha256": "42ee0ccf57df92515901b30e78884f8282c33b350ccdbfca748210a2e46ead31",
+        "session_report_sha256": "83e9eb2283b3e15e653e98e1f67e53ee104f443b987679a1c0a7945d075fcb4a"
+      }
+    }
+  ],
+  "dataset_id": "inventory-live-candidate-safety-v1",
+  "fixture_kind": "inventory-sanitized-region-replay",
+  "frame_reconstruction": {
+    "fill_byte": 0,
+    "height": 1078,
+    "pixel_format": "bgra8888",
+    "region": [
+      567,
+      569,
+      158,
+      248
+    ],
+    "width": 1005
+  },
+  "schema_version": 1,
+  "warning": "Safety regression fixture; reviewer truth remains separately release-gated."
+}

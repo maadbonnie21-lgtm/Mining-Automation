@@ -17,6 +17,14 @@ through `inventory_detector_from_profile`.
 Unsupported frame geometry is reported as an unknown inventory; it is never
 silently assigned a guessed count.
 
+The separately identified, non-activating positive-classifier V2 candidate is
+documented in `INVENTORY_POSITIVE_CLASSIFIER_V2.md`. It diagnoses the current
+real clean-positive confidence defect while leaving this V1 factory and all V1
+replay expectations unchanged. Its frozen retrospective-validation run failed
+safely on a new presentation guard, so it is not an approved production
+factory. Its evaluator ran after the model freeze, but the second-batch data
+was already repository-visible and is not claimed as truly unseen.
+
 This boundary is intentional. Issue #9 establishes that a slot owns a 32 by 32
 pixel interaction/counting region in a four-column by seven-row inventory. It
 does not establish the live client anchor, row or column pitch, display mode,
@@ -184,6 +192,13 @@ the label is `unknown`, and aggregate confidence is `0.0`. Per-slot evidence is
 retained when classification produced it; earlier localization or obstruction
 failures retain their typed reason and configuration identity instead.
 
+V2 does not lower this `0.8` publication requirement. Its fixed, separate
+classifier requires the same raw occupied state plus distributed support across
+the slot core and every coarse row/column. Seven-cell support clears `0.8`,
+six-cell support remains below it, and raw ambiguity remains uncertain
+regardless of spatial coverage. Publication still fails closed when any V2
+presentation guard rejects the frame.
+
 Known labels are `empty` for zero slots, `full` for 28, and `partial` otherwise.
 The detector's shipped, uncalibrated localization threshold is `0.9`; both the
 localization and slot publication thresholds must be greater than zero.
@@ -221,6 +236,15 @@ factory exists, and it can run that future production `InventoryDetector` on
 the exact captured frame without an architecture change. See
 `INVENTORY_LIVE_VALIDATION.md` for the command, report schema, exit semantics,
 privacy review, and replay-promotion workflow.
+
+After a guided session is captured, use `INVENTORY_REVIEW_REPLAY_GATE.md` for
+the independent truth-recording, reviewed-evidence-only candidate derivation,
+unchanged-detector replay, privacy sanitization, and non-activation boundary.
+The package panels are re-derived from durable owned frames during evaluation,
+and the review record is reviewer-attributed and hash-bound to complete package
+coverage. It is not a cryptographic signature. Capture-environment values
+remain `operator-reported-bound` until a reviewer or lead separately approves
+them.
 
 ## Replay and failure-promotion workflow
 
@@ -295,6 +319,15 @@ incomplete handoff: `capture_build`, `runelite_build`, `frame_size`,
 `validation_split`. Set `validation_split` to `reference`, `calibration`, or
 `held-out`; do not put account names in provenance.
 
+For the guided Windows session, the structured operator-reporting flags are
+`--capture-build`, `--runelite-build`, `--windows-scaling-percent`,
+`--client-mode`, `--runelite-theme`, `--renderer`, and
+`--capture-configuration-id`; `--note` is repeatable supplemental provenance.
+They are frozen when the session is created and cannot be replaced on resume.
+For detector-run resume, the requested detector ID/version and configured
+profile/configuration IDs must also match every completed capture before a new
+backend is constructed.
+
 ### Calibration discipline
 
 Use reviewed frames to propose an immutable `ClassificationPolicy`, then
@@ -319,6 +352,15 @@ approve thresholds. Capture additional byte-distinct partial and full frames
 with different item art for `calibration` and `held-out` splits. If the first
 handoff contains only one partial and one full frame, it can validate the
 composition and replay path but cannot establish a production calibration.
+
+The current real-client evidence remains below this bar: the unchanged
+production detector returns `unknown` for the reviewed partial and full iron
+inventories; no frame visibly proves a genuine held/drag state; the clean
+held-out detector-owned empty region is byte-identical to the reference; and
+the earlier batch lacks the structured scaling/mode/theme/renderer/capture-
+configuration provenance. Keep those real failures as permanent replays and
+do not weaken thresholds, obstruction guards, slot ownership, confidence, or
+unknown-state behavior to make them known.
 
 ## Required live RuneLite validation
 

@@ -133,6 +133,61 @@ def _run(
     )
 
 
+def test_provenance_has_explicit_optional_environment_fields() -> None:
+    legacy = InventoryValidationProvenance(
+        capture_build="legacy-capture",
+        runelite_build="legacy-runelite",
+        notes=("kept compatible",),
+    )
+    assert legacy.as_dict() == {
+        "capture_build": "legacy-capture",
+        "notes": ["kept compatible"],
+        "runelite_build": "legacy-runelite",
+    }
+    assert InventoryValidationProvenance(
+        "legacy-capture",
+        "legacy-runelite",
+        ("kept compatible",),
+    ) == legacy
+
+    complete = InventoryValidationProvenance(
+        capture_build="candidate-head",
+        runelite_build="runelite-1",
+        windows_scaling_percent=125,
+        client_mode="resizable",
+        runelite_theme="dark",
+        renderer="gpu",
+        capture_configuration_id="windows-runelite-1005x1078-v1",
+    )
+    assert complete.as_dict() == {
+        "capture_build": "candidate-head",
+        "capture_configuration_id": "windows-runelite-1005x1078-v1",
+        "client_mode": "resizable",
+        "notes": [],
+        "renderer": "gpu",
+        "runelite_build": "runelite-1",
+        "runelite_theme": "dark",
+        "windows_scaling_percent": 125,
+    }
+
+
+@pytest.mark.parametrize("invalid", [True, 0, -1, 1.5, "125"])
+def test_provenance_rejects_invalid_windows_scaling(invalid: object) -> None:
+    with pytest.raises(ValueError, match="windows_scaling_percent"):
+        InventoryValidationProvenance(
+            windows_scaling_percent=invalid,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["client_mode", "runelite_theme", "renderer", "capture_configuration_id"],
+)
+def test_provenance_rejects_blank_environment_identity(field: str) -> None:
+    with pytest.raises(ValueError, match=field):
+        InventoryValidationProvenance(**{field: " "})  # type: ignore[arg-type]
+
+
 def test_case_labels_are_closed_and_every_label_remains_unverified(tmp_path: Path) -> None:
     assert {case.value for case in InventoryValidationCase} == {
         "empty-reference",

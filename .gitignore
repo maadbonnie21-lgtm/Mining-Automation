@@ -12,3 +12,7 @@ htmlcov/
 
 # Real-client frames and window titles may contain private information.
 /diagnostics/inventory-live/
+/diagnostics/inventory-validation-sessions/
+/diagnostics/inventory-review-gate-dev*/
+/diagnostics/inventory-review-gate-result-dev*/
+/diagnostics/inventory-fixture-dev*/
