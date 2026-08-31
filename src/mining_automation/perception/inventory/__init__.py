@@ -76,6 +76,13 @@ from .positive_v2_calibration import (
     InventoryPositiveV2CalibrationError,
     compute_inventory_positive_v2_calibration_sha256,
 )
+from .positive_v2_evaluation import (
+    INVENTORY_POSITIVE_V2_MODEL_FREEZE_GIT_SHA,
+    InventoryPositiveV2CaseResult,
+    InventoryPositiveV2EvaluationError,
+    InventoryPositiveV2EvaluationReport,
+    evaluate_inventory_positive_v2,
+)
 from .review_gate import (
     CandidateInventoryProfile,
     InventoryCaseReview,
@@ -112,6 +119,7 @@ __all__ = [
     "INVENTORY_POSITIVE_V2_CALIBRATION_SESSION_ID",
     "INVENTORY_POSITIVE_V2_DETECTOR_METADATA",
     "INVENTORY_POSITIVE_V2_HELD_OUT_SESSION_ID",
+    "INVENTORY_POSITIVE_V2_MODEL_FREEZE_GIT_SHA",
     "INVENTORY_ROWS",
     "INVENTORY_SLOT_SIZE",
     "OPTIONAL_INVENTORY_VALIDATION_CASES",
@@ -132,6 +140,9 @@ __all__ = [
     "InventoryObservationError",
     "InventoryPositiveDetectorV2",
     "InventoryPositiveV2CalibrationError",
+    "InventoryPositiveV2CaseResult",
+    "InventoryPositiveV2EvaluationError",
+    "InventoryPositiveV2EvaluationReport",
     "InventoryRegionLocator",
     "InventoryReviewDecision",
     "InventoryReviewGateError",
@@ -159,6 +170,7 @@ __all__ = [
     "SlotOccupancy",
     "extract_capture_bmp",
     "compute_inventory_positive_v2_calibration_sha256",
+    "evaluate_inventory_positive_v2",
     "inventory_detection_from_observation",
     "inventory_detector_from_profile",
     "inventory_positive_detector_v2_from_profile",
