@@ -193,13 +193,16 @@ All schema identities use sorted, compact ASCII JSON with non-finite numbers for
 one final LF:
 
 ```python
-json.dumps(
-    value,
-    allow_nan=False,
-    ensure_ascii=True,
-    separators=(",", ":"),
-    sort_keys=True,
-).encode("ascii") + b"\n"
+(
+    json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+    + b"\n"
+)
 ```
 
 SHA-256 values are exactly 64 lowercase hexadecimal characters over the stored bytes. Future
@@ -266,6 +269,93 @@ transaction. The writer does not undo the misdirected write and does not claim h
 confinement. Future real release-evidence acquisition requires a separately reviewed
 handle-relative, no-follow writer boundary.
 
+Successful acquisition/review receipts also carry required external
+`acquisition_physical_identity_sha256` and `review_physical_identity_sha256` pins. Each digest is
+computed only after the terminal manifest and exact-tree check and covers the root plus every
+expected directory/file—including the terminal file—using stable mode, device, inode/file ID,
+link-count, file-attribute, and reparse-tag fields. Volatile timestamps and content metadata are
+excluded; content/size remain independently digest-bound. Strict intake recomputes the complete
+physical digest before content authority is returned, so an exact-byte file replacement or cloned
+child directory is still rejected. Receipt construction occurs after this pin succeeds and before
+owned handles close; a terminal-open/pin/close failure returns no receipt.
+
+The review plan persists the acquisition physical-identity binding under
+`fixed-route-durable-review-plan-v2`; this is an incompatible wire-shape change from the frozen v1
+offline contract, rather than a new required field hidden behind the old schema label.
+
+### Handle-anchored Windows writer
+
+`navigation.handle_anchored_route_evidence` is that separate writer boundary for the supported
+Windows platform. It does not change or upgrade the pathname writer. Its machine-readable
+contract is `windows_nt_handle_relative_no_follow_fresh_directory_v1` and its machine-readable
+process-integrity prerequisite is true. `HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE`
+remains false pending lead review of that explicit boundary; platform support alone cannot flip a
+release-facing gate. Every requested parent/root must still pass a native per-transaction
+capability check. The reviewed
+storage envelope is a fixed local NTFS drive only. Mapped/network drives, UNC paths, non-NTFS
+filesystems, reparse-point ancestry, and hosts missing the required parent queries fail before the
+transaction root is created. A capability failure discoverable only after the root's atomic
+creation can retain that empty owned root, but occurs before sequencer/source access or evidence
+bytes. The constant identifies an implementation that may be attempted; it is never a claim that
+an arbitrary Windows path is eligible.
+
+The implementation verifies fixed-drive type and the NTFS filesystem before any root mutation,
+opens the drive root once, and traverses every existing parent component with relative
+`NtCreateFile` open-reparse-point calls. It then uses the held final parent/directory handles as
+`RootDirectory` with `FILE_CREATE` for the fresh transaction root, every child directory, and every
+immutable file. Directory handles use asynchronous metadata/child-create access; file handles are
+synchronous and write-through. Every retained handle receives
+`HANDLE_FLAG_PROTECT_FROM_CLOSE` before it enters the owned ledger, and that protection is
+rechecked before native identity use. An ordinary competing `CloseHandle` therefore cannot turn a
+validated integer into a same-value foreign capability before the next relative create. All
+handles remain writer-owned until STOP or finalization. A file is
+written, flushed, rewound, and read back through a duplicate of the exact created handle. Before
+every later create and before a receipt, the writer reopens each owned name relative to its
+retained parent handle and compares stable native file identity, regular-file link count, size,
+type, reparse state, and the public-path identity used by strict intake. There is no fallback from
+an invalid native handle to a saved pathname.
+
+Parent/root replacement before the root's atomic create cannot redirect later evidence: the new
+root is created beneath the held original parent, public-path revalidation fails, the empty owned
+prefix is retained, and no source/sequencer call or receipt occurs. Once the plan file exists, its
+retained non-delete-sharing handle also prevents parent/root rename during frame, case-record,
+package, review, and terminal-manifest creation. A replacement namespace never receives writer
+bytes. Hard-link aliases, reparse identities, handle invalidation, short writes, foreign tree
+entries, and unexpected native create outcomes fail closed. A same-principal hard-link installed
+after exclusive create can observe bytes before the post-write link-count check; detection still
+forces STOP/no receipt, and the alias survives because this is an integrity boundary rather than a
+confidentiality or foreign-delete boundary. Cleanup revalidates type/physical identity before
+closing each numeric handle, requires the close-protection bit still to be present, and only then
+clears it for the controlled close. An unprotected stale value—even one reopened on the same owned
+file—is reported and not closed. The contract does not defend against arbitrary code execution in
+the writer process that deliberately clears handle protection or mutates private ledger state;
+such code already possesses the native authority being protected. The writer has no
+delete/rollback API, so foreign bytes and partial owned prefixes survive.
+
+The reviewed user-mode `NtCreateFile` / `OBJECT_ATTRIBUTES` surface exposes no supported flag that
+atomically returns these file handles already protected. The native call's output remains an
+unpublished local until protection is set; the boundary therefore requires process integrity and
+does not claim confinement against code running inside the process that intercepts the native call
+itself. This is distinct from the ordinary external filesystem rename/replacement/concurrency
+model exercised here and is why the future-real eligibility constant stays false until lead
+review.
+
+Linux and other platforms are deliberately unsupported by this fresh-directory writer and fail
+before reserving the requested root or consulting the capture source. `mkdirat()` returns no
+directory handle, leaving an uncloseable `mkdirat -> openat` replacement/adoption interval. Random
+names, a marker file, `openat2`, or post-open inode checks cannot prove that the opened directory
+is the one this invocation created. The implementation does not label that weaker sequence as
+handle-anchored eligibility.
+
+This constant describes writer infrastructure only. Packages emitted today retain the exact
+synthetic architecture-test evidence role and all live-navigation, activation, and input fields
+false. A later source-owned campaign export must explicitly bind use of this writer before any
+future real-evidence decision; a synthetic verification report cannot self-promote by referring
+to the platform constant. The physical-identity pins prove object continuity for strict intake;
+they do not by themselves prove that the handle-anchored factory, rather than the ineligible
+pathname factory, produced a package. That writer/reviewer binding remains a separate required
+campaign-export contract.
+
 One acquisition transaction exclusively reserves a previously absent root, constructs and owns
 one private passive sequencer, and writes an append-only prefix:
 
@@ -317,9 +407,10 @@ truth is never rewritten.
 `DurableAcquisitionFilesystemExpectation` and
 `DurableRouteEvidenceFilesystemExpectation` are caller-owned authority pins. They bind the normal
 route/source/build/configuration/environment identities plus acquisition journal/finalization,
-review plan/journal/finalization, independent-review digest, reviewer, and review id. The loader
-checks both roots independently, calls the existing synthetic verifier, then repeats cross-root
-intake checks. A verified report still keeps activation and input false.
+complete physical-tree identity, review plan/journal/finalization, independent-review digest,
+reviewer, and review id. The loader checks both roots independently, calls the existing synthetic
+verifier, then repeats cross-root intake checks. A verified report still keeps activation and input
+false.
 
 Mine-to-bank and bank-to-mine require different campaign, source-session, acquisition-root,
 review-root, package, review, and external-expectation lineages. No reverse, relabel, or shared-root
@@ -335,6 +426,7 @@ operation exists.
 | Missing/foreign filesystem entry or fixed-manifest path collision | integrity failure |
 | Symlink, reparse point, hard-link alias, or root escape | integrity failure |
 | Manifest/file/tree replacement during verification | integrity failure |
+| Exact-byte file or cloned child-directory replacement after finalization | physical-identity integrity failure |
 | Frame/report size or digest replacement | integrity failure |
 | Reused capture ID, `FrameRef`, path/case-fold alias, or case record | package construction failure |
 | Duplicate exact frame or detector-report payload SHA-256 | package construction failure |
