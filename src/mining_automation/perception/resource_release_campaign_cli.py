@@ -21,10 +21,12 @@ from .resource_release_campaign import (
     load_campaign_status,
     load_review_decision,
     prepare_case_review,
+    prepare_release_followup_inputs,
     read_repository_provenance,
     record_case_review,
     review_template_for_case,
     seal_campaign,
+    verify_release_followup_inputs,
     verify_review_package,
     write_release_summary,
 )
@@ -103,6 +105,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify.add_argument("--package", type=Path, required=True)
     verify.add_argument("--expected-manifest-sha256", required=True)
+
+    followup = subparsers.add_parser(
+        "prepare-followup",
+        help="write nonactivating replay-promotion and C2 review inputs",
+    )
+    followup.add_argument("--package", type=Path, required=True)
+    followup.add_argument("--expected-manifest-sha256", required=True)
+    followup.add_argument("--output", type=Path, required=True)
+
+    verify_followup = subparsers.add_parser(
+        "verify-followup",
+        help="verify follow-up inputs against an independently retained root",
+    )
+    verify_followup.add_argument("--inputs", type=Path, required=True)
+    verify_followup.add_argument("--expected-sha256", required=True)
     return parser
 
 
@@ -310,6 +327,21 @@ def main(argv: list[str] | None = None, *, repository_root: Path | None = None) 
                 verify_review_package(
                     arguments.package,
                     expected_manifest_sha256=arguments.expected_manifest_sha256,
+                )
+            )
+        elif arguments.command == "prepare-followup":
+            _print_json(
+                prepare_release_followup_inputs(
+                    arguments.package,
+                    arguments.output,
+                    expected_manifest_sha256=arguments.expected_manifest_sha256,
+                )
+            )
+        elif arguments.command == "verify-followup":
+            _print_json(
+                verify_release_followup_inputs(
+                    arguments.inputs,
+                    expected_sha256=arguments.expected_sha256,
                 )
             )
         else:  # pragma: no cover - argparse enforces the command set

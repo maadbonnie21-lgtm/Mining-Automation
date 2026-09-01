@@ -64,12 +64,14 @@ __all__ = [
     "load_campaign_status",
     "load_review_decision",
     "prepare_case_review",
+    "prepare_release_followup_inputs",
     "read_repository_provenance",
     "review_template_for_case",
     "review_decision_from_json",
     "record_case_review",
     "seal_campaign",
     "verify_review_package",
+    "verify_release_followup_inputs",
     "write_release_summary",
 ]
 
@@ -87,6 +89,13 @@ _LIVE_CAPTURE_TITLE_MATCH: Final[str] = "RuneLite"
 _SOURCE_OWNED_EVIDENCE_ORIGIN: Final[str] = "source-owned-windows-runelite"
 _INJECTED_EVIDENCE_ORIGIN: Final[str] = "test-injected-non-release"
 _REQUIRED_REPORTED_DPI: Final[int] = 96
+_FOLLOWUP_ARTIFACT_ID: Final[str] = "resource-release-followup-inputs-v1"
+_FOLLOWUP_CONFIGURATION_ID: Final[str] = (
+    "resource-release-followup:varrock-east-iron-v1@1.0.0"
+)
+_FOLLOWUP_REGRESSION_DATASET_ID: Final[str] = (
+    "varrock-east-iron-release-regressions-v1"
+)
 _SOURCE_OWNED_CAPTURE_CAPABILITY: Final[object] = object()
 _INJECTED_CAPTURE_CAPABILITY: Final[object] = object()
 
@@ -97,6 +106,7 @@ LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = False
 _SHA256_PATTERN: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}\Z")
 _GIT_SHA_PATTERN: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{40}\Z")
 _MAX_PUBLIC_JSON_BYTES: Final[int] = 4 * 1024 * 1024
+_MAX_FOLLOWUP_JSON_BYTES: Final[int] = 16 * 1024 * 1024
 _IDENTIFIER_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z"
 )
@@ -432,6 +442,28 @@ class CampaignStatus:
     sealed: bool
     prepared_case_ids: tuple[str, ...]
     reviewed_case_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedCaseSnapshot:
+    """Exact validated bytes and manifest binding for one public case."""
+
+    ordinal: int
+    case_id: str
+    case_review_sha256: str
+    case_review_json: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedReviewPackageSnapshot:
+    """Validated package values consumed without reopening mutable JSON files."""
+
+    package_dir: Path
+    manifest_sha256: str
+    release_summary_sha256: str
+    manifest_json: bytes
+    release_summary_json: bytes
+    cases: tuple[_VerifiedCaseSnapshot, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -4667,10 +4699,10 @@ def _verify_public_pass_claim(
                 )
 
 
-def verify_review_package(
+def _load_verified_review_package_snapshot(
     package_dir: Path, *, expected_manifest_sha256: str
-) -> dict[str, object]:
-    """Verify a package against an independently retained manifest root hash."""
+) -> _VerifiedReviewPackageSnapshot:
+    """Verify and snapshot a package against an independently retained root."""
 
     package_dir = Path(package_dir)
     if (
@@ -4785,6 +4817,7 @@ def verify_review_package(
         "release-summary.json",
         "release-summary.json.sha256",
     }
+    verified_cases: list[_VerifiedCaseSnapshot] = []
     for case, case_meta in zip(CAMPAIGN_PLAN, cases, strict=True):
         if not isinstance(case_meta, dict) or set(case_meta) != {
             "ordinal",
@@ -5243,6 +5276,14 @@ def verify_review_package(
                 raise CampaignIntegrityError("withheld-pixel case was promoted or malformed")
         else:
             raise CampaignIntegrityError("public privacy artifact mode is unknown")
+        verified_cases.append(
+            _VerifiedCaseSnapshot(
+                ordinal=case.ordinal,
+                case_id=case.case_id,
+                case_review_sha256=case_sha,
+                case_review_json=case_payload,
+            )
+        )
     actual_files: set[str] = set()
     for path in package_dir.rglob("*"):
         if path.is_symlink():
@@ -5255,12 +5296,1462 @@ def verify_review_package(
             f"missing={sorted(expected_files - actual_files)}, "
             f"foreign={sorted(actual_files - expected_files)}"
         )
+    return _VerifiedReviewPackageSnapshot(
+        package_dir=package_dir,
+        manifest_sha256=manifest_sha,
+        release_summary_sha256=release_sha,
+        manifest_json=manifest_payload,
+        release_summary_json=release_payload,
+        cases=tuple(verified_cases),
+    )
+
+
+def verify_review_package(
+    package_dir: Path, *, expected_manifest_sha256: str
+) -> dict[str, object]:
+    """Verify a package against an independently retained manifest root hash."""
+
+    snapshot = _load_verified_review_package_snapshot(
+        package_dir,
+        expected_manifest_sha256=expected_manifest_sha256,
+    )
     return {
-        "package": str(package_dir),
-        "manifest_sha256": manifest_sha,
-        "release_summary_sha256": release_sha,
-        "case_count": len(CAMPAIGN_PLAN),
+        "package": str(snapshot.package_dir),
+        "manifest_sha256": snapshot.manifest_sha256,
+        "release_summary_sha256": snapshot.release_summary_sha256,
+        "case_count": len(snapshot.cases),
         "contains_private_full_frames": False,
+        "activation_allowed": False,
+        "verified": True,
+    }
+
+
+def _ordered_unique(values: Sequence[object]) -> list[object]:
+    unique: list[object] = []
+    for value in values:
+        if value not in unique:
+            unique.append(value)
+    return unique
+
+
+def _followup_inputs_from_verified_snapshot(
+    snapshot: _VerifiedReviewPackageSnapshot,
+) -> dict[str, object]:
+    """Project immutable verified bytes into nonauthoritative review inputs."""
+
+    manifest = _strict_json_bytes(
+        snapshot.manifest_json,
+        label="verified follow-up source manifest",
+    )
+    release = _strict_json_bytes(
+        snapshot.release_summary_json,
+        label="verified follow-up release summary",
+    )
+    manifest_cases = cast(list[dict[str, object]], manifest["cases"])
+    public_cases = tuple(
+        _strict_json_bytes(
+            case_snapshot.case_review_json,
+            label=f"verified follow-up case {case_snapshot.case_id}",
+        )
+        for case_snapshot in snapshot.cases
+    )
+    case_bindings: list[dict[str, object]] = []
+    failure_candidates: list[dict[str, object]] = []
+    nonrelease_failures: list[dict[str, object]] = []
+    retained_failure_case_ids: list[str] = []
+    dpi_by_case: list[dict[str, object]] = []
+    frame_matches: list[bool] = []
+    source_owned_matches: list[bool] = []
+    backends: list[object] = []
+    origins: list[object] = []
+    window_classes: list[object] = []
+    client_geometries: list[tuple[int, int]] = []
+    observed_dpis: list[object] = []
+    profile = cast(dict[str, object], manifest["profile"])
+    required_width = cast(int, profile["frame_width"])
+    required_height = cast(int, profile["frame_height"])
+    required_pixel_format = cast(str, profile["pixel_format"])
+    required_configuration = cast(
+        dict[str, object], manifest["capture_configuration"]
+    )
+    required_dpi = cast(int, required_configuration["required_reported_dpi"])
+
+    for case, case_snapshot, case_meta, public_case in zip(
+        CAMPAIGN_PLAN,
+        snapshot.cases,
+        manifest_cases,
+        public_cases,
+        strict=True,
+    ):
+        review = cast(dict[str, object], public_case["review"])
+        source_bindings = cast(dict[str, object], public_case["source_bindings"])
+        policy = cast(dict[str, object], public_case["capture_policy_evidence"])
+        environment = cast(dict[str, object], public_case["capture_environment"])
+        frame = cast(dict[str, object], public_case["frame"])
+        artifacts = cast(dict[str, object], public_case["sanitized_artifacts"])
+        release_result = cast(dict[str, object], public_case["release_result"])
+        evidence_origin = policy["evidence_origin"]
+        reported_dpi = environment["reported_dpi"]
+        frame_width = cast(int, frame["width"])
+        frame_height = cast(int, frame["height"])
+        pixel_format = cast(str, frame["pixel_format"])
+        client_width = cast(int, environment["window_client_width"])
+        client_height = cast(int, environment["window_client_height"])
+        source_owned = evidence_origin == _SOURCE_OWNED_EVIDENCE_ORIGIN
+        frame_matches_requirement = (
+            frame_width == required_width
+            and frame_height == required_height
+            and pixel_format == required_pixel_format
+        )
+        source_owned_matches.append(source_owned)
+        frame_matches.append(frame_matches_requirement)
+        backends.append(environment["backend_name"])
+        origins.append(evidence_origin)
+        window_classes.append(environment["window_class"])
+        client_geometries.append((client_width, client_height))
+        observed_dpis.append(reported_dpi)
+        dpi_by_case.append(
+            {
+                "case_id": case.case_id,
+                "reported_dpi": reported_dpi,
+                "matches_requirement": reported_dpi == required_dpi,
+            }
+        )
+        reviewer_truth = {
+            "reviewed_at_utc": review["reviewed_at_utc"],
+            "meaning": review["meaning"],
+            "resource_truth": review["resource_truth"],
+            "privacy_review_confirmed": review["privacy_review_confirmed"],
+            "focal_resource_id": review["focal_resource_id"],
+            "node_phase": review["node_phase"],
+            "obstruction_target": review["obstruction_target"],
+            "subject_region": review["subject_region"],
+        }
+        hashes = {
+            "case_review_sha256": case_snapshot.case_review_sha256,
+            "capture_report_sha256": public_case["capture_report_sha256"],
+            "review_preparation_sha256": source_bindings[
+                "review_preparation_sha256"
+            ],
+            "review_truth_sha256": public_case["review_truth_sha256"],
+            "private_raw_sha256": source_bindings["private_raw_sha256"],
+            "sanitized_raw_gzip_sha256": case_meta[
+                "sanitized_raw_gzip_sha256"
+            ],
+            "sanitized_preview_sha256": case_meta[
+                "sanitized_preview_sha256"
+            ],
+        }
+        case_bindings.append(
+            {
+                "ordinal": case.ordinal,
+                "case_id": case.case_id,
+                "blocker_id": case.blocker_id,
+                "hashes": hashes,
+                "capture_origin": {
+                    "capture_source_backend_name": policy[
+                        "capture_source_backend_name"
+                    ],
+                    "evidence_origin": evidence_origin,
+                    "capture_attempt_count": policy["capture_attempt_count"],
+                    "prior_no_frame_failure_provenance": policy[
+                        "prior_no_frame_failure_provenance"
+                    ],
+                },
+                "capture": {
+                    "captured_at_utc": public_case["captured_at_utc"],
+                    "frame": frame,
+                    "environment": environment,
+                },
+                "reviewer_truth": reviewer_truth,
+                "release_result": release_result,
+                "production_snapshot": public_case["production"],
+                "sanitized_artifacts": artifacts,
+            }
+        )
+        if (
+            release_result["passed"] is False
+            and release_result["permanent_evidence_required"] is True
+        ):
+            retained_failure_case_ids.append(case.case_id)
+            has_replay_pixels = artifacts["mode"] == "sanitized-frame"
+            raw_binding: object = None
+            if has_replay_pixels:
+                raw_binding = artifacts["raw_gzip"]
+            if source_owned:
+                failure_candidates.append(
+                    {
+                        "ordinal": case.ordinal,
+                        "case_id": case.case_id,
+                        "blocker_id": case.blocker_id,
+                        "target_dataset_id": _FOLLOWUP_REGRESSION_DATASET_ID,
+                        "disposition": (
+                            "REPLAY_CANDIDATE"
+                            if has_replay_pixels
+                            else "METADATA_ONLY_NO_PIXELS"
+                        ),
+                        "replay_candidate": has_replay_pixels,
+                        "source_owned_release_evidence": True,
+                        "case_review_sha256": case_snapshot.case_review_sha256,
+                        "reviewer_truth": reviewer_truth,
+                        "release_reasons": release_result["reasons"],
+                        "sanitized_raw_gzip": raw_binding,
+                        "promotion_complete": False,
+                        "policy_change_allowed_from_failure": False,
+                    }
+                )
+            else:
+                nonrelease_failures.append(
+                    {
+                        "ordinal": case.ordinal,
+                        "case_id": case.case_id,
+                        "blocker_id": case.blocker_id,
+                        "disposition": (
+                            "NON_RELEASE_TEST_EVIDENCE"
+                            if has_replay_pixels
+                            else "NON_RELEASE_TEST_EVIDENCE_NO_PIXELS"
+                        ),
+                        "source_owned_release_evidence": False,
+                        "case_review_sha256": case_snapshot.case_review_sha256,
+                        "release_reasons": release_result["reasons"],
+                        "promotion_complete": False,
+                        "policy_change_allowed_from_failure": False,
+                    }
+                )
+
+    c1_blockers = [
+        blocker
+        for blocker in cast(list[dict[str, object]], release["blockers"])
+        if blocker["blocker_id"] in _RESOURCE_BLOCKER_ORDER
+    ]
+    categories = cast(dict[str, object], release["release_gate_categories"])
+    c1_category = cast(dict[str, object], categories["c1_fresh_empirical_evidence"])
+    c2_category = cast(
+        dict[str, object], categories["c2_evidence_contingent_source_review"]
+    )
+    unresolved_external_inputs = [
+        "external B release-evidence-boundary acceptance",
+        "independent exact client/renderer/profile/envelope review",
+        "source-owned constrained-v1 resource release/promotion record",
+    ]
+    if retained_failure_case_ids:
+        unresolved_external_inputs.insert(
+            2, "retained-failure permanent replay promotion"
+        )
+    distinct_window_classes = sorted(
+        cast(list[str], _ordered_unique(window_classes))
+    )
+    distinct_backends = sorted(cast(list[str], _ordered_unique(backends)))
+    distinct_origins = sorted(cast(list[str], _ordered_unique(origins)))
+    distinct_geometries = sorted(set(client_geometries))
+    return {
+        "schema_version": 1,
+        "inputs_id": _FOLLOWUP_ARTIFACT_ID,
+        "configuration_id": _FOLLOWUP_CONFIGURATION_ID,
+        "source_snapshot": {
+            "package_id": manifest["package_id"],
+            "manifest_sha256": snapshot.manifest_sha256,
+            "release_summary_sha256": snapshot.release_summary_sha256,
+            "campaign_id": manifest["campaign_id"],
+            "campaign_version": manifest["campaign_version"],
+            "configuration_id": manifest["configuration_id"],
+            "session_id": manifest["session_id"],
+            "exported_at_utc": manifest["exported_at_utc"],
+            "completion_seal_sha256": manifest["completion_seal_sha256"],
+            "repository": manifest["repository"],
+            "profile": profile,
+            "capture_configuration": required_configuration,
+        },
+        "verification": {
+            "verified": True,
+            "expected_manifest_sha256_matched": True,
+            "case_count": len(case_bindings),
+            "operator_labels_included": False,
+            "operator_labels_are_reviewer_truth": False,
+            "all_cases_explicitly_privacy_reviewed": True,
+            "contains_private_full_frames": False,
+        },
+        "case_bindings": case_bindings,
+        "c1_result": {
+            "status": c1_category["status"],
+            "blockers": c1_blockers,
+        },
+        "failure_promotion_inputs": {
+            "status": (
+                "BLOCKED_NON_RELEASE_EVIDENCE"
+                if nonrelease_failures
+                else "PENDING_EXTERNAL"
+                if failure_candidates
+                else "NOT_REQUIRED"
+            ),
+            "target_dataset_id": _FOLLOWUP_REGRESSION_DATASET_ID,
+            "candidate_count": len(failure_candidates),
+            "candidates": failure_candidates,
+            "nonrelease_evidence_count": len(nonrelease_failures),
+            "nonrelease_evidence": nonrelease_failures,
+            "promotion_complete": False,
+        },
+        "c2_envelope_review_inputs": {
+            "input_status": "verified-inputs-only-independent-review-required",
+            "required_reported_dpi": required_dpi,
+            "reported_dpi_by_case": dpi_by_case,
+            "observed_reported_dpis": _ordered_unique(observed_dpis),
+            "all_cases_match_required_dpi": all(
+                item["matches_requirement"] is True for item in dpi_by_case
+            ),
+            "required_frame": {
+                "width": required_width,
+                "height": required_height,
+                "pixel_format": required_pixel_format,
+            },
+            "all_cases_match_required_frame": all(frame_matches),
+            "observed_capture_backends": distinct_backends,
+            "observed_evidence_origins": distinct_origins,
+            "observed_window_classes": distinct_window_classes,
+            "observed_client_geometries": [
+                {"width": width, "height": height}
+                for width, height in distinct_geometries
+            ],
+            "window_class_consistent": len(distinct_window_classes) == 1,
+            "all_cases_source_owned": all(source_owned_matches),
+            "reported_release_gate_categories": categories,
+            "reported_c2_category": c2_category,
+            "retained_failure_case_ids": retained_failure_case_ids,
+            "source_owned_failure_case_ids": [
+                item["case_id"] for item in failure_candidates
+            ],
+            "nonrelease_failure_case_ids": [
+                item["case_id"] for item in nonrelease_failures
+            ],
+            "renderer_identity": {
+                "observed": False,
+                "status": "NOT_OBSERVED_BY_CAPTURE_BACKEND",
+                "requires_external_review": True,
+            },
+            "unresolved_external_inputs": unresolved_external_inputs,
+            "envelope_approved": False,
+        },
+        "authority": {
+            "approval_authority": False,
+            "release_eligible": False,
+            "activation_allowed": False,
+            "promotion_allowed": False,
+            "input_authority": False,
+        },
+    }
+
+
+def prepare_release_followup_inputs(
+    package_dir: Path,
+    output_path: Path,
+    *,
+    expected_manifest_sha256: str,
+) -> dict[str, object]:
+    """Write deterministic nonactivating replay-promotion and C2 review inputs."""
+
+    snapshot = _load_verified_review_package_snapshot(
+        package_dir,
+        expected_manifest_sha256=expected_manifest_sha256,
+    )
+    inputs = _followup_inputs_from_verified_snapshot(snapshot)
+    package_path = snapshot.package_dir.resolve(strict=True)
+    output = Path(output_path).resolve(strict=False)
+    sidecar = _artifact_sidecar(output).resolve(strict=False)
+    if any(
+        candidate == package_path
+        or package_path in candidate.parents
+        or candidate in package_path.parents
+        for candidate in (output, sidecar)
+    ):
+        raise CampaignError(
+            "follow-up output and sidecar must be outside the verified package"
+        )
+    digest = _write_hashed_artifact(
+        output,
+        _canonical_json_bytes(inputs),
+    )
+    failure_promotion = cast(dict[str, object], inputs["failure_promotion_inputs"])
+    return {
+        "output": str(output),
+        "sha256": digest,
+        "source_manifest_sha256": snapshot.manifest_sha256,
+        "case_count": len(snapshot.cases),
+        "failure_candidate_count": failure_promotion["candidate_count"],
+        "release_eligible": False,
+        "activation_allowed": False,
+    }
+
+
+def _followup_review_decision(
+    case: CampaignCase,
+    reviewer_truth: Mapping[str, object],
+    hashes: Mapping[str, object],
+    artifacts: Mapping[str, object],
+) -> ReviewDecision:
+    obstruction = reviewer_truth.get("obstruction_target")
+    decision_json: dict[str, object] = {
+        "case_id": case.case_id,
+        "reviewer_id": "independent-reviewer-redacted",
+        "reviewed_at_utc": reviewer_truth.get("reviewed_at_utc"),
+        "meaning": reviewer_truth.get("meaning"),
+        "resource_truth": reviewer_truth.get("resource_truth"),
+        "review_artifact_sha256": hashes.get("review_preparation_sha256"),
+        "privacy_review_confirmed": reviewer_truth.get(
+            "privacy_review_confirmed"
+        ),
+        "focal_resource_id": reviewer_truth.get("focal_resource_id"),
+        "node_phase": reviewer_truth.get("node_phase"),
+        "obstruction_target": obstruction,
+        "subject_region": reviewer_truth.get("subject_region"),
+        "notes": "",
+    }
+    try:
+        decision = review_decision_from_json(decision_json)
+        _validate_review_decision(
+            decision,
+            case=case,
+            operator_id="operator-identity-redacted",
+            sealed_at=decision.reviewed_at_utc,
+            pixels_withheld=artifacts.get("mode")
+            == "pixels-withheld-unsupported-geometry",
+        )
+    except CampaignError as exc:
+        raise CampaignIntegrityError(
+            f"follow-up reviewer truth is invalid: {exc}"
+        ) from exc
+    expected_truth = {
+        "reviewed_at_utc": _utc_text(decision.reviewed_at_utc),
+        "meaning": decision.meaning.value,
+        "resource_truth": [
+            {"resource_id": resource_id, "state": state.value}
+            for resource_id, state in decision.resource_truth
+        ],
+        "privacy_review_confirmed": decision.privacy_review_confirmed,
+        "focal_resource_id": decision.focal_resource_id,
+        "node_phase": (
+            None if decision.node_phase is None else decision.node_phase.value
+        ),
+        "obstruction_target": (
+            None
+            if decision.obstruction_target_kind is None
+            else {
+                "kind": decision.obstruction_target_kind,
+                "target_id": decision.obstruction_target_id,
+            }
+        ),
+        "subject_region": (
+            None
+            if decision.subject_region is None
+            else list(decision.subject_region)
+        ),
+    }
+    if dict(reviewer_truth) != expected_truth:
+        raise CampaignIntegrityError("follow-up reviewer truth projection changed")
+    return decision
+
+
+def _followup_finite_confidence(value: object) -> bool:
+    return (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and 0.0 <= value <= 1.0
+    )
+
+
+def _validate_followup_scene(value: object) -> bool:
+    fields = {
+        "validated",
+        "reason",
+        "matched_count",
+        "required_quorum",
+        "matched_zones",
+        "required_zones",
+        "landmarks",
+        "authority",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise CampaignIntegrityError("follow-up production scene fields changed")
+    profile = load_varrock_east_iron_profile()
+    validated = value.get("validated")
+    matched_count = value.get("matched_count")
+    matched_zones = value.get("matched_zones")
+    allowed_zones = {
+        landmark.macro_zone.value for landmark in profile.scene_landmarks
+    }
+    if (
+        not isinstance(validated, bool)
+        or not isinstance(value.get("reason"), str)
+        or not cast(str, value["reason"]).strip()
+        or not _is_strict_int(matched_count)
+        or not 0 <= cast(int, matched_count) <= len(profile.scene_landmarks)
+        or value.get("required_quorum") != profile.minimum_landmark_quorum
+        or not isinstance(matched_zones, list)
+        or len(matched_zones) != len(set(cast(list[object], matched_zones)))
+        or any(zone not in allowed_zones for zone in matched_zones)
+        or value.get("required_zones") != profile.minimum_landmark_zones
+        or value.get("authority")
+        != "read-only-summary-never-overrides-production"
+    ):
+        raise CampaignIntegrityError("follow-up production scene policy changed")
+    if validated and (
+        cast(int, matched_count) < profile.minimum_landmark_quorum
+        or len(matched_zones) < profile.minimum_landmark_zones
+    ):
+        raise CampaignIntegrityError("follow-up production scene verdict is incoherent")
+    landmarks = value.get("landmarks")
+    if not isinstance(landmarks, list) or len(landmarks) != len(
+        profile.scene_landmarks
+    ):
+        raise CampaignIntegrityError("follow-up production landmarks changed")
+    derived_zones: set[str] = set()
+    derived_count = 0
+    for expected, raw in zip(profile.scene_landmarks, landmarks, strict=True):
+        if (
+            not isinstance(raw, dict)
+            or set(raw)
+            != {"landmark_id", "zone", "distance", "threshold", "matched"}
+            or raw.get("landmark_id") != expected.landmark_id
+            or raw.get("zone") != expected.macro_zone.value
+            or not isinstance(raw.get("distance"), int | float)
+            or isinstance(raw.get("distance"), bool)
+            or not math.isfinite(cast(float, raw["distance"]))
+            or cast(float, raw["distance"]) < 0.0
+            or raw.get("threshold") != expected.maximum_distance
+            or not isinstance(raw.get("matched"), bool)
+            or raw.get("matched")
+            is not (cast(float, raw["distance"]) <= expected.maximum_distance)
+        ):
+            raise CampaignIntegrityError(
+                "follow-up production landmark evidence changed"
+            )
+        if raw["matched"] is True:
+            derived_count += 1
+            derived_zones.add(expected.macro_zone.value)
+    derived_validated = (
+        derived_count >= profile.minimum_landmark_quorum
+        and len(derived_zones) >= profile.minimum_landmark_zones
+    )
+    if (
+        matched_count != derived_count
+        or matched_zones != sorted(derived_zones)
+        or validated is not derived_validated
+    ):
+        raise CampaignIntegrityError(
+            "follow-up production scene summary contradicts landmarks"
+        )
+    return validated
+
+
+def _validate_followup_observations(
+    value: object, *, capture_frame: Mapping[str, object]
+) -> None:
+    if not isinstance(value, list):
+        raise CampaignIntegrityError("follow-up production observations changed")
+    expected_frame = {
+        "frame_id": capture_frame["frame_id"],
+        "captured_monotonic_s": capture_frame["captured_monotonic_s"],
+        "width": capture_frame["width"],
+        "height": capture_frame["height"],
+    }
+    for item in value:
+        if (
+            not isinstance(item, dict)
+            or set(item)
+            != {"kind", "detector_version", "frame", "confidence", "evidence"}
+            or not isinstance(item.get("kind"), str)
+            or not cast(str, item["kind"]).strip()
+            or item.get("detector_version")
+            != VARROCK_EAST_IRON_DETECTOR_VERSION
+            or item.get("frame") != expected_frame
+            or not _followup_finite_confidence(item.get("confidence"))
+            or not isinstance(item.get("evidence"), dict)
+        ):
+            raise CampaignIntegrityError(
+                "follow-up production observation evidence changed"
+            )
+
+
+def _validate_followup_production_snapshot(
+    case: CampaignCase,
+    production: object,
+    *,
+    capture_frame: Mapping[str, object],
+    decision: ReviewDecision,
+    release_result: Mapping[str, object],
+    artifacts: Mapping[str, object],
+) -> None:
+    if artifacts.get("mode") == "pixels-withheld-unsupported-geometry":
+        if production != _public_withheld_production(None):
+            raise CampaignIntegrityError(
+                "withheld follow-up production authority changed"
+            )
+        if (
+            release_result.get("production_scene_validated") is not False
+            or release_result.get("production_state_vector") is not None
+        ):
+            raise CampaignIntegrityError(
+                "withheld follow-up production result was rebound"
+            )
+        return
+    if not isinstance(production, dict):
+        raise CampaignIntegrityError("follow-up production snapshot is malformed")
+    common_fields = {
+        "status",
+        "detector_id",
+        "detector_version",
+        "observations",
+        "trust",
+        "scene",
+        "passive_campaign_authorized_target_ids",
+        "stop_required",
+        "input_authority",
+    }
+    status = production.get("status")
+    expected_fields = (
+        common_fields | {"error_type", "error"}
+        if status == "detector-error"
+        else common_fields
+    )
+    if (
+        set(production) != expected_fields
+        or status not in {"completed", "detector-error"}
+        or production.get("detector_id") != VARROCK_EAST_IRON_DETECTOR_ID
+        or production.get("detector_version")
+        != VARROCK_EAST_IRON_DETECTOR_VERSION
+        or production.get("passive_campaign_authorized_target_ids") != []
+        or production.get("input_authority") is not False
+    ):
+        raise CampaignIntegrityError("follow-up production identity/authority changed")
+    if status == "detector-error":
+        expected = _detector_error(RuntimeError("redacted"))
+        expected["error_type"] = production.get("error_type")
+        expected["error"] = "private runtime detail redacted"
+        if (
+            not isinstance(production.get("error_type"), str)
+            or not cast(str, production["error_type"]).strip()
+            or production != expected
+            or release_result.get("production_scene_validated") is not False
+            or release_result.get("production_state_vector") is not None
+        ):
+            raise CampaignIntegrityError(
+                "follow-up detector-error production changed authority"
+            )
+        return
+    _validate_followup_observations(
+        production.get("observations"), capture_frame=capture_frame
+    )
+    scene_validated = _validate_followup_scene(production.get("scene"))
+    trust = production.get("trust")
+    trust_fields = {
+        "accepted",
+        "reason",
+        "frame",
+        "resources",
+        "definitive_target_ids",
+        "production_actionable_target_ids",
+        "production_interaction_regions",
+    }
+    if (
+        not isinstance(trust, dict)
+        or set(trust) != trust_fields
+        or not isinstance(trust.get("accepted"), bool)
+        or not isinstance(trust.get("reason"), str)
+        or not cast(str, trust["reason"]).strip()
+    ):
+        raise CampaignIntegrityError("follow-up production trust fields changed")
+    accepted = cast(bool, trust["accepted"])
+    resources = trust.get("resources")
+    expected_frame = dict(capture_frame)
+    if not accepted:
+        if (
+            trust.get("frame") is not None
+            or resources != []
+            or trust.get("definitive_target_ids") != []
+            or trust.get("production_actionable_target_ids") != []
+            or trust.get("production_interaction_regions") != {}
+            or production.get("stop_required") is not True
+        ):
+            raise CampaignIntegrityError(
+                "rejected follow-up production exposed resource authority"
+            )
+        production_states: list[str] | None = None
+    else:
+        if (
+            trust.get("reason") != "trusted_complete_production_ensemble"
+            or trust.get("frame") != expected_frame
+            or not isinstance(resources, list)
+            or len(resources) != len(VARROCK_EAST_IRON_RESOURCE_IDS)
+        ):
+            raise CampaignIntegrityError("accepted follow-up trust binding changed")
+        profile = load_varrock_east_iron_profile()
+        definitive: list[str] = []
+        actionable: list[str] = []
+        regions: dict[str, object] = {}
+        production_states = []
+        for resource_id, candidate, item in zip(
+            VARROCK_EAST_IRON_RESOURCE_IDS,
+            profile.candidates,
+            resources,
+            strict=True,
+        ):
+            if (
+                not isinstance(item, dict)
+                or set(item)
+                != {
+                    "resource_id",
+                    "resource_type",
+                    "available",
+                    "confidence",
+                    "interaction_region",
+                }
+                or item.get("resource_id") != resource_id
+                or item.get("resource_type") != "iron"
+                or item.get("available") not in {True, False, None}
+                or not _followup_finite_confidence(item.get("confidence"))
+            ):
+                raise CampaignIntegrityError(
+                    "follow-up production resource evidence changed"
+                )
+            available = item["available"]
+            expected_region: object = (
+                list(candidate.region) if available is True else None
+            )
+            if item.get("interaction_region") != expected_region:
+                raise CampaignIntegrityError(
+                    "follow-up production interaction region changed"
+                )
+            regions[resource_id] = expected_region
+            if available is True:
+                definitive.append(resource_id)
+                actionable.append(resource_id)
+                production_states.append(ResourceVisualState.AVAILABLE.value)
+            elif available is False:
+                definitive.append(resource_id)
+                production_states.append(ResourceVisualState.DEPLETED.value)
+            else:
+                production_states.append(ResourceVisualState.UNCERTAIN.value)
+        if (
+            trust.get("definitive_target_ids") != definitive
+            or trust.get("production_actionable_target_ids") != actionable
+            or trust.get("production_interaction_regions") != regions
+            or production.get("stop_required")
+            is not (ResourceVisualState.UNCERTAIN.value in production_states)
+            or (
+                not scene_validated
+                and any(
+                    state != ResourceVisualState.UNCERTAIN.value
+                    for state in production_states
+                )
+            )
+        ):
+            raise CampaignIntegrityError(
+                "follow-up production target authority is incoherent"
+            )
+    reviewed_states = [state.value for _, state in decision.resource_truth]
+    if (
+        release_result.get("production_scene_validated") is not scene_validated
+        or release_result.get("reviewed_state_vector") != reviewed_states
+        or release_result.get("production_state_vector") != production_states
+        or (
+            release_result.get("passed") is True
+            and production_states != reviewed_states
+        )
+    ):
+        raise CampaignIntegrityError(
+            "follow-up production/reviewer/release result was rebound"
+        )
+
+
+def _validate_followup_release_pass_claim(
+    case: CampaignCase,
+    release_result: Mapping[str, object],
+    *,
+    capture_origin: Mapping[str, object],
+    capture_frame: Mapping[str, object],
+    reported_dpi: object,
+    decision: ReviewDecision,
+    production: object,
+    artifacts: Mapping[str, object],
+) -> None:
+    reasons = cast(list[str], release_result["reasons"])
+    passed = cast(bool, release_result["passed"])
+    if passed is not (not reasons):
+        raise CampaignIntegrityError(
+            "follow-up release PASS/reason predicate changed"
+        )
+    if not passed:
+        return
+    prior = capture_origin.get("prior_no_frame_failure_provenance")
+    profile = load_varrock_east_iron_profile()
+    if (
+        capture_origin.get("capture_source_backend_name")
+        != _LIVE_CAPTURE_BACKEND_NAME
+        or capture_origin.get("evidence_origin")
+        != _SOURCE_OWNED_EVIDENCE_ORIGIN
+        or not isinstance(prior, list)
+        or any(
+            not isinstance(item, dict)
+            or item.get("evidence_origin") != _SOURCE_OWNED_EVIDENCE_ORIGIN
+            or item.get("capture_source_backend_name")
+            != _LIVE_CAPTURE_BACKEND_NAME
+            for item in prior
+        )
+        or reported_dpi != _REQUIRED_REPORTED_DPI
+        or capture_frame.get("width") != profile.frame_width
+        or capture_frame.get("height") != profile.frame_height
+        or capture_frame.get("pixel_format") != PixelFormat.BGRA8888.value
+        or artifacts.get("mode") != "sanitized-frame"
+        or decision.meaning is not case.review_meaning
+        or not isinstance(production, dict)
+        or production.get("status") != "completed"
+    ):
+        raise CampaignIntegrityError(
+            "follow-up PASS lacks source/DPI/geometry/reviewer prerequisites"
+        )
+    truth_states = tuple(state for _, state in decision.resource_truth)
+    production_states = _production_state_vector(production)
+    if production_states is None or production_states != truth_states:
+        raise CampaignIntegrityError(
+            "follow-up PASS state vector is not independently proven"
+        )
+    scene = production.get("scene")
+    scene_validated = isinstance(scene, dict) and scene.get("validated") is True
+    trust = production.get("trust")
+    if not isinstance(trust, dict):
+        raise CampaignIntegrityError("follow-up PASS lacks production trust")
+    definitive = [
+        resource_id
+        for resource_id, state in decision.resource_truth
+        if state is not ResourceVisualState.UNCERTAIN
+    ]
+    actionable = [
+        resource_id
+        for resource_id, state in decision.resource_truth
+        if state is ResourceVisualState.AVAILABLE
+    ]
+    expected_regions = {
+        candidate.resource_id: (
+            list(candidate.region)
+            if truth_states[index] is ResourceVisualState.AVAILABLE
+            else None
+        )
+        for index, candidate in enumerate(profile.candidates)
+    }
+    if (
+        trust.get("definitive_target_ids") != definitive
+        or trust.get("production_actionable_target_ids") != actionable
+        or trust.get("production_interaction_regions") != expected_regions
+    ):
+        raise CampaignIntegrityError(
+            "follow-up PASS target/region evidence is inconsistent"
+        )
+    if case.review_meaning is ReviewMeaning.SUPPORTED_STARTUP:
+        if not scene_validated or ResourceVisualState.UNCERTAIN in truth_states:
+            raise CampaignIntegrityError(
+                "follow-up startup PASS is not a supported definitive view"
+            )
+    elif case.review_meaning is ReviewMeaning.PROFILED_NODE_STATE:
+        focal_id = case.focal_resource_id
+        if (
+            not scene_validated
+            or decision.focal_resource_id != focal_id
+            or decision.node_phase is not case.requested_node_phase
+            or focal_id is None
+            or truth_states[VARROCK_EAST_IRON_RESOURCE_IDS.index(focal_id)]
+            is not case.requested_focal_state
+        ):
+            raise CampaignIntegrityError(
+                "follow-up node-cycle PASS is not the fixed reviewed phase"
+            )
+    elif case.review_meaning is ReviewMeaning.UNSUPPORTED_LOCATION:
+        if scene_validated or any(
+            state is not ResourceVisualState.UNCERTAIN for state in truth_states
+        ):
+            raise CampaignIntegrityError(
+                "follow-up unsupported-location PASS is not fail-closed"
+            )
+    elif case.review_meaning in {
+        ReviewMeaning.NEIGHBORING_COPPER,
+        ReviewMeaning.NEIGHBORING_TIN,
+        ReviewMeaning.TERRAIN_CLUTTER,
+    }:
+        if decision.subject_region is None:
+            raise CampaignIntegrityError(
+                "follow-up negative PASS lacks reviewed subject geometry"
+            )
+        if any(
+            region is not None
+            and _regions_overlap(
+                decision.subject_region,
+                cast(tuple[int, int, int, int], tuple(region)),
+            )
+            for region in expected_regions.values()
+        ):
+            raise CampaignIntegrityError(
+                "follow-up negative subject overlaps an iron target"
+            )
+        if not scene_validated and any(
+            state is not ResourceVisualState.UNCERTAIN for state in truth_states
+        ):
+            raise CampaignIntegrityError(
+                "follow-up unsupported negative PASS is not fail-closed"
+            )
+    elif case.review_meaning is ReviewMeaning.PROFILED_OBSTRUCTION:
+        if decision.obstruction_target_kind == "landmark":
+            landmarks = scene.get("landmarks") if isinstance(scene, dict) else None
+            target = None
+            if isinstance(landmarks, list):
+                target = next(
+                    (
+                        item
+                        for item in landmarks
+                        if isinstance(item, dict)
+                        and item.get("landmark_id")
+                        == decision.obstruction_target_id
+                    ),
+                    None,
+                )
+            if not isinstance(target, dict) or target.get("matched") is not False:
+                raise CampaignIntegrityError(
+                    "follow-up landmark-obstruction PASS lacks failed target"
+                )
+
+
+def _validate_release_followup_inputs(value: Mapping[str, object]) -> None:
+    required_top = {
+        "schema_version",
+        "inputs_id",
+        "configuration_id",
+        "source_snapshot",
+        "verification",
+        "case_bindings",
+        "c1_result",
+        "failure_promotion_inputs",
+        "c2_envelope_review_inputs",
+        "authority",
+    }
+    if set(value) != required_top or (
+        not _is_strict_int(value.get("schema_version"))
+        or value.get("schema_version") != 1
+        or value.get("inputs_id") != _FOLLOWUP_ARTIFACT_ID
+        or value.get("configuration_id") != _FOLLOWUP_CONFIGURATION_ID
+    ):
+        raise CampaignIntegrityError("follow-up input identity/schema changed")
+    authority = value.get("authority")
+    expected_authority = {
+        "approval_authority": False,
+        "release_eligible": False,
+        "activation_allowed": False,
+        "promotion_allowed": False,
+        "input_authority": False,
+    }
+    if authority != expected_authority:
+        raise CampaignIntegrityError("follow-up authority must remain deny-only")
+    source = value.get("source_snapshot")
+    source_fields = {
+        "package_id",
+        "manifest_sha256",
+        "release_summary_sha256",
+        "campaign_id",
+        "campaign_version",
+        "configuration_id",
+        "session_id",
+        "exported_at_utc",
+        "completion_seal_sha256",
+        "repository",
+        "profile",
+        "capture_configuration",
+    }
+    if not isinstance(source, dict) or set(source) != source_fields:
+        raise CampaignIntegrityError("follow-up source snapshot fields changed")
+    repository = source.get("repository")
+    if (
+        source.get("package_id") != "resource-release-review-package-v1"
+        or source.get("campaign_id") != RESOURCE_RELEASE_CAMPAIGN_ID
+        or source.get("campaign_version") != RESOURCE_RELEASE_CAMPAIGN_VERSION
+        or source.get("configuration_id") != RESOURCE_RELEASE_CONFIGURATION_ID
+        or not isinstance(source.get("session_id"), str)
+        or not _IDENTIFIER_PATTERN.fullmatch(cast(str, source["session_id"]))
+        or not isinstance(source.get("manifest_sha256"), str)
+        or not _SHA256_PATTERN.fullmatch(cast(str, source["manifest_sha256"]))
+        or not isinstance(source.get("release_summary_sha256"), str)
+        or not _SHA256_PATTERN.fullmatch(
+            cast(str, source["release_summary_sha256"])
+        )
+        or not isinstance(source.get("completion_seal_sha256"), str)
+        or not _SHA256_PATTERN.fullmatch(
+            cast(str, source["completion_seal_sha256"])
+        )
+        or source.get("profile") != _profile_identity()
+        or not isinstance(repository, dict)
+        or set(repository) != {"head_sha", "branch", "clean"}
+        or not isinstance(repository.get("head_sha"), str)
+        or not _GIT_SHA_PATTERN.fullmatch(cast(str, repository["head_sha"]))
+        or not isinstance(repository.get("branch"), str)
+        or not cast(str, repository["branch"]).strip()
+        or repository.get("clean") is not True
+    ):
+        raise CampaignIntegrityError("follow-up source identity/provenance changed")
+    _parse_utc(source.get("exported_at_utc"), "follow-up exported_at_utc")
+    _validate_capture_configuration(source.get("capture_configuration"))
+    verification = value.get("verification")
+    if verification != {
+        "verified": True,
+        "expected_manifest_sha256_matched": True,
+        "case_count": len(CAMPAIGN_PLAN),
+        "operator_labels_included": False,
+        "operator_labels_are_reviewer_truth": False,
+        "all_cases_explicitly_privacy_reviewed": True,
+        "contains_private_full_frames": False,
+    }:
+        raise CampaignIntegrityError("follow-up verification projection changed")
+    bindings = value.get("case_bindings")
+    if not isinstance(bindings, list) or len(bindings) != len(CAMPAIGN_PLAN):
+        raise CampaignIntegrityError("follow-up case binding count changed")
+    profile = cast(dict[str, object], source["profile"])
+    required_width = cast(int, profile["frame_width"])
+    required_height = cast(int, profile["frame_height"])
+    required_pixel_format = cast(str, profile["pixel_format"])
+    capture_configuration = cast(dict[str, object], source["capture_configuration"])
+    required_dpi = cast(int, capture_configuration["required_reported_dpi"])
+    release_result_fields = {
+        "ordinal",
+        "case_id",
+        "blocker_id",
+        "evidence_origin",
+        "passed",
+        "reasons",
+        "production_scene_validated",
+        "reviewed_state_vector",
+        "production_state_vector",
+        "reported_dpi",
+        "required_reported_dpi",
+        "replay_regression_candidate",
+        "permanent_evidence_required",
+        "policy_change_allowed_from_failure",
+    }
+    case_results: list[dict[str, object]] = []
+    expected_candidates: list[dict[str, object]] = []
+    expected_nonrelease: list[dict[str, object]] = []
+    retained_failure_ids: list[str] = []
+    dpi_by_case: list[dict[str, object]] = []
+    observed_dpis: list[object] = []
+    backends: list[object] = []
+    origins: list[object] = []
+    window_classes: list[object] = []
+    client_geometries: list[tuple[int, int]] = []
+    frame_matches: list[bool] = []
+    source_matches: list[bool] = []
+    for case, binding_raw in zip(CAMPAIGN_PLAN, bindings, strict=True):
+        binding_fields = {
+            "ordinal",
+            "case_id",
+            "blocker_id",
+            "hashes",
+            "capture_origin",
+            "capture",
+            "reviewer_truth",
+            "release_result",
+            "production_snapshot",
+            "sanitized_artifacts",
+        }
+        if not isinstance(binding_raw, dict) or set(binding_raw) != binding_fields:
+            raise CampaignIntegrityError("follow-up case binding fields changed")
+        binding = cast(dict[str, object], binding_raw)
+        if (
+            binding.get("ordinal") != case.ordinal
+            or binding.get("case_id") != case.case_id
+            or binding.get("blocker_id") != case.blocker_id
+        ):
+            raise CampaignIntegrityError("follow-up case order/identity changed")
+        hashes = binding.get("hashes")
+        hash_fields = {
+            "case_review_sha256",
+            "capture_report_sha256",
+            "review_preparation_sha256",
+            "review_truth_sha256",
+            "private_raw_sha256",
+            "sanitized_raw_gzip_sha256",
+            "sanitized_preview_sha256",
+        }
+        if not isinstance(hashes, dict) or set(hashes) != hash_fields:
+            raise CampaignIntegrityError("follow-up case hash fields changed")
+        for name in hash_fields - {
+            "sanitized_raw_gzip_sha256",
+            "sanitized_preview_sha256",
+        }:
+            item = hashes.get(name)
+            if not isinstance(item, str) or not _SHA256_PATTERN.fullmatch(item):
+                raise CampaignIntegrityError("follow-up case hash is malformed")
+        origin = binding.get("capture_origin")
+        if not isinstance(origin, dict) or set(origin) != {
+            "capture_source_backend_name",
+            "evidence_origin",
+            "capture_attempt_count",
+            "prior_no_frame_failure_provenance",
+        }:
+            raise CampaignIntegrityError("follow-up capture origin fields changed")
+        if (
+            not _valid_capture_origin_pair(
+                origin.get("capture_source_backend_name"),
+                origin.get("evidence_origin"),
+            )
+            or not _is_strict_int(origin.get("capture_attempt_count"))
+            or cast(int, origin["capture_attempt_count"]) < 1
+            or not isinstance(origin.get("prior_no_frame_failure_provenance"), list)
+        ):
+            raise CampaignIntegrityError("follow-up capture origin is malformed")
+        capture = binding.get("capture")
+        if not isinstance(capture, dict) or set(capture) != {
+            "captured_at_utc",
+            "frame",
+            "environment",
+        }:
+            raise CampaignIntegrityError("follow-up capture fields changed")
+        _parse_utc(capture.get("captured_at_utc"), "follow-up captured_at_utc")
+        _, _, frame_width, frame_height, pixel_format = _validated_frame_scalars(
+            capture.get("frame"), label="follow-up frame"
+        )
+        environment = capture.get("environment")
+        environment_fields = {
+            "backend_name",
+            "title_match",
+            "window_title_present",
+            "window_class",
+            "window_client_width",
+            "window_client_height",
+            "reported_dpi",
+            "window_title_redacted",
+            "native_window_handle_redacted",
+        }
+        if not isinstance(environment, dict) or set(environment) != environment_fields:
+            raise CampaignIntegrityError("follow-up environment fields changed")
+        client_width = environment.get("window_client_width")
+        client_height = environment.get("window_client_height")
+        reported_dpi = environment.get("reported_dpi")
+        if (
+            environment.get("backend_name") != _LIVE_CAPTURE_BACKEND_NAME
+            or environment.get("title_match") != _LIVE_CAPTURE_TITLE_MATCH
+            or environment.get("window_title_present") is not True
+            or not isinstance(environment.get("window_class"), str)
+            or not cast(str, environment["window_class"]).strip()
+            or not _is_strict_int(client_width)
+            or not _is_strict_int(client_height)
+            or client_width != frame_width
+            or client_height != frame_height
+            or environment.get("window_title_redacted") is not True
+            or environment.get("native_window_handle_redacted") is not True
+            or (
+                reported_dpi is not None
+                and (not _is_strict_int(reported_dpi) or cast(int, reported_dpi) <= 0)
+            )
+        ):
+            raise CampaignIntegrityError("follow-up environment provenance changed")
+        reviewer_truth = binding.get("reviewer_truth")
+        if not isinstance(reviewer_truth, dict) or set(reviewer_truth) != {
+            "reviewed_at_utc",
+            "meaning",
+            "resource_truth",
+            "privacy_review_confirmed",
+            "focal_resource_id",
+            "node_phase",
+            "obstruction_target",
+            "subject_region",
+        } or reviewer_truth.get("privacy_review_confirmed") is not True:
+            raise CampaignIntegrityError("follow-up reviewer truth changed")
+        _parse_utc(
+            reviewer_truth.get("reviewed_at_utc"), "follow-up reviewed_at_utc"
+        )
+        result = binding.get("release_result")
+        if not isinstance(result, dict) or set(result) != release_result_fields:
+            raise CampaignIntegrityError("follow-up release result fields changed")
+        reasons = result.get("reasons")
+        passed = result.get("passed")
+        evidence_origin = origin["evidence_origin"]
+        if (
+            result.get("ordinal") != case.ordinal
+            or result.get("case_id") != case.case_id
+            or result.get("blocker_id") != case.blocker_id
+            or result.get("evidence_origin") != evidence_origin
+            or not isinstance(passed, bool)
+            or not isinstance(reasons, list)
+            or any(not isinstance(reason, str) for reason in reasons)
+            or result.get("permanent_evidence_required") is not (not passed)
+            or result.get("policy_change_allowed_from_failure") is not False
+            or result.get("reported_dpi") != reported_dpi
+            or result.get("required_reported_dpi") != required_dpi
+        ):
+            raise CampaignIntegrityError("follow-up release result was rebound")
+        artifacts = binding.get("sanitized_artifacts")
+        if not isinstance(artifacts, dict) or artifacts.get("mode") not in {
+            "sanitized-frame",
+            "pixels-withheld-unsupported-geometry",
+        }:
+            raise CampaignIntegrityError("follow-up sanitized artifact mode changed")
+        raw_binding: object = None
+        has_replay_pixels = artifacts["mode"] == "sanitized-frame"
+        if has_replay_pixels:
+            raw_binding = artifacts.get("raw_gzip")
+            raw_sha = hashes.get("sanitized_raw_gzip_sha256")
+            preview_sha = hashes.get("sanitized_preview_sha256")
+            if (
+                not isinstance(raw_binding, dict)
+                or not isinstance(raw_sha, str)
+                or not _SHA256_PATTERN.fullmatch(raw_sha)
+                or not isinstance(preview_sha, str)
+                or not _SHA256_PATTERN.fullmatch(preview_sha)
+                or raw_binding.get("sha256") != raw_sha
+            ):
+                raise CampaignIntegrityError("follow-up replay artifact binding changed")
+        elif (
+            hashes.get("sanitized_raw_gzip_sha256") is not None
+            or hashes.get("sanitized_preview_sha256") is not None
+        ):
+            raise CampaignIntegrityError("withheld follow-up case exposed pixel hashes")
+        expected_replay_candidate: object = None
+        if isinstance(raw_binding, dict):
+            expected_replay_candidate = {
+                "path": raw_binding["path"],
+                "sha256": raw_binding["sha256"],
+            }
+        if result.get("replay_regression_candidate") != expected_replay_candidate:
+            raise CampaignIntegrityError(
+                "follow-up replay-regression candidate binding changed"
+            )
+        decision = _followup_review_decision(
+            case,
+            reviewer_truth,
+            hashes,
+            artifacts,
+        )
+        _validate_followup_production_snapshot(
+            case,
+            binding.get("production_snapshot"),
+            capture_frame=cast(dict[str, object], capture["frame"]),
+            decision=decision,
+            release_result=result,
+            artifacts=artifacts,
+        )
+        _validate_followup_release_pass_claim(
+            case,
+            result,
+            capture_origin=origin,
+            capture_frame=cast(dict[str, object], capture["frame"]),
+            reported_dpi=reported_dpi,
+            decision=decision,
+            production=binding.get("production_snapshot"),
+            artifacts=artifacts,
+        )
+        case_results.append(result)
+        source_owned = evidence_origin == _SOURCE_OWNED_EVIDENCE_ORIGIN
+        source_matches.append(source_owned)
+        observed_dpis.append(reported_dpi)
+        backends.append(environment["backend_name"])
+        origins.append(evidence_origin)
+        window_classes.append(environment["window_class"])
+        client_geometries.append((cast(int, client_width), cast(int, client_height)))
+        frame_matches.append(
+            frame_width == required_width
+            and frame_height == required_height
+            and pixel_format.value == required_pixel_format
+        )
+        dpi_by_case.append(
+            {
+                "case_id": case.case_id,
+                "reported_dpi": reported_dpi,
+                "matches_requirement": reported_dpi == required_dpi,
+            }
+        )
+        if passed is False:
+            retained_failure_ids.append(case.case_id)
+            if source_owned:
+                expected_candidates.append(
+                    {
+                        "ordinal": case.ordinal,
+                        "case_id": case.case_id,
+                        "blocker_id": case.blocker_id,
+                        "target_dataset_id": _FOLLOWUP_REGRESSION_DATASET_ID,
+                        "disposition": (
+                            "REPLAY_CANDIDATE"
+                            if has_replay_pixels
+                            else "METADATA_ONLY_NO_PIXELS"
+                        ),
+                        "replay_candidate": has_replay_pixels,
+                        "source_owned_release_evidence": True,
+                        "case_review_sha256": hashes["case_review_sha256"],
+                        "reviewer_truth": reviewer_truth,
+                        "release_reasons": reasons,
+                        "sanitized_raw_gzip": raw_binding,
+                        "promotion_complete": False,
+                        "policy_change_allowed_from_failure": False,
+                    }
+                )
+            else:
+                expected_nonrelease.append(
+                    {
+                        "ordinal": case.ordinal,
+                        "case_id": case.case_id,
+                        "blocker_id": case.blocker_id,
+                        "disposition": (
+                            "NON_RELEASE_TEST_EVIDENCE"
+                            if has_replay_pixels
+                            else "NON_RELEASE_TEST_EVIDENCE_NO_PIXELS"
+                        ),
+                        "source_owned_release_evidence": False,
+                        "case_review_sha256": hashes["case_review_sha256"],
+                        "release_reasons": reasons,
+                        "promotion_complete": False,
+                        "policy_change_allowed_from_failure": False,
+                    }
+                )
+    expected_c1: list[dict[str, object]] = []
+    for blocker_id in _RESOURCE_BLOCKER_ORDER:
+        members = [item for item in case_results if item["blocker_id"] == blocker_id]
+        closed = bool(members) and all(item["passed"] is True for item in members)
+        expected_c1.append(
+            {
+                "blocker_id": blocker_id,
+                "status": "CLOSED" if closed else "STILL_OPEN",
+                "case_ids": [item["case_id"] for item in members],
+                "reasons": [
+                    reason
+                    for item in members
+                    if item["passed"] is not True
+                    for reason in cast(list[str], item["reasons"])
+                ],
+            }
+        )
+    expected_c1_status = (
+        "CLOSED" if all(item["status"] == "CLOSED" for item in expected_c1) else "OPEN"
+    )
+    if value.get("c1_result") != {
+        "status": expected_c1_status,
+        "blockers": expected_c1,
+    }:
+        raise CampaignIntegrityError("follow-up C1 projection changed")
+    expected_failure_status = (
+        "BLOCKED_NON_RELEASE_EVIDENCE"
+        if expected_nonrelease
+        else "PENDING_EXTERNAL"
+        if expected_candidates
+        else "NOT_REQUIRED"
+    )
+    expected_failure_inputs = {
+        "status": expected_failure_status,
+        "target_dataset_id": _FOLLOWUP_REGRESSION_DATASET_ID,
+        "candidate_count": len(expected_candidates),
+        "candidates": expected_candidates,
+        "nonrelease_evidence_count": len(expected_nonrelease),
+        "nonrelease_evidence": expected_nonrelease,
+        "promotion_complete": False,
+    }
+    if value.get("failure_promotion_inputs") != expected_failure_inputs:
+        raise CampaignIntegrityError("follow-up failure-promotion projection changed")
+    expected_categories = _release_gate_categories(
+        [
+            *expected_c1,
+            {
+                "blocker_id": _FINAL_REVIEW_BLOCKER_ID,
+                "status": "STILL_OPEN",
+                "case_ids": [],
+                "reasons": [_FINAL_REVIEW_REASON],
+            },
+        ],
+        case_results,
+    )
+    unresolved_external_inputs = [
+        "external B release-evidence-boundary acceptance",
+        "independent exact client/renderer/profile/envelope review",
+        "source-owned constrained-v1 resource release/promotion record",
+    ]
+    if retained_failure_ids:
+        unresolved_external_inputs.insert(
+            2, "retained-failure permanent replay promotion"
+        )
+    distinct_window_classes = sorted(
+        cast(list[str], _ordered_unique(window_classes))
+    )
+    expected_envelope = {
+        "input_status": "verified-inputs-only-independent-review-required",
+        "required_reported_dpi": required_dpi,
+        "reported_dpi_by_case": dpi_by_case,
+        "observed_reported_dpis": _ordered_unique(observed_dpis),
+        "all_cases_match_required_dpi": all(
+            item["matches_requirement"] is True for item in dpi_by_case
+        ),
+        "required_frame": {
+            "width": required_width,
+            "height": required_height,
+            "pixel_format": required_pixel_format,
+        },
+        "all_cases_match_required_frame": all(frame_matches),
+        "observed_capture_backends": sorted(
+            cast(list[str], _ordered_unique(backends))
+        ),
+        "observed_evidence_origins": sorted(
+            cast(list[str], _ordered_unique(origins))
+        ),
+        "observed_window_classes": distinct_window_classes,
+        "observed_client_geometries": [
+            {"width": width, "height": height}
+            for width, height in sorted(set(client_geometries))
+        ],
+        "window_class_consistent": len(distinct_window_classes) == 1,
+        "all_cases_source_owned": all(source_matches),
+        "reported_release_gate_categories": expected_categories,
+        "reported_c2_category": expected_categories[
+            "c2_evidence_contingent_source_review"
+        ],
+        "retained_failure_case_ids": retained_failure_ids,
+        "source_owned_failure_case_ids": [
+            item["case_id"] for item in expected_candidates
+        ],
+        "nonrelease_failure_case_ids": [
+            item["case_id"] for item in expected_nonrelease
+        ],
+        "renderer_identity": {
+            "observed": False,
+            "status": "NOT_OBSERVED_BY_CAPTURE_BACKEND",
+            "requires_external_review": True,
+        },
+        "unresolved_external_inputs": unresolved_external_inputs,
+        "envelope_approved": False,
+    }
+    if value.get("c2_envelope_review_inputs") != expected_envelope:
+        raise CampaignIntegrityError("follow-up C2 envelope projection changed")
+
+
+def verify_release_followup_inputs(
+    path: Path, *, expected_sha256: str
+) -> dict[str, object]:
+    """Verify immutable follow-up inputs against an independently retained root."""
+
+    if not isinstance(expected_sha256, str) or not _SHA256_PATTERN.fullmatch(
+        expected_sha256
+    ):
+        raise CampaignIntegrityError(
+            "expected follow-up SHA-256 must be 64 lowercase hexadecimal characters"
+        )
+    payload, digest = _verify_hashed_artifact(
+        Path(path),
+        expected=expected_sha256,
+        maximum_bytes=_MAX_FOLLOWUP_JSON_BYTES,
+    )
+    inputs = _strict_json_bytes(payload, label="resource release follow-up inputs")
+    _validate_release_followup_inputs(inputs)
+    candidates = cast(
+        dict[str, object], inputs["failure_promotion_inputs"]
+    )["candidate_count"]
+    return {
+        "inputs": str(Path(path)),
+        "sha256": digest,
+        "source_manifest_sha256": cast(
+            dict[str, object], inputs["source_snapshot"]
+        )["manifest_sha256"],
+        "case_count": len(cast(list[object], inputs["case_bindings"])),
+        "failure_candidate_count": candidates,
+        "release_eligible": False,
         "activation_allowed": False,
         "verified": True,
     }
