@@ -199,6 +199,55 @@ def test_adapt_pre_deposit_inventory_rejects_wrong_provenance_type_alone() -> No
         adapt_pre_deposit_inventory(_WrongProvenanceTypeInventoryResult())
 
 
+def test_adapt_pre_deposit_inventory_reads_each_field_exactly_once() -> None:
+    """D0 adversarial audit finding: Protocol members are properties.
+
+    Validating one read and then separately re-reading to build the
+    observation would silently trust whatever a second, possibly different,
+    read returned. Each field must be read exactly once and that exact value
+    used, mirroring how ``run_bank_detector`` guards against a detector's own
+    metadata drifting mid-run.
+    """
+
+    class _CountingInventoryResult:
+        def __init__(self, provenance: BankEvidenceProvenance) -> None:
+            self.state_reads = 0
+            self.provenance_reads = 0
+            self.detector_id_reads = 0
+            self.detector_version_reads = 0
+            self._provenance = provenance
+
+        @property
+        def state(self) -> InventoryState:
+            self.state_reads += 1
+            # A flaky/malicious implementation could return something
+            # different on a later read; here it stays valid but the
+            # adapter must still only read it once.
+            return InventoryState(occupied_slots=28, capacity=28, confidence=0.95)
+
+        @property
+        def provenance(self) -> BankEvidenceProvenance:
+            self.provenance_reads += 1
+            return self._provenance
+
+        @property
+        def detector_id(self) -> str:
+            self.detector_id_reads += 1
+            return "codex-c-inventory-v3"
+
+        @property
+        def detector_version(self) -> str:
+            self.detector_version_reads += 1
+            return "3.0.0"
+
+    source = _CountingInventoryResult(provenance=build_provenance())
+    adapt_pre_deposit_inventory(source)
+    assert source.state_reads == 1
+    assert source.provenance_reads == 1
+    assert source.detector_id_reads == 1
+    assert source.detector_version_reads == 1
+
+
 def test_adapters_never_produce_a_verified_workflow_state() -> None:
     """The adapters only produce input *events* -- never a workflow context,
     never a BankInterfaceState, never anything resembling authority."""

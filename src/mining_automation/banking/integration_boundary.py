@@ -22,6 +22,7 @@ when banking is complete.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from ..contracts import InventoryState
@@ -108,30 +109,57 @@ def adapt_checkpoint_arrival(source: object) -> CheckpointArrivalEvidence:
     return CheckpointArrivalEvidence(identity=identity, provenance=provenance)
 
 
-def _validate_external_inventory_result(source: object) -> ExternalApprovedInventoryResult:
+@dataclass(frozen=True, slots=True)
+class _ReadOnceInventoryResult:
+    """The four fields of an external inventory result, read exactly once.
+
+    ``ExternalApprovedInventoryResult`` members are ``@property`` accessors, so
+    a non-conforming or flaky implementation could return a different value on
+    a second read than it did on the first -- validating one read and then
+    separately reading again to build the observation would silently trust
+    whatever the second read happened to return. Reading every field exactly
+    once and validating those fixed values closes that gap, matching
+    :func:`~mining_automation.banking.perception.run_bank_detector`'s existing
+    guard against a detector's own metadata drifting mid-run.
+    """
+
+    state: InventoryState
+    provenance: BankEvidenceProvenance
+    detector_id: str
+    detector_version: str
+
+
+def _validate_external_inventory_result(source: object) -> _ReadOnceInventoryResult:
     if not isinstance(source, ExternalApprovedInventoryResult):
         raise IntegrationBoundaryContractError(
             "external inventory result must satisfy ExternalApprovedInventoryResult "
             f"protocol, got {type(source).__name__}"
         )
-    if type(source.state) is not InventoryState:
+    state = source.state
+    provenance = source.provenance
+    detector_id = source.detector_id
+    detector_version = source.detector_version
+
+    if type(state) is not InventoryState:
         raise IntegrationBoundaryContractError(
-            f"external inventory result state must be InventoryState, got {type(source.state).__name__}"
+            f"external inventory result state must be InventoryState, got {type(state).__name__}"
         )
-    if type(source.provenance) is not BankEvidenceProvenance:
+    if type(provenance) is not BankEvidenceProvenance:
         raise IntegrationBoundaryContractError(
             "external inventory result provenance must be BankEvidenceProvenance, "
-            f"got {type(source.provenance).__name__}"
+            f"got {type(provenance).__name__}"
         )
-    if not isinstance(source.detector_id, str) or not source.detector_id.strip():
+    if not isinstance(detector_id, str) or not detector_id.strip():
         raise IntegrationBoundaryContractError(
             "external inventory result detector_id must be a non-empty string"
         )
-    if not isinstance(source.detector_version, str) or not source.detector_version.strip():
+    if not isinstance(detector_version, str) or not detector_version.strip():
         raise IntegrationBoundaryContractError(
             "external inventory result detector_version must be a non-empty string"
         )
-    return source
+    return _ReadOnceInventoryResult(
+        state=state, provenance=provenance, detector_id=detector_id, detector_version=detector_version
+    )
 
 
 def adapt_pre_deposit_inventory(source: object) -> PreDepositInventoryObservationEvidence:

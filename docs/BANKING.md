@@ -226,7 +226,8 @@ gate would run over a proposed batch, covering every case
 
 | Defect | Blocker |
 | --- | --- |
-| duplicate `package_id` in the batch | `DUPLICATE_EVIDENCE_PACKAGE` |
+| duplicate `package_id` in the batch (including a same-id replacement/tamper attempt) | `DUPLICATE_EVIDENCE_PACKAGE` |
+| the same underlying pixel content (`raw_sha256`) reused under a *different* `package_id` -- e.g. smuggled in as two independent, possibly contradictory cases | `DUPLICATE_EVIDENCE_CONTENT` |
 | a rejected verdict included as if it were release evidence | `REJECTED_EVIDENCE_PACKAGE_INCLUDED` |
 | verdict reviewed a package before that package was finalized | `REVIEWER_VERDICT_PRECEDES_FINALIZATION` |
 | package older than `MAX_EVIDENCE_PACKAGE_AGE_S` | `EVIDENCE_PACKAGE_STALE` |
@@ -235,6 +236,24 @@ gate would run over a proposed batch, covering every case
 
 An empty result means the batch is structurally acceptable, never that any
 pixel inside it is real or correct -- this function never inspects pixels.
+`package_id` is caller-chosen and proves nothing about independence on its
+own, which is exactly why duplicate detection also runs over `raw_sha256`
+directly: two packages that only differ in which id the caller attached to
+them are still one piece of evidence, not two.
+
+### Deposit-result verification packaging
+
+A batch containing *some* `NON_EMPTY_BEFORE_DEPOSIT` case and *some*
+`EMPTY_AFTER_DEPOSIT` case is a weaker claim than "this exact deposit
+attempt went from non-empty to empty" -- the two samples could come from
+unrelated visits. `DepositResultEvidenceRecord` makes the stronger, paired
+claim, and validates it can be made at all: both cases must be
+reviewer-accepted, carry the matching case label in the matching slot, share
+the same checkpoint and profile, be backed by *distinct* underlying evidence
+(the same frame cannot serve as both "before" and "after"), and the
+post-deposit package must be finalized strictly after the pre-deposit one.
+Any violation raises at construction, the same "invalid values can't be
+built" style as `ReviewedBankEvidenceCase`'s hash binding.
 
 ## Integration boundary with Codex B and Codex C (type/test level only)
 
@@ -279,6 +298,36 @@ Collecting this evidence, training/validating a real detector against it, and
 wiring a live `BankDetector` implementation are all out of scope for this
 foundation and must go through the same review process as any other
 production perception component before being trusted for live banking.
+
+## D0 adversarial audit findings (fixed)
+
+A dedicated audit pass of the already-shipped foundation (rather than adding
+new surface area) found and fixed three concrete defects:
+
+1. **Evidence-ordering regression checked only `frame_id`, not wall-clock
+   time.** `_evaluate_freshness` rejected a non-advancing `frame_id` but
+   accepted any `captured_monotonic_s`, including one *earlier* than a
+   previously-accepted frame's, as long as `frame_id` merely increased. A
+   crafted/malfunctioning evidence stream with an advancing id but a
+   regressing timestamp passed clean. Fixed by requiring both `frame_id`
+   *and* `captured_monotonic_s` to advance together; either regressing alone
+   now rejects with `EVIDENCE_ORDERING_REGRESSION`.
+2. **Evidence-batch duplicate detection keyed only on the caller-chosen
+   `package_id`, not the actual pixel content.** The same underlying
+   `raw_sha256` could be resubmitted under a second `package_id` and claimed
+   as an independent, even contradictory, case (e.g. the identical frame
+   claimed as both OPEN and CLOSED). Fixed by adding a second duplicate
+   check keyed on `raw_sha256` itself (`DUPLICATE_EVIDENCE_CONTENT`).
+3. **Integration-boundary adapters read each `Protocol` property twice --
+   once to validate, once to construct.** Since `ExternalApprovedInventoryResult`
+   members are properties, a flaky or malicious implementation could return
+   a different value on the second read than the one that was validated.
+   Fixed by reading every field exactly once into a local, immutable value
+   and validating and using that same read -- the same discipline
+   `run_bank_detector` already applies to a detector's metadata.
+
+All three are covered by dedicated regression tests, and the full banking
+suite (288 tests as of this pass) remains at 100% line coverage.
 
 ## Architecture boundary
 

@@ -414,9 +414,14 @@ def _evaluate_freshness(
         return BankingBlocker.EVIDENCE_FROM_FUTURE
     if age_s > max_age_s:
         return stale_blocker
-    if (
-        previous_provenance is not None
-        and provenance.frame.frame_id <= previous_provenance.frame.frame_id
+    if previous_provenance is not None and (
+        provenance.frame.frame_id <= previous_provenance.frame.frame_id
+        or captured < previous_provenance.frame.captured_monotonic_s
     ):
+        # Both frame_id and captured_monotonic_s must advance together. Checking
+        # frame_id alone would accept a crafted/malfunctioning stream where the
+        # id increases but the wall-clock timestamp regresses relative to
+        # evidence already accepted -- itself a replay/tamper signature, not
+        # just a non-advancing frame.
         return BankingBlocker.EVIDENCE_ORDERING_REGRESSION
     return None

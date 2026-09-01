@@ -15,6 +15,7 @@ from mining_automation.banking.contracts import BankingBlocker
 from mining_automation.banking.evidence_intake import (
     REQUIRED_BANK_EVIDENCE_CASES,
     BankEvidenceCase,
+    DepositResultEvidenceRecord,
     FinalizedBankEvidencePackage,
     OperatorIntentLabel,
     ReviewedBankEvidenceCase,
@@ -267,6 +268,153 @@ def test_reviewed_case_is_frozen_no_mutation_path() -> None:
 
 
 # ---------------------------------------------------------------------------
+# DepositResultEvidenceRecord (deposit-result verification packaging)
+# ---------------------------------------------------------------------------
+
+
+def _pre_deposit_case(
+    *, package_id: str = "pkg-pre", raw_sha256: str = "1" * 64, finalized_monotonic_s: float = 0.0
+) -> ReviewedBankEvidenceCase:
+    package = _package(
+        package_id=package_id, raw_sha256=raw_sha256, finalized_monotonic_s=finalized_monotonic_s
+    )
+    verdict = _verdict(
+        reviewed_case=BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT,
+        bound_package_sha256=package.raw_sha256,
+        reviewed_monotonic_s=finalized_monotonic_s + 0.5,
+    )
+    return ReviewedBankEvidenceCase(package=package, verdict=verdict)
+
+
+def _post_deposit_case(
+    *, package_id: str = "pkg-post", raw_sha256: str = "2" * 64, finalized_monotonic_s: float = 10.0
+) -> ReviewedBankEvidenceCase:
+    package = _package(
+        package_id=package_id, raw_sha256=raw_sha256, finalized_monotonic_s=finalized_monotonic_s
+    )
+    verdict = _verdict(
+        reviewed_case=BankEvidenceCase.EMPTY_AFTER_DEPOSIT,
+        bound_package_sha256=package.raw_sha256,
+        reviewed_monotonic_s=finalized_monotonic_s + 0.5,
+    )
+    return ReviewedBankEvidenceCase(package=package, verdict=verdict)
+
+
+def test_deposit_result_evidence_record_accepts_valid_pairing() -> None:
+    record = DepositResultEvidenceRecord(
+        pre_deposit=_pre_deposit_case(), post_deposit=_post_deposit_case()
+    )
+    assert record.pre_deposit.verdict.reviewed_case is BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT
+    assert record.post_deposit.verdict.reviewed_case is BankEvidenceCase.EMPTY_AFTER_DEPOSIT
+
+
+def test_deposit_result_evidence_record_rejects_non_exact_pre_deposit_type() -> None:
+    with pytest.raises(ValueError, match="pre_deposit must be an exact ReviewedBankEvidenceCase"):
+        DepositResultEvidenceRecord(pre_deposit="not-a-case", post_deposit=_post_deposit_case())  # type: ignore[arg-type]
+
+
+def test_deposit_result_evidence_record_rejects_non_exact_post_deposit_type() -> None:
+    with pytest.raises(ValueError, match="post_deposit must be an exact ReviewedBankEvidenceCase"):
+        DepositResultEvidenceRecord(pre_deposit=_pre_deposit_case(), post_deposit="not-a-case")  # type: ignore[arg-type]
+
+
+def test_deposit_result_evidence_record_rejects_rejected_pre_deposit_verdict() -> None:
+    rejected_pre = ReviewedBankEvidenceCase(
+        package=_package(package_id="pkg-pre", raw_sha256="1" * 64),
+        verdict=_verdict(
+            accepted=False,
+            reviewed_case=BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT,
+            bound_package_sha256="1" * 64,
+        ),
+    )
+    with pytest.raises(ValueError, match="pre_deposit verdict must be accepted"):
+        DepositResultEvidenceRecord(pre_deposit=rejected_pre, post_deposit=_post_deposit_case())
+
+
+def test_deposit_result_evidence_record_rejects_rejected_post_deposit_verdict() -> None:
+    rejected_post = ReviewedBankEvidenceCase(
+        package=_package(package_id="pkg-post", raw_sha256="2" * 64),
+        verdict=_verdict(
+            accepted=False,
+            reviewed_case=BankEvidenceCase.EMPTY_AFTER_DEPOSIT,
+            bound_package_sha256="2" * 64,
+        ),
+    )
+    with pytest.raises(ValueError, match="post_deposit verdict must be accepted"):
+        DepositResultEvidenceRecord(pre_deposit=_pre_deposit_case(), post_deposit=rejected_post)
+
+
+def test_deposit_result_evidence_record_rejects_wrong_pre_deposit_case_label() -> None:
+    wrong_label = _post_deposit_case(package_id="pkg-pre", raw_sha256="1" * 64)
+    with pytest.raises(
+        ValueError, match="pre_deposit case must be reviewed as NON_EMPTY_BEFORE_DEPOSIT"
+    ):
+        DepositResultEvidenceRecord(pre_deposit=wrong_label, post_deposit=_post_deposit_case())
+
+
+def test_deposit_result_evidence_record_rejects_wrong_post_deposit_case_label() -> None:
+    wrong_label = _pre_deposit_case(package_id="pkg-post", raw_sha256="2" * 64)
+    with pytest.raises(
+        ValueError, match="post_deposit case must be reviewed as EMPTY_AFTER_DEPOSIT"
+    ):
+        DepositResultEvidenceRecord(pre_deposit=_pre_deposit_case(), post_deposit=wrong_label)
+
+
+def test_deposit_result_evidence_record_rejects_foreign_checkpoint() -> None:
+    from mining_automation.banking.contracts import BankCheckpointIdentity
+
+    foreign_pre = ReviewedBankEvidenceCase(
+        package=_package(
+            package_id="pkg-pre", raw_sha256="1" * 64, checkpoint=BankCheckpointIdentity("other", "other")
+        ),
+        verdict=_verdict(
+            reviewed_case=BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT, bound_package_sha256="1" * 64
+        ),
+    )
+    with pytest.raises(ValueError, match="must share the same checkpoint"):
+        DepositResultEvidenceRecord(pre_deposit=foreign_pre, post_deposit=_post_deposit_case())
+
+
+def test_deposit_result_evidence_record_rejects_foreign_profile() -> None:
+    foreign_profile = replace(SYNTHETIC_BANK_PROFILE, profile_version="9.9.9")
+    foreign_pre = ReviewedBankEvidenceCase(
+        package=_package(package_id="pkg-pre", raw_sha256="1" * 64, profile=foreign_profile),
+        verdict=_verdict(
+            reviewed_case=BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT, bound_package_sha256="1" * 64
+        ),
+    )
+    with pytest.raises(ValueError, match="must share the same profile"):
+        DepositResultEvidenceRecord(pre_deposit=foreign_pre, post_deposit=_post_deposit_case())
+
+
+def test_deposit_result_evidence_record_rejects_same_underlying_evidence_reused() -> None:
+    """The same frame cannot serve as both the 'before' and 'after' sample."""
+    shared_hash = "3" * 64
+    pre = _pre_deposit_case(package_id="pkg-pre", raw_sha256=shared_hash)
+    post = _post_deposit_case(package_id="pkg-post", raw_sha256=shared_hash)
+    with pytest.raises(ValueError, match="must not be backed by the same underlying evidence"):
+        DepositResultEvidenceRecord(pre_deposit=pre, post_deposit=post)
+
+
+def test_deposit_result_evidence_record_rejects_post_deposit_finalized_before_pre_deposit() -> None:
+    pre = _pre_deposit_case(finalized_monotonic_s=100.0)
+    post = _post_deposit_case(finalized_monotonic_s=50.0)
+    with pytest.raises(
+        ValueError, match="post_deposit package must be finalized strictly after pre_deposit"
+    ):
+        DepositResultEvidenceRecord(pre_deposit=pre, post_deposit=post)
+
+
+def test_deposit_result_evidence_record_rejects_simultaneous_finalization() -> None:
+    pre = _pre_deposit_case(finalized_monotonic_s=10.0)
+    post = _post_deposit_case(finalized_monotonic_s=10.0)
+    with pytest.raises(
+        ValueError, match="post_deposit package must be finalized strictly after pre_deposit"
+    ):
+        DepositResultEvidenceRecord(pre_deposit=pre, post_deposit=post)
+
+
+# ---------------------------------------------------------------------------
 # validate_evidence_case_batch (adversarial batch checks)
 # ---------------------------------------------------------------------------
 
@@ -274,7 +422,11 @@ def test_reviewed_case_is_frozen_no_mutation_path() -> None:
 def _full_required_batch() -> tuple[ReviewedBankEvidenceCase, ...]:
     cases = []
     for index, case_label in enumerate(BankEvidenceCase):
-        package = _package(package_id=f"pkg-{index}", finalized_monotonic_s=float(index))
+        package = _package(
+            package_id=f"pkg-{index}",
+            raw_sha256=format(index, "064x"),
+            finalized_monotonic_s=float(index),
+        )
         verdict = _verdict(
             reviewed_case=case_label,
             bound_package_sha256=package.raw_sha256,
@@ -316,6 +468,35 @@ def test_validate_evidence_case_batch_rejects_duplicate_package_id() -> None:
     assert BankingBlocker.DUPLICATE_EVIDENCE_PACKAGE in blockers
 
 
+def test_validate_evidence_case_batch_rejects_same_content_under_different_package_ids() -> None:
+    """D0 adversarial audit finding: package_id alone is caller-chosen and
+
+    does not prove independence. The exact same underlying pixel content
+    (raw_sha256) smuggled in under two different package identities -- here
+    claimed as contradictory OPEN and CLOSED cases -- must be rejected even
+    though the package ids themselves differ.
+    """
+    shared_hash = "c" * 64
+    package_one = _package(package_id="pkg-open", raw_sha256=shared_hash)
+    package_two = _package(package_id="pkg-closed", raw_sha256=shared_hash)
+    case_open = ReviewedBankEvidenceCase(
+        package=package_one,
+        verdict=_verdict(reviewed_case=BankEvidenceCase.OPEN, bound_package_sha256=shared_hash),
+    )
+    case_closed = ReviewedBankEvidenceCase(
+        package=package_two,
+        verdict=_verdict(reviewed_case=BankEvidenceCase.CLOSED, bound_package_sha256=shared_hash),
+    )
+    blockers = validate_evidence_case_batch(
+        (case_open, case_closed),
+        expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+        expected_profile=SYNTHETIC_BANK_PROFILE,
+        evaluated_monotonic_s=100.0,
+    )
+    assert BankingBlocker.DUPLICATE_EVIDENCE_CONTENT in blockers
+    assert BankingBlocker.DUPLICATE_EVIDENCE_PACKAGE not in blockers
+
+
 def test_validate_evidence_case_batch_rejects_foreign_checkpoint() -> None:
     from mining_automation.banking.contracts import BankCheckpointIdentity
 
@@ -341,6 +522,22 @@ def test_validate_evidence_case_batch_rejects_foreign_profile() -> None:
         evaluated_monotonic_s=100.0,
     )
     assert BankingBlocker.BANK_PROFILE_MISMATCH in blockers
+
+
+def test_validate_evidence_case_batch_rejects_package_replacement_under_same_id() -> None:
+    """Tamper/replacement: the same declared package_id with silently swapped content."""
+    original = _reviewed_case(package=_package(package_id="pkg-1", raw_sha256="a" * 64))
+    replaced = _reviewed_case(
+        package=_package(package_id="pkg-1", raw_sha256="f" * 64),
+        verdict=_verdict(bound_package_sha256="f" * 64),
+    )
+    blockers = validate_evidence_case_batch(
+        (original, replaced),
+        expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+        expected_profile=SYNTHETIC_BANK_PROFILE,
+        evaluated_monotonic_s=100.0,
+    )
+    assert BankingBlocker.DUPLICATE_EVIDENCE_PACKAGE in blockers
 
 
 def test_validate_evidence_case_batch_rejects_included_rejected_verdict() -> None:

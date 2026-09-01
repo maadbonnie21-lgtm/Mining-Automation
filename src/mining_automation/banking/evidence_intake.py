@@ -51,6 +51,7 @@ __all__ = [
     "MAX_EVIDENCE_PACKAGE_AGE_S",
     "REQUIRED_BANK_EVIDENCE_CASES",
     "BankEvidenceCase",
+    "DepositResultEvidenceRecord",
     "FinalizedBankEvidencePackage",
     "OperatorIntentLabel",
     "ReviewedBankEvidenceCase",
@@ -192,6 +193,52 @@ class ReviewedBankEvidenceCase:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class DepositResultEvidenceRecord:
+    """Binds one pre-deposit and one post-deposit case as a single deposit result.
+
+    A batch containing *some* :attr:`BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT`
+    case and *some* :attr:`BankEvidenceCase.EMPTY_AFTER_DEPOSIT` case is not
+    the same claim as "this exact deposit attempt went from non-empty to
+    empty" -- the two samples could be from entirely unrelated visits. This
+    type makes the stronger, paired claim, and construction itself validates
+    that it can be made at all: both cases must be reviewer-accepted, labeled
+    with the matching case, from the same checkpoint/profile, backed by
+    distinct underlying evidence (not the same frame submitted twice), and
+    the post-deposit package finalized strictly after the pre-deposit one.
+    """
+
+    pre_deposit: ReviewedBankEvidenceCase
+    post_deposit: ReviewedBankEvidenceCase
+
+    def __post_init__(self) -> None:
+        if type(self.pre_deposit) is not ReviewedBankEvidenceCase:
+            raise ValueError("pre_deposit must be an exact ReviewedBankEvidenceCase")
+        if type(self.post_deposit) is not ReviewedBankEvidenceCase:
+            raise ValueError("post_deposit must be an exact ReviewedBankEvidenceCase")
+        if not self.pre_deposit.verdict.accepted:
+            raise ValueError("pre_deposit verdict must be accepted")
+        if not self.post_deposit.verdict.accepted:
+            raise ValueError("post_deposit verdict must be accepted")
+        if self.pre_deposit.verdict.reviewed_case is not BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT:
+            raise ValueError("pre_deposit case must be reviewed as NON_EMPTY_BEFORE_DEPOSIT")
+        if self.post_deposit.verdict.reviewed_case is not BankEvidenceCase.EMPTY_AFTER_DEPOSIT:
+            raise ValueError("post_deposit case must be reviewed as EMPTY_AFTER_DEPOSIT")
+        if self.pre_deposit.package.checkpoint != self.post_deposit.package.checkpoint:
+            raise ValueError("pre_deposit and post_deposit must share the same checkpoint")
+        if self.pre_deposit.package.profile != self.post_deposit.package.profile:
+            raise ValueError("pre_deposit and post_deposit must share the same profile")
+        if self.pre_deposit.package.raw_sha256 == self.post_deposit.package.raw_sha256:
+            raise ValueError(
+                "pre_deposit and post_deposit must not be backed by the same underlying evidence"
+            )
+        if (
+            self.post_deposit.package.finalized_monotonic_s
+            <= self.pre_deposit.package.finalized_monotonic_s
+        ):
+            raise ValueError("post_deposit package must be finalized strictly after pre_deposit")
+
+
 def validate_evidence_case_batch(
     cases: tuple[ReviewedBankEvidenceCase, ...],
     *,
@@ -222,6 +269,7 @@ def validate_evidence_case_batch(
 
     blockers: list[BankingBlocker] = []
     seen_package_ids: set[str] = set()
+    seen_raw_hashes: set[str] = set()
     accepted_cases: set[BankEvidenceCase] = set()
 
     for case in cases:
@@ -229,6 +277,17 @@ def validate_evidence_case_batch(
             if BankingBlocker.DUPLICATE_EVIDENCE_PACKAGE not in blockers:
                 blockers.append(BankingBlocker.DUPLICATE_EVIDENCE_PACKAGE)
         seen_package_ids.add(case.package.package_id)
+
+        # A distinct check from DUPLICATE_EVIDENCE_PACKAGE: two different
+        # package_ids wrapping the exact same underlying pixel content
+        # (raw_sha256) is the same evidence smuggled in twice under a fresh
+        # identity -- e.g. claimed as both OPEN and CLOSED via two "separate"
+        # packages. package_id alone cannot catch this since it is caller-
+        # chosen, not derived from the content.
+        if case.package.raw_sha256 in seen_raw_hashes:
+            if BankingBlocker.DUPLICATE_EVIDENCE_CONTENT not in blockers:
+                blockers.append(BankingBlocker.DUPLICATE_EVIDENCE_CONTENT)
+        seen_raw_hashes.add(case.package.raw_sha256)
 
         if case.package.checkpoint != expected_checkpoint:
             if BankingBlocker.CHECKPOINT_IDENTITY_MISMATCH not in blockers:

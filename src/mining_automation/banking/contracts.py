@@ -269,6 +269,7 @@ class BankingBlocker(StrEnum):
     ATTEMPT_RECEIPT_DUPLICATE = "attempt_receipt_duplicate"
 
     DUPLICATE_EVIDENCE_PACKAGE = "duplicate_evidence_package"
+    DUPLICATE_EVIDENCE_CONTENT = "duplicate_evidence_content"
     REJECTED_EVIDENCE_PACKAGE_INCLUDED = "rejected_evidence_package_included"
     MISSING_REQUIRED_EVIDENCE_CASE = "missing_required_evidence_case"
     EVIDENCE_PACKAGE_STALE = "evidence_package_stale"

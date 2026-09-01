@@ -293,6 +293,40 @@ def test_evaluate_bank_observation_rejects_ordering_regression() -> None:
     assert result.blockers == (BankingBlocker.EVIDENCE_ORDERING_REGRESSION,)
 
 
+def test_evaluate_bank_observation_rejects_timestamp_regression_despite_advancing_frame_id() -> None:
+    """D0 adversarial audit finding: frame_id alone is not enough.
+
+    A crafted/malfunctioning stream can present an increasing ``frame_id``
+    while ``captured_monotonic_s`` regresses relative to evidence already
+    accepted -- itself a replay/tamper signature that a frame_id-only
+    ordering check would miss, since ``evaluated_monotonic_s`` is checked
+    against the *current* capture time, not the previously accepted one.
+    """
+    previous = build_provenance(frame_id=5, captured_monotonic_s=100.0)
+    crafted = build_provenance(frame_id=6, captured_monotonic_s=50.0)
+    result = evaluate_bank_observation(
+        build_bank_observation(provenance=crafted),
+        expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+        expected_profile=SYNTHETIC_BANK_PROFILE,
+        evaluated_monotonic_s=50.5,
+        previous_provenance=previous,
+    )
+    assert not result.accepted
+    assert result.blockers == (BankingBlocker.EVIDENCE_ORDERING_REGRESSION,)
+
+
+def test_evaluate_inventory_observation_rejects_timestamp_regression_despite_advancing_frame_id() -> None:
+    previous = build_provenance(frame_id=5, captured_monotonic_s=100.0)
+    crafted = build_provenance(frame_id=6, captured_monotonic_s=50.0)
+    result = evaluate_inventory_observation(
+        build_pre_deposit_inventory_observation(occupied_slots=28, provenance=crafted),
+        evaluated_monotonic_s=50.5,
+        previous_provenance=previous,
+    )
+    assert not result.accepted
+    assert result.blockers == (BankingBlocker.EVIDENCE_ORDERING_REGRESSION,)
+
+
 def test_evaluate_bank_observation_current_provenance_rejects_mixed_frame_evidence() -> None:
     """An independently-sourced current_provenance catches smuggled evidence.
 
