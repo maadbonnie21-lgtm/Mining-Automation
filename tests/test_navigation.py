@@ -36,6 +36,7 @@ from mining_automation.navigation.contracts import (
 from mining_automation.navigation.machine import observe_checkpoint, prepare_step, start_route
 from mining_automation.navigation.replay import (
     NavigationManifestError,
+    ReplayMismatch,
     load_navigation_replay,
     run_navigation_replay,
 )
@@ -869,6 +870,48 @@ def test_committed_synthetic_replays_pass_deterministically(fixture_name: str) -
             first,
             route=RouteIdentity("different-synthetic-route", "synthetic-v1", first.route.direction),
         )
+    with pytest.raises(ValueError, match="outcome"):
+        replace(first.trace[0], outcome=NavigationTransitionOutcome.ARRIVAL_CONFIRMED)
+
+    forged_last = replace(
+        first.trace[-1],
+        current_checkpoint_id="synthetic-forged-arrival",
+    )
+    with pytest.raises(ValueError, match="final trace"):
+        replace(first, trace=first.trace[:-1] + (forged_last,))
+
+    forged_first = replace(
+        first.trace[0],
+        current_checkpoint_id=first.trace[0].expected_next_checkpoint_id,
+        expected_next_checkpoint_id=first.trace[-1].current_checkpoint_id,
+    )
+    with pytest.raises(ValueError, match="route sequence"):
+        replace(first, trace=(forged_first,) + first.trace[1:])
+
+    with pytest.raises(ValueError, match="non-negative integer"):
+        ReplayMismatch(-1, "field", None, None)
+    with pytest.raises(ValueError, match="printable"):
+        ReplayMismatch(0, "field\nspoofed-output", None, None)
+    with pytest.raises(ValueError, match="string or None"):
+        ReplayMismatch(0, "field", object(), None)  # type: ignore[arg-type]
+
+
+def test_replay_report_rejects_proposals_from_another_provenance_context(tmp_path: Path) -> None:
+    original_manifest = load_navigation_replay(FIXTURE_DIRECTORY / "synthetic_mine_to_bank.json")
+    original_report = run_navigation_replay(original_manifest)
+    other_data = _fixture_json()
+    other_data["context"]["expected_source"]["capture_session_id"] = "other-session"  # type: ignore[index]
+    for event in other_data["events"]:  # type: ignore[union-attr]
+        if "observation" in event:
+            event["observation"]["provenance"]["source"]["capture_session_id"] = (  # type: ignore[index]
+                "other-session"
+            )
+    other_manifest = load_navigation_replay(_write_json(tmp_path, other_data))
+    other_report = run_navigation_replay(other_manifest)
+
+    assert original_report.route == other_report.route
+    with pytest.raises(ValueError, match="exact evaluation context"):
+        replace(original_report, step_proposals=other_report.step_proposals)
 
 
 def test_replay_cli_emits_stable_machine_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -962,6 +1005,18 @@ def test_manifest_rejects_nonstandard_numbers(tmp_path: Path) -> None:
         load_navigation_replay(path)
 
 
+def test_navigation_identifiers_reject_control_characters(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="printable"):
+        RouteIdentity("synthetic-route\nspoofed-output", "synthetic-v1", RouteDirection.MINE_TO_BANK)
+
+    data = _fixture_json()
+    data["case_id"] = (
+        "synthetic-case\nlive navigation: enabled\nfixture role: production_route_evidence"
+    )
+    with pytest.raises(NavigationManifestError, match="printable"):
+        load_navigation_replay(_write_json(tmp_path, data))
+
+
 def test_manifest_rejects_unrepresentable_large_number(tmp_path: Path) -> None:
     raw = (FIXTURE_DIRECTORY / "synthetic_mine_to_bank.json").read_text(encoding="utf-8")
     path = tmp_path / "navigation.json"
@@ -970,6 +1025,29 @@ def test_manifest_rejects_unrepresentable_large_number(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(NavigationManifestError, match="finite JSON number"):
+        load_navigation_replay(path)
+
+
+def test_manifest_normalizes_json_integer_conversion_failures(tmp_path: Path) -> None:
+    path = tmp_path / "navigation.json"
+    path.write_text(
+        '{"schema_version": ' + "1" * 5_000 + "}",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(NavigationManifestError, match="invalid navigation replay JSON"):
+        load_navigation_replay(path)
+
+
+def test_manifest_normalizes_json_recursion_failures(tmp_path: Path) -> None:
+    path = tmp_path / "navigation.json"
+    nesting_depth = 20_000
+    path.write_text(
+        "[" * nesting_depth + "0" + "]" * nesting_depth,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(NavigationManifestError):
         load_navigation_replay(path)
 
 

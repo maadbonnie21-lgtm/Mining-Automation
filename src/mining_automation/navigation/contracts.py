@@ -55,8 +55,13 @@ def _is_finite_number(value: object) -> bool:
 
 
 def _require_identifier(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value or value != value.strip():
-        raise ValueError(f"{field_name} must be a non-empty, trimmed string")
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or not value.isprintable()
+    ):
+        raise ValueError(f"{field_name} must be a non-empty, trimmed, printable string")
     return value
 
 

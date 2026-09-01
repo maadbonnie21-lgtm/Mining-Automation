@@ -162,6 +162,15 @@ class ReplayMismatch:
     expected: str | None
     actual: str | None
 
+    def __post_init__(self) -> None:
+        if not _is_integer(self.event_index) or self.event_index < 0:
+            raise ValueError("mismatch event index must be a non-negative integer")
+        _require_identifier(self.field, "mismatch field")
+        if self.expected is not None and not isinstance(self.expected, str):
+            raise ValueError("mismatch expected value must be a string or None")
+        if self.actual is not None and not isinstance(self.actual, str):
+            raise ValueError("mismatch actual value must be a string or None")
+
 
 @dataclass(frozen=True, slots=True)
 class ReplayTraceEntry:
@@ -172,6 +181,57 @@ class ReplayTraceEntry:
     expected_next_checkpoint_id: str | None
     failure_reason: NavigationFailureReason | None
     proposed_step_id: str | None
+
+    def __post_init__(self) -> None:
+        if not _is_integer(self.event_index) or self.event_index < 0:
+            raise ValueError("trace event index must be a non-negative integer")
+        if not isinstance(self.outcome, NavigationTransitionOutcome):
+            raise ValueError("trace outcome must be a NavigationTransitionOutcome")
+        if not isinstance(self.phase, NavigationPhase):
+            raise ValueError("trace phase must be a NavigationPhase")
+        if self.current_checkpoint_id is not None:
+            _require_identifier(self.current_checkpoint_id, "trace current checkpoint")
+        if self.expected_next_checkpoint_id is not None:
+            _require_identifier(self.expected_next_checkpoint_id, "trace next checkpoint")
+        if self.failure_reason is not None and not isinstance(
+            self.failure_reason, NavigationFailureReason
+        ):
+            raise ValueError("trace failure reason must be a NavigationFailureReason or None")
+        if self.proposed_step_id is not None:
+            _require_identifier(self.proposed_step_id, "trace proposed step")
+
+        expected_phase = {
+            NavigationTransitionOutcome.CHECKPOINT_ACCEPTED: NavigationPhase.READY_FOR_STEP,
+            NavigationTransitionOutcome.STEP_PREPARED: NavigationPhase.AWAITING_CHECKPOINT,
+            NavigationTransitionOutcome.ARRIVAL_CONFIRMED: NavigationPhase.ARRIVED,
+            NavigationTransitionOutcome.STOPPED: NavigationPhase.STOPPED,
+        }.get(self.outcome)
+        if expected_phase is not None and self.phase is not expected_phase:
+            raise ValueError("trace outcome does not match its phase")
+        if (
+            self.outcome is NavigationTransitionOutcome.TERMINAL_NO_CHANGE
+            and self.phase not in {NavigationPhase.ARRIVED, NavigationPhase.STOPPED}
+        ):
+            raise ValueError("trace terminal no-change requires a terminal phase")
+        if (self.outcome is NavigationTransitionOutcome.STEP_PREPARED) is (
+            self.proposed_step_id is None
+        ):
+            raise ValueError("only a prepared-step trace may contain a proposed step")
+        if (self.phase is NavigationPhase.STOPPED) is (self.failure_reason is None):
+            raise ValueError("only a stopped trace must contain a failure reason")
+
+        location_shape = {
+            NavigationPhase.AWAITING_CHECKPOINT: (False, True),
+            NavigationPhase.READY_FOR_STEP: (True, True),
+            NavigationPhase.ARRIVED: (True, False),
+            NavigationPhase.STOPPED: (False, False),
+        }[self.phase]
+        actual_location_shape = (
+            self.current_checkpoint_id is not None,
+            self.expected_next_checkpoint_id is not None,
+        )
+        if actual_location_shape != location_shape:
+            raise ValueError("trace checkpoint fields do not match its phase")
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,29 +251,46 @@ class NavigationReplayReport:
             raise ValueError("navigation replay reports must retain the synthetic fixture role")
         if not isinstance(self.route, RouteIdentity):
             raise ValueError("report route must be a RouteIdentity")
-        if not isinstance(self.trace, tuple) or any(
+        if not isinstance(self.trace, tuple) or not self.trace or any(
             not isinstance(entry, ReplayTraceEntry) for entry in self.trace
         ):
-            raise ValueError("report trace must be a tuple of ReplayTraceEntry values")
+            raise ValueError("report trace must be a non-empty tuple of ReplayTraceEntry values")
         if tuple(entry.event_index for entry in self.trace) != tuple(range(len(self.trace))):
             raise ValueError("report trace event indexes must be contiguous from zero")
-        if not isinstance(self.step_proposals, tuple) or any(
-            not isinstance(proposal, OfflineStepProposal)
-            or proposal.route != self.route
-            for proposal in self.step_proposals
-        ):
-            raise ValueError("report proposals must be input-disabled proposals for its route")
         if not isinstance(self.final_progress, RouteProgress) or self.final_progress.route != self.route:
             raise ValueError("report final progress must belong to its route")
+        if not isinstance(self.step_proposals, tuple) or any(
+            not isinstance(proposal, OfflineStepProposal)
+            or proposal.context != self.final_progress.context
+            for proposal in self.step_proposals
+        ):
+            raise ValueError("report proposals must belong to its exact evaluation context")
+        traced_step_ids = tuple(
+            entry.proposed_step_id
+            for entry in self.trace
+            if entry.outcome is NavigationTransitionOutcome.STEP_PREPARED
+        )
+        proposal_step_ids = tuple(proposal.step.step_id for proposal in self.step_proposals)
+        if traced_step_ids != proposal_step_ids:
+            raise ValueError("report proposals must exactly match its prepared-step trace")
         if not isinstance(self.mismatches, tuple) or any(
             not isinstance(mismatch, ReplayMismatch) for mismatch in self.mismatches
         ):
             raise ValueError("report mismatches must be a tuple of ReplayMismatch values")
-        if not self.mismatches and (
-            not self.trace
-            or self.final_progress.phase not in {NavigationPhase.ARRIVED, NavigationPhase.STOPPED}
-            or self.trace[-1].phase is not self.final_progress.phase
+        last_entry = self.trace[-1]
+        if (
+            last_entry.phase is not self.final_progress.phase
+            or last_entry.current_checkpoint_id != self.final_progress.current_checkpoint_id
+            or last_entry.expected_next_checkpoint_id
+            != self.final_progress.expected_next_checkpoint_id
+            or last_entry.failure_reason is not self.final_progress.failure_reason
         ):
+            raise ValueError("report final trace must match its final progress")
+        _validate_trace_route_sequence(self.trace, self.final_progress)
+        if not self.mismatches and self.final_progress.phase not in {
+            NavigationPhase.ARRIVED,
+            NavigationPhase.STOPPED,
+        }:
             raise ValueError("a passing report requires a traced terminal final state")
 
     @property
@@ -276,6 +353,82 @@ class NavigationReplayReport:
                 f"expected {mismatch.expected!r}, got {mismatch.actual!r}"
             )
         return "\n".join(lines) + "\n"
+
+
+def _validate_trace_route_sequence(
+    trace: tuple[ReplayTraceEntry, ...],
+    final_progress: RouteProgress,
+) -> None:
+    checkpoints = final_progress.context.plan.checkpoints
+    steps = final_progress.context.plan.steps
+    phase = NavigationPhase.AWAITING_CHECKPOINT
+    accepted_checkpoint_count = 0
+    terminal_snapshot: tuple[
+        NavigationPhase,
+        str | None,
+        str | None,
+        NavigationFailureReason | None,
+    ] | None = None
+
+    for entry in trace:
+        snapshot = (
+            entry.phase,
+            entry.current_checkpoint_id,
+            entry.expected_next_checkpoint_id,
+            entry.failure_reason,
+        )
+        if terminal_snapshot is not None:
+            if (
+                entry.outcome is not NavigationTransitionOutcome.TERMINAL_NO_CHANGE
+                or snapshot != terminal_snapshot
+            ):
+                raise ValueError("report trace must remain unchanged after a terminal state")
+            continue
+
+        if entry.outcome is NavigationTransitionOutcome.CHECKPOINT_ACCEPTED:
+            if (
+                phase is not NavigationPhase.AWAITING_CHECKPOINT
+                or accepted_checkpoint_count >= len(checkpoints) - 1
+                or entry.current_checkpoint_id
+                != checkpoints[accepted_checkpoint_count].checkpoint_id
+                or entry.expected_next_checkpoint_id
+                != checkpoints[accepted_checkpoint_count + 1].checkpoint_id
+            ):
+                raise ValueError("report trace checkpoint acceptance violates route sequence")
+            accepted_checkpoint_count += 1
+            phase = NavigationPhase.READY_FOR_STEP
+        elif entry.outcome is NavigationTransitionOutcome.STEP_PREPARED:
+            if (
+                phase is not NavigationPhase.READY_FOR_STEP
+                or accepted_checkpoint_count == 0
+                or accepted_checkpoint_count >= len(checkpoints)
+                or entry.expected_next_checkpoint_id
+                != checkpoints[accepted_checkpoint_count].checkpoint_id
+                or entry.proposed_step_id != steps[accepted_checkpoint_count - 1].step_id
+            ):
+                raise ValueError("report prepared-step trace violates route sequence")
+            phase = NavigationPhase.AWAITING_CHECKPOINT
+        elif entry.outcome is NavigationTransitionOutcome.ARRIVAL_CONFIRMED:
+            if (
+                phase is not NavigationPhase.AWAITING_CHECKPOINT
+                or accepted_checkpoint_count != len(checkpoints) - 1
+                or entry.current_checkpoint_id != checkpoints[-1].checkpoint_id
+            ):
+                raise ValueError("report arrival trace violates route sequence")
+            accepted_checkpoint_count += 1
+            phase = NavigationPhase.ARRIVED
+            terminal_snapshot = snapshot
+        elif entry.outcome is NavigationTransitionOutcome.STOPPED:
+            phase = NavigationPhase.STOPPED
+            terminal_snapshot = snapshot
+        else:
+            raise ValueError("report terminal no-change cannot precede a terminal state")
+
+    if (
+        phase is not final_progress.phase
+        or accepted_checkpoint_count != final_progress.accepted_checkpoint_count
+    ):
+        raise ValueError("report trace route history must match its final progress")
 
 
 def run_navigation_replay(manifest: NavigationReplayManifest) -> NavigationReplayReport:
@@ -383,7 +536,9 @@ def load_navigation_replay(path: Path) -> NavigationReplayManifest:
             object_pairs_hook=_reject_duplicate_keys,
             parse_constant=_reject_nonstandard_number,
         )
-    except (json.JSONDecodeError, _DuplicateKeyError) as exc:
+    except NavigationManifestError:
+        raise
+    except (ValueError, RecursionError) as exc:
         raise NavigationManifestError(f"invalid navigation replay JSON: {exc}") from exc
     try:
         return _parse_manifest(raw)
@@ -717,8 +872,13 @@ def _is_integer(value: object) -> bool:
 
 
 def _require_identifier(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value or value != value.strip():
-        raise ValueError(f"{field_name} must be a non-empty, trimmed string")
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or not value.isprintable()
+    ):
+        raise ValueError(f"{field_name} must be a non-empty, trimmed, printable string")
     return value
 
 
