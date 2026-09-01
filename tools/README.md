@@ -30,7 +30,11 @@ truth only after deterministic artifacts are separately prepared and inspected;
 and emits a strictly verifiable manifest-last privacy-safe review package plus
 the exact PR #39 CLOSED/STILL_OPEN ledger. `verify-export` requires the
 independently retained export manifest SHA-256, then rehashes and replays
-that package without private pixels. The live source gate is intentionally
+that package without private pixels. `prepare-followup` uses the same retained
+root to emit a deterministic, nonactivating replay-candidate queue and C2
+envelope-review input artifact; `verify-followup` requires its separately
+retained SHA-256 and strictly reconstructs its deny-only projections. Neither
+command can approve or promote anything. The live source gate is intentionally
 false in this branch, so `capture-next` fails before opening a Windows backend.
 See `docs/RESOURCE_RELEASE_CAMPAIGN.md`.
 

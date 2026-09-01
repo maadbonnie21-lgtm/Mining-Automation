@@ -273,7 +273,13 @@ def _fake_production(frame: campaign.Frame) -> dict[str, object]:
         "trust": {
             "accepted": True,
             "reason": "trusted_complete_production_ensemble",
-            "frame": None,
+            "frame": {
+                "frame_id": frame.frame_id,
+                "captured_monotonic_s": frame.captured_monotonic_s,
+                "width": frame.width,
+                "height": frame.height,
+                "pixel_format": frame.pixel_format.value,
+            },
             "resources": resources,
             "definitive_target_ids": definitive,
             "production_actionable_target_ids": actionable,
@@ -288,7 +294,18 @@ def _fake_production(frame: campaign.Frame) -> dict[str, object]:
                 ["north_east", "north_west", "south_west"] if not negative else []
             ),
             "required_zones": 3,
-            "landmarks": [],
+            "landmarks": [
+                {
+                    "landmark_id": landmark.landmark_id,
+                    "zone": landmark.macro_zone.value,
+                    "distance": (
+                        0.0 if not negative else landmark.maximum_distance + 0.01
+                    ),
+                    "threshold": landmark.maximum_distance,
+                    "matched": not negative,
+                }
+                for landmark in profile.scene_landmarks
+            ],
             "authority": "read-only-summary-never-overrides-production",
         },
         "passive_campaign_authorized_target_ids": [],
@@ -1908,7 +1925,7 @@ def test_review_export_is_manifest_last_redacted_hashed_and_exclusive(
         _verify_review_package(destination)
 
 
-def test_failed_reviewed_case_remains_packaged_as_nonactivating_regression(
+def test_failed_reviewed_case_remains_packaged_as_nonactivating_regression_candidate(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2189,6 +2206,87 @@ def test_verify_export_cli_requires_independently_retained_manifest_hash() -> No
     assert parsed.expected_manifest_sha256 == "a" * 64
 
 
+def test_prepare_followup_cli_has_only_verified_package_and_output_inputs() -> None:
+    parser = campaign_cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "prepare-followup",
+                "--package",
+                "review-package",
+                "--output",
+                "followup.json",
+            ]
+        )
+
+    parsed = parser.parse_args(
+        [
+            "prepare-followup",
+            "--package",
+            "review-package",
+            "--expected-manifest-sha256",
+            "a" * 64,
+            "--output",
+            "followup.json",
+        ]
+    )
+    assert vars(parsed) == {
+        "command": "prepare-followup",
+        "package": Path("review-package"),
+        "expected_manifest_sha256": "a" * 64,
+        "output": Path("followup.json"),
+    }
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "prepare-followup",
+                "--package",
+                "review-package",
+                "--expected-manifest-sha256",
+                "a" * 64,
+                "--output",
+                "followup.json",
+                "--approve",
+                "true",
+            ]
+        )
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "verify-followup",
+                "--inputs",
+                "followup.json",
+            ]
+        )
+    verified = parser.parse_args(
+        [
+            "verify-followup",
+            "--inputs",
+            "followup.json",
+            "--expected-sha256",
+            "b" * 64,
+        ]
+    )
+    assert vars(verified) == {
+        "command": "verify-followup",
+        "inputs": Path("followup.json"),
+        "expected_sha256": "b" * 64,
+    }
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "verify-followup",
+                "--inputs",
+                "followup.json",
+                "--expected-sha256",
+                "b" * 64,
+                "--approve",
+                "true",
+            ]
+        )
+
+
 def test_cli_capture_gate_fails_before_windows_backend_construction(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2250,15 +2348,22 @@ def test_capture_cli_exposes_no_identity_retry_or_camera_overrides(
 def _export_compact_public_package(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    *,
+    source_owned: bool = False,
+    environment_provider: Callable[[], campaign.CaptureEnvironment] = (
+        _compact_environment
+    ),
+    review_override: Mapping[str, campaign.ReviewDecision] | None = None,
 ) -> Path:
     session = _capture_and_seal_small_campaign(
         monkeypatch,
         tmp_path / "source",
+        source_owned=source_owned,
         raw_factory=_compact_raw,
-        environment_provider=_compact_environment,
+        environment_provider=environment_provider,
     )
     monkeypatch.setattr(campaign, "VARROCK_EAST_IRON_FIXED_UI_REGIONS", ())
-    _review_all(monkeypatch, session)
+    _review_all(monkeypatch, session, override=review_override)
     destination = tmp_path / "public-review"
     campaign.export_review_package(
         session,
@@ -2274,10 +2379,13 @@ def _export_compact_public_package(
 def _export_withheld_public_package(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    *,
+    source_owned: bool = False,
 ) -> Path:
     session = _capture_and_seal_small_campaign(
         monkeypatch,
         tmp_path / "source",
+        source_owned=source_owned,
         raw_factory=_compact_raw,
         environment_provider=_compact_environment,
     )
@@ -2311,6 +2419,562 @@ def _export_withheld_public_package(
     )
     assert _verify_review_package(destination)["verified"] is True
     return destination
+
+
+def _load_followup(path: Path) -> dict[str, object]:
+    payload = path.read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+    assert path.with_name(f"{path.name}.sha256").read_text(
+        encoding="ascii"
+    ) == f"{digest}\n"
+    decoded = json.loads(payload)
+    assert isinstance(decoded, dict)
+    return cast(dict[str, object], decoded)
+
+
+def test_prepare_followup_all_pass_is_deterministic_hashed_and_nonactivating(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package = _export_compact_public_package(
+        monkeypatch,
+        tmp_path / "package-source",
+        source_owned=True,
+    )
+    manifest_sha = _current_manifest_sha256(package)
+    first_output = tmp_path / "followup-a.json"
+    second_output = tmp_path / "followup-b.json"
+
+    first_result = campaign.prepare_release_followup_inputs(
+        package,
+        first_output,
+        expected_manifest_sha256=manifest_sha,
+    )
+    second_result = campaign.prepare_release_followup_inputs(
+        package,
+        second_output,
+        expected_manifest_sha256=manifest_sha,
+    )
+
+    assert first_output.read_bytes() == second_output.read_bytes()
+    assert first_result["sha256"] == second_result["sha256"]
+    followup = _load_followup(first_output)
+    assert followup["inputs_id"] == "resource-release-followup-inputs-v1"
+    assert followup["source_snapshot"]["manifest_sha256"] == manifest_sha
+    manifest = json.loads((package / "manifest.json").read_text(encoding="utf-8"))
+    assert followup["source_snapshot"]["release_summary_sha256"] == manifest[
+        "release_summary"
+    ]["sha256"]
+    assert [item["case_id"] for item in followup["case_bindings"]] == [
+        case.case_id for case in campaign.CAMPAIGN_PLAN
+    ]
+    assert [item["hashes"]["case_review_sha256"] for item in followup["case_bindings"]] == [
+        item["case_review_sha256"] for item in manifest["cases"]
+    ]
+    assert followup["verification"] == {
+        "verified": True,
+        "expected_manifest_sha256_matched": True,
+        "case_count": 15,
+        "operator_labels_included": False,
+        "operator_labels_are_reviewer_truth": False,
+        "all_cases_explicitly_privacy_reviewed": True,
+        "contains_private_full_frames": False,
+    }
+    assert followup["c1_result"]["status"] == "CLOSED"
+    assert followup["failure_promotion_inputs"] == {
+        "status": "NOT_REQUIRED",
+        "target_dataset_id": "varrock-east-iron-release-regressions-v1",
+        "candidate_count": 0,
+        "candidates": [],
+        "nonrelease_evidence_count": 0,
+        "nonrelease_evidence": [],
+        "promotion_complete": False,
+    }
+    assert [
+        gate["status"]
+        for gate in followup["c2_envelope_review_inputs"][
+            "reported_c2_category"
+        ]["gates"]
+    ] == ["CLOSED", "OPEN", "OPEN"]
+    assert followup["c2_envelope_review_inputs"]["envelope_approved"] is False
+    assert followup["authority"] == {
+        "approval_authority": False,
+        "release_eligible": False,
+        "activation_allowed": False,
+        "promotion_allowed": False,
+        "input_authority": False,
+    }
+    output_bytes = first_output.read_bytes()
+    assert b"private-title" not in output_bytes
+    assert b"operator_prompt" not in output_bytes
+    assert all(
+        case.operator_prompt.encode() not in output_bytes
+        for case in campaign.CAMPAIGN_PLAN
+    )
+    verified = campaign.verify_release_followup_inputs(
+        first_output,
+        expected_sha256=cast(str, first_result["sha256"]),
+    )
+    assert verified["verified"] is True
+    assert verified["case_count"] == 15
+    assert verified["failure_candidate_count"] == 0
+
+    retained_second_sha = cast(str, second_result["sha256"])
+
+    def forge_authority(payload: dict[str, object]) -> None:
+        authority = cast(dict[str, object], payload["authority"])
+        authority["release_eligible"] = True
+
+    forged_sha = _rewrite_hashed_json(second_output, forge_authority)
+    with pytest.raises(campaign.CampaignIntegrityError, match="stored SHA-256"):
+        campaign.verify_release_followup_inputs(
+            second_output,
+            expected_sha256=retained_second_sha,
+        )
+    with pytest.raises(campaign.CampaignIntegrityError, match="deny-only"):
+        campaign.verify_release_followup_inputs(
+            second_output,
+            expected_sha256=forged_sha,
+        )
+
+    production_output = tmp_path / "followup-production-tamper.json"
+    production_result = campaign.prepare_release_followup_inputs(
+        package,
+        production_output,
+        expected_manifest_sha256=manifest_sha,
+    )
+    retained_production_sha = cast(str, production_result["sha256"])
+
+    def forge_nested_production_authority(payload: dict[str, object]) -> None:
+        bindings = cast(list[dict[str, object]], payload["case_bindings"])
+        production = cast(dict[str, object], bindings[0]["production_snapshot"])
+        production["input_authority"] = True
+
+    forged_production_sha = _rewrite_hashed_json(
+        production_output,
+        forge_nested_production_authority,
+    )
+    with pytest.raises(campaign.CampaignIntegrityError, match="stored SHA-256"):
+        campaign.verify_release_followup_inputs(
+            production_output,
+            expected_sha256=retained_production_sha,
+        )
+    with pytest.raises(
+        campaign.CampaignIntegrityError,
+        match="production identity/authority",
+    ):
+        campaign.verify_release_followup_inputs(
+            production_output,
+            expected_sha256=forged_production_sha,
+        )
+
+    wrong_dpi_output = tmp_path / "followup-wrong-dpi-tamper.json"
+    campaign.prepare_release_followup_inputs(
+        package,
+        wrong_dpi_output,
+        expected_manifest_sha256=manifest_sha,
+    )
+
+    def forge_pass_at_wrong_dpi(payload: dict[str, object]) -> None:
+        bindings = cast(list[dict[str, object]], payload["case_bindings"])
+        capture = cast(dict[str, object], bindings[0]["capture"])
+        environment = cast(dict[str, object], capture["environment"])
+        environment["reported_dpi"] = 120
+        result = cast(dict[str, object], bindings[0]["release_result"])
+        result["reported_dpi"] = 120
+
+    forged_wrong_dpi_sha = _rewrite_hashed_json(
+        wrong_dpi_output,
+        forge_pass_at_wrong_dpi,
+    )
+    with pytest.raises(
+        campaign.CampaignIntegrityError,
+        match="source/DPI/geometry/reviewer prerequisites",
+    ):
+        campaign.verify_release_followup_inputs(
+            wrong_dpi_output,
+            expected_sha256=forged_wrong_dpi_sha,
+        )
+
+    wrong_origin_output = tmp_path / "followup-wrong-origin-tamper.json"
+    campaign.prepare_release_followup_inputs(
+        package,
+        wrong_origin_output,
+        expected_manifest_sha256=manifest_sha,
+    )
+
+    def forge_pass_from_injected_origin(payload: dict[str, object]) -> None:
+        bindings = cast(list[dict[str, object]], payload["case_bindings"])
+        origin = cast(dict[str, object], bindings[0]["capture_origin"])
+        origin["evidence_origin"] = "test-injected-non-release"
+        result = cast(dict[str, object], bindings[0]["release_result"])
+        result["evidence_origin"] = "test-injected-non-release"
+
+    forged_wrong_origin_sha = _rewrite_hashed_json(
+        wrong_origin_output,
+        forge_pass_from_injected_origin,
+    )
+    with pytest.raises(
+        campaign.CampaignIntegrityError,
+        match="source/DPI/geometry/reviewer prerequisites",
+    ):
+        campaign.verify_release_followup_inputs(
+            wrong_origin_output,
+            expected_sha256=forged_wrong_origin_sha,
+        )
+
+    contradictory_scene_output = tmp_path / "followup-scene-tamper.json"
+    campaign.prepare_release_followup_inputs(
+        package,
+        contradictory_scene_output,
+        expected_manifest_sha256=manifest_sha,
+    )
+
+    def forge_contradictory_scene(payload: dict[str, object]) -> None:
+        bindings = cast(list[dict[str, object]], payload["case_bindings"])
+        production = cast(dict[str, object], bindings[0]["production_snapshot"])
+        scene = cast(dict[str, object], production["scene"])
+        landmarks = cast(list[dict[str, object]], scene["landmarks"])
+        for landmark in landmarks:
+            landmark["distance"] = cast(float, landmark["threshold"]) + 0.01
+            landmark["matched"] = False
+
+    forged_scene_sha = _rewrite_hashed_json(
+        contradictory_scene_output,
+        forge_contradictory_scene,
+    )
+    with pytest.raises(
+        campaign.CampaignIntegrityError,
+        match="scene summary contradicts landmarks",
+    ):
+        campaign.verify_release_followup_inputs(
+            contradictory_scene_output,
+            expected_sha256=forged_scene_sha,
+        )
+
+    negative_overlap_output = tmp_path / "followup-negative-overlap-tamper.json"
+    campaign.prepare_release_followup_inputs(
+        package,
+        negative_overlap_output,
+        expected_manifest_sha256=manifest_sha,
+    )
+
+    def forge_negative_subject_target_overlap(payload: dict[str, object]) -> None:
+        bindings = cast(list[dict[str, object]], payload["case_bindings"])
+        binding = next(
+            item
+            for item in bindings
+            if cast(dict[str, object], item["reviewer_truth"])["meaning"]
+            == "neighboring-copper"
+        )
+        truth = cast(dict[str, object], binding["reviewer_truth"])
+        subject = cast(list[int], truth["subject_region"])
+        production = cast(dict[str, object], binding["production_snapshot"])
+        trust = cast(dict[str, object], production["trust"])
+        resources = cast(list[dict[str, object]], trust["resources"])
+        resources[0]["interaction_region"] = subject
+        regions = cast(dict[str, object], trust["production_interaction_regions"])
+        regions[campaign.VARROCK_EAST_IRON_RESOURCE_IDS[0]] = subject
+
+    forged_negative_overlap_sha = _rewrite_hashed_json(
+        negative_overlap_output,
+        forge_negative_subject_target_overlap,
+    )
+    with pytest.raises(
+        campaign.CampaignIntegrityError,
+        match="production interaction region changed",
+    ):
+        campaign.verify_release_followup_inputs(
+            negative_overlap_output,
+            expected_sha256=forged_negative_overlap_sha,
+        )
+
+    original_output = first_output.read_bytes()
+    original_sidecar = first_output.with_name(
+        f"{first_output.name}.sha256"
+    ).read_bytes()
+    with pytest.raises(FileExistsError):
+        campaign.prepare_release_followup_inputs(
+            package,
+            first_output,
+            expected_manifest_sha256=manifest_sha,
+        )
+    assert first_output.read_bytes() == original_output
+    assert first_output.with_name(f"{first_output.name}.sha256").read_bytes() == (
+        original_sidecar
+    )
+
+    snapshot = campaign._load_verified_review_package_snapshot(
+        package,
+        expected_manifest_sha256=manifest_sha,
+    )
+
+    def frozen_snapshot(
+        package_dir: Path,
+        *,
+        expected_manifest_sha256: str,
+    ) -> object:
+        del package_dir, expected_manifest_sha256
+        return snapshot
+
+    monkeypatch.setattr(
+        campaign,
+        "_load_verified_review_package_snapshot",
+        frozen_snapshot,
+    )
+    concurrent_output = tmp_path / "concurrent-followup.json"
+    barrier = threading.Barrier(3)
+    successes: list[dict[str, object]] = []
+    failures: list[BaseException] = []
+
+    def writer() -> None:
+        barrier.wait()
+        try:
+            successes.append(
+                campaign.prepare_release_followup_inputs(
+                    package,
+                    concurrent_output,
+                    expected_manifest_sha256=manifest_sha,
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001 - adversarial writer result
+            failures.append(exc)
+
+    threads = [threading.Thread(target=writer) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert isinstance(failures[0], FileExistsError)
+    assert _load_followup(concurrent_output) == followup
+
+
+def test_prepare_followup_retains_exact_failure_as_unapproved_replay_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first = campaign.CAMPAIGN_PLAN[0]
+    wrong = _decision_for(
+        first,
+        meaning=campaign.ReviewMeaning.UNSUPPORTED_LOCATION,
+        states=(ResourceVisualState.UNCERTAIN,) * 4,
+    )
+    package = _export_compact_public_package(
+        monkeypatch,
+        tmp_path / "package-source",
+        source_owned=True,
+        review_override={first.case_id: wrong},
+    )
+    output = tmp_path / "followup.json"
+    campaign.prepare_release_followup_inputs(
+        package,
+        output,
+        expected_manifest_sha256=_current_manifest_sha256(package),
+    )
+    followup = _load_followup(output)
+    promotion = followup["failure_promotion_inputs"]
+    assert promotion["status"] == "PENDING_EXTERNAL"
+    assert promotion["candidate_count"] == 1
+    candidate = promotion["candidates"][0]
+    assert candidate["case_id"] == first.case_id
+    assert candidate["disposition"] == "REPLAY_CANDIDATE"
+    assert candidate["replay_candidate"] is True
+    assert candidate["source_owned_release_evidence"] is True
+    assert candidate["promotion_complete"] is False
+    assert candidate["policy_change_allowed_from_failure"] is False
+    assert candidate["reviewer_truth"]["meaning"] == "unsupported-location"
+    assert candidate["sanitized_raw_gzip"]["path"].endswith(
+        "sanitized-frame.raw.gz"
+    )
+    assert "reviewer_did_not_confirm_requested_case_meaning" in candidate[
+        "release_reasons"
+    ]
+    assert followup["c1_result"]["status"] == "OPEN"
+    assert followup["c2_envelope_review_inputs"][
+        "retained_failure_case_ids"
+    ] == [first.case_id]
+    assert followup["authority"]["release_eligible"] is False
+
+
+def test_prepare_followup_withheld_failures_are_metadata_only_not_promoted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package = _export_withheld_public_package(
+        monkeypatch,
+        tmp_path / "source",
+        source_owned=True,
+    )
+    output = tmp_path / "withheld-followup.json"
+    campaign.prepare_release_followup_inputs(
+        package,
+        output,
+        expected_manifest_sha256=_current_manifest_sha256(package),
+    )
+    followup = _load_followup(output)
+    promotion = followup["failure_promotion_inputs"]
+    assert promotion["status"] == "PENDING_EXTERNAL"
+    assert promotion["candidate_count"] == len(campaign.CAMPAIGN_PLAN)
+    assert all(
+        candidate["disposition"] == "METADATA_ONLY_NO_PIXELS"
+        and candidate["replay_candidate"] is False
+        and candidate["sanitized_raw_gzip"] is None
+        and candidate["promotion_complete"] is False
+        for candidate in promotion["candidates"]
+    )
+    assert followup["c2_envelope_review_inputs"]["all_cases_source_owned"] is True
+    assert followup["authority"]["promotion_allowed"] is False
+
+
+def test_prepare_followup_injected_failures_are_never_release_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package = _export_compact_public_package(monkeypatch, tmp_path / "source")
+    output = tmp_path / "injected-followup.json"
+    result = campaign.prepare_release_followup_inputs(
+        package,
+        output,
+        expected_manifest_sha256=_current_manifest_sha256(package),
+    )
+
+    followup = _load_followup(output)
+    promotion = followup["failure_promotion_inputs"]
+    assert promotion["status"] == "BLOCKED_NON_RELEASE_EVIDENCE"
+    assert promotion["candidate_count"] == 0
+    assert promotion["candidates"] == []
+    assert promotion["nonrelease_evidence_count"] == len(campaign.CAMPAIGN_PLAN)
+    assert all(
+        item["disposition"] == "NON_RELEASE_TEST_EVIDENCE"
+        and item["source_owned_release_evidence"] is False
+        and item["promotion_complete"] is False
+        and "target_dataset_id" not in item
+        and "sanitized_raw_gzip" not in item
+        for item in promotion["nonrelease_evidence"]
+    )
+    assert followup["c2_envelope_review_inputs"]["all_cases_source_owned"] is False
+    assert followup["c2_envelope_review_inputs"][
+        "source_owned_failure_case_ids"
+    ] == []
+    assert followup["c2_envelope_review_inputs"][
+        "nonrelease_failure_case_ids"
+    ] == [case.case_id for case in campaign.CAMPAIGN_PLAN]
+    assert followup["authority"]["promotion_allowed"] is False
+    verified = campaign.verify_release_followup_inputs(
+        output,
+        expected_sha256=cast(str, result["sha256"]),
+    )
+    assert verified["failure_candidate_count"] == 0
+
+
+def test_prepare_followup_preserves_dpi_window_facts_without_approving_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def staged_environment() -> campaign.CaptureEnvironment:
+        nonlocal calls
+        dpi_values: tuple[int | None, ...] = (None, 120, 144, 96)
+        dpi = dpi_values[calls] if calls < len(dpi_values) else 96
+        window_class = "AltRuneLite" if calls == 1 else "SunAwtFrame"
+        calls += 1
+        return replace(
+            _compact_environment(),
+            reported_dpi=dpi,
+            window_class=window_class,
+        )
+
+    package = _export_compact_public_package(
+        monkeypatch,
+        tmp_path / "package-source",
+        source_owned=True,
+        environment_provider=staged_environment,
+    )
+    output = tmp_path / "followup.json"
+    campaign.prepare_release_followup_inputs(
+        package,
+        output,
+        expected_manifest_sha256=_current_manifest_sha256(package),
+    )
+    envelope = _load_followup(output)["c2_envelope_review_inputs"]
+    assert envelope["observed_reported_dpis"] == [None, 120, 144, 96]
+    assert envelope["observed_window_classes"] == ["AltRuneLite", "SunAwtFrame"]
+    assert envelope["window_class_consistent"] is False
+    assert envelope["all_cases_match_required_dpi"] is False
+    assert envelope["all_cases_match_required_frame"] is False
+    assert envelope["renderer_identity"] == {
+        "observed": False,
+        "status": "NOT_OBSERVED_BY_CAPTURE_BACKEND",
+        "requires_external_review": True,
+    }
+    assert envelope["envelope_approved"] is False
+    assert envelope["retained_failure_case_ids"] == [
+        case.case_id for case in campaign.CAMPAIGN_PLAN[:3]
+    ]
+
+
+def test_prepare_followup_requires_retained_root_and_uses_verified_snapshot_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package = _export_compact_public_package(monkeypatch, tmp_path / "source")
+    manifest_sha = _current_manifest_sha256(package)
+    rejected_output = tmp_path / "rejected.json"
+    with pytest.raises(
+        campaign.CampaignIntegrityError,
+        match="independently retained SHA-256",
+    ):
+        campaign.prepare_release_followup_inputs(
+            package,
+            rejected_output,
+            expected_manifest_sha256="0" * 64,
+        )
+    assert not rejected_output.exists()
+    assert not rejected_output.with_name(f"{rejected_output.name}.sha256").exists()
+
+    inside_output = package / "followup.json"
+    with pytest.raises(campaign.CampaignError, match="outside the verified package"):
+        campaign.prepare_release_followup_inputs(
+            package,
+            inside_output,
+            expected_manifest_sha256=manifest_sha,
+        )
+    assert not inside_output.exists()
+    assert not inside_output.with_name(f"{inside_output.name}.sha256").exists()
+
+    original_loader = campaign._load_verified_review_package_snapshot
+
+    def load_then_replace_source(
+        package_dir: Path,
+        *,
+        expected_manifest_sha256: str,
+    ) -> object:
+        snapshot = original_loader(
+            package_dir,
+            expected_manifest_sha256=expected_manifest_sha256,
+        )
+        (package / "manifest.json").write_text("replaced after snapshot\n")
+        return snapshot
+
+    monkeypatch.setattr(
+        campaign,
+        "_load_verified_review_package_snapshot",
+        load_then_replace_source,
+    )
+    output = tmp_path / "snapshot-followup.json"
+    campaign.prepare_release_followup_inputs(
+        package,
+        output,
+        expected_manifest_sha256=manifest_sha,
+    )
+    followup = _load_followup(output)
+    assert followup["source_snapshot"]["manifest_sha256"] == manifest_sha
+    assert followup["verification"]["case_count"] == 15
 
 
 def _first_public_case_path(destination: Path) -> Path:

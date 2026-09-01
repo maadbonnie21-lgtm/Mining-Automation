@@ -175,7 +175,7 @@ Even when every C1 blocker closes, the aggregate C2 category, final-envelope
 review, and source-owned release-record gates remain open; this harness cannot
 self-promote or grant input authority. The failure-promotion C2 subgate is
 closed only when no retained case failed; any retained failure reopens it and
-lists the exact case IDs requiring promotion.
+lists the exact case IDs requiring later source-owned promotion.
 Acceptance of this passive boundary is an external B decision and is never
 self-closed by a campaign report.
 
@@ -218,6 +218,45 @@ The expected manifest SHA-256 must be retained outside the package at export
 time. A package and its sidecars can otherwise be rewritten together; internal
 hash consistency alone cannot prove that the reviewer received the originally
 published immutable snapshot.
+
+Prepare the deterministic post-campaign replay-promotion queue and final-
+envelope review inputs from that same externally rooted snapshot:
+
+```powershell
+python tools/resource_release_campaign.py prepare-followup --package <review-package-directory> --expected-manifest-sha256 <independently-retained-manifest-sha256> --output <new-followup-inputs.json>
+```
+
+This command verifies and snapshots the package once, then derives the output
+only from the already-validated in-memory bytes. It does not reopen mutable
+package JSON after verification. The canonical output and adjacent SHA-256
+sidecar bind all 15 case/reviewer/source hashes, exact C1 results, retained
+failure candidates, observed DPI/window/geometry facts, and the unresolved C2
+inputs. Operator staging text, reviewer identity/notes, private paths, raw
+pixels, and renderer guesses are excluded.
+
+Retain the follow-up SHA-256 returned by `prepare-followup` outside the output
+artifact and its sidecar. Verify the immutable follow-up snapshot before using
+it for replay promotion or envelope review:
+
+```powershell
+python tools/resource_release_campaign.py verify-followup --inputs <followup-inputs.json> --expected-sha256 <independently-retained-followup-sha256>
+```
+
+The external root is mandatory because coordinated replacement of the JSON and
+its adjacent sidecar would otherwise be internally consistent. Verification
+also reconstructs the fixed case, C1, failure-origin, and C2 projections and
+rejects any attempt to grant approval, release, promotion, activation, or input
+authority.
+
+A source-owned replayable retained failure is labeled only
+`REPLAY_CANDIDATE`; a source-owned withheld-pixel failure is
+`METADATA_ONLY_NO_PIXELS`. Injected/test failures are segregated as non-release
+evidence and never enter the release promotion queue. No candidate becomes a
+permanent regression until a separate reviewed source change commits the
+fixture/evaluator and binds its Git hashes. The follow-up artifact cannot
+approve the envelope, close B or C2, create a release record, promote a
+fixture, activate perception, or grant input authority. Renderer identity
+remains explicitly unobserved and requires external review.
 
 ## Fail-closed invariants
 
