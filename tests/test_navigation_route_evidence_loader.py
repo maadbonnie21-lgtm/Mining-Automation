@@ -28,8 +28,10 @@ from mining_automation.navigation.contracts import (
 from mining_automation.navigation.route_evidence import (
     FinalizedRouteEvidencePackage,
     OwnedRouteEvidenceCase,
+    RouteEvidenceAcquisitionBinding,
     RouteEvidenceArtifactRef,
     RouteEvidenceCampaignPlan,
+    RouteEvidenceCaptureBuildIdentity,
     RouteEvidenceCaseRole,
     RouteEvidenceCaseSpec,
     RouteEvidenceCaseTruth,
@@ -146,6 +148,14 @@ def _build_package(
         ),
         capture_source_id=f"synthetic-loader-{direction.value}-source",
         capture_session_id=f"synthetic-loader-{direction.value}-session",
+        capture_build=RouteEvidenceCaptureBuildIdentity(
+            "synthetic-loader-capture",
+            "0.0.0",
+            _digest("synthetic-loader-capture-build"),
+        ),
+        frame_width=2,
+        frame_height=1,
+        pixel_format=PixelFormat.BGRA8888,
         capture_configuration_sha256=_digest(
             configuration_label
             if configuration_label is not None
@@ -159,10 +169,27 @@ def _build_package(
     )
     artifacts: dict[str, bytes] = {}
     owned_cases: list[OwnedRouteEvidenceCase] = []
+    previous_acquisition_sha256 = plan.content_sha256
     for spec in plan.cases:
         frame_payload = bytes([spec.ordinal]) * 8
         frame_ref = FrameRef(spec.ordinal, float(spec.ordinal), 2, 1)
         frame_sha256 = Sha256Digest.from_bytes(frame_payload)
+        capture_id = f"synthetic-loader-capture-{spec.ordinal}"
+        acquisition = RouteEvidenceAcquisitionBinding(
+            campaign_plan_sha256=plan.content_sha256,
+            capture_source_identity_sha256=plan.capture_source_identity_sha256,
+            capture_session_id=plan.capture_session_id,
+            request_id=f"synthetic-loader-request-{spec.ordinal}",
+            sequence_index=spec.ordinal,
+            case_id=spec.case_id,
+            capture_id=capture_id,
+            operator_id=plan.operator_id,
+            acknowledged_monotonic_s=float(spec.ordinal) - 0.5,
+            expires_monotonic_s=float(spec.ordinal) + 29.5,
+            frame_captured_monotonic_s=frame_ref.captured_monotonic_s,
+            recorded_monotonic_s=float(spec.ordinal) + 0.1,
+            previous_acquisition_sha256=previous_acquisition_sha256,
+        )
         report = SyntheticRouteEvidenceDetectorReport(
             campaign_id=plan.campaign_id,
             campaign_plan_sha256=plan.content_sha256,
@@ -170,11 +197,13 @@ def _build_package(
             route_plan_sha256=plan.route_plan_sha256,
             sequence_index=spec.ordinal,
             case_id=spec.case_id,
-            capture_id=f"synthetic-loader-capture-{spec.ordinal}",
+            capture_id=capture_id,
+            acquisition=acquisition,
             detector=plan.detector,
             profile=plan.profile,
             capture_source_id=plan.capture_source_id,
             capture_session_id=plan.capture_session_id,
+            capture_build=plan.capture_build,
             capture_configuration_sha256=plan.capture_configuration_sha256,
             capture_environment_sha256=plan.capture_environment_sha256,
             support_envelope_sha256=plan.support_envelope_sha256,
@@ -195,17 +224,19 @@ def _build_package(
                 route_plan_sha256=plan.route_plan_sha256,
                 sequence_index=spec.ordinal,
                 case_id=spec.case_id,
-                capture_id=f"synthetic-loader-capture-{spec.ordinal}",
+                capture_id=capture_id,
                 operator_id=plan.operator_id,
                 operator_intent=RouteEvidenceOperatorIntent(
                     spec.case_id,
                     spec.role,
                     spec.checkpoint_id,
                 ),
+                acquisition=acquisition,
                 detector=plan.detector,
                 profile=plan.profile,
                 capture_source_id=plan.capture_source_id,
                 capture_session_id=plan.capture_session_id,
+                capture_build=plan.capture_build,
                 capture_configuration_sha256=plan.capture_configuration_sha256,
                 capture_environment_sha256=plan.capture_environment_sha256,
                 support_envelope_sha256=plan.support_envelope_sha256,
@@ -224,10 +255,12 @@ def _build_package(
                 ),
             )
         )
+        previous_acquisition_sha256 = owned_cases[-1].content_sha256
     package = FinalizedRouteEvidencePackage(
         campaign_plan=plan,
         cases=tuple(owned_cases),
         finalized_at_utc="2026-09-01T00:00:10Z",
+        finalized_monotonic_s=5.0,
     )
     review = RouteEvidenceReview(
         finalized_package_sha256=package.content_sha256,
@@ -257,6 +290,7 @@ def _expectation(
     plan = package.campaign_plan
     return RouteEvidenceFilesystemExpectation(
         finalized_package_sha256=package.content_sha256,
+        acquisition_head_sha256=package.acquisition_head_sha256,
         campaign_id=plan.campaign_id,
         route=plan.route,
         direction=plan.route.direction,
@@ -265,6 +299,10 @@ def _expectation(
         profile=plan.profile,
         capture_source_id=plan.capture_source_id,
         capture_session_id=plan.capture_session_id,
+        capture_build=plan.capture_build,
+        frame_width=plan.frame_width,
+        frame_height=plan.frame_height,
+        pixel_format=plan.pixel_format,
         capture_configuration_sha256=plan.capture_configuration_sha256,
         capture_environment_sha256=plan.capture_environment_sha256,
         support_envelope_sha256=plan.support_envelope_sha256,
@@ -334,6 +372,45 @@ def test_loader_rejects_old_or_foreign_caller_expectation(tmp_path: Path) -> Non
         load_and_verify_synthetic_route_evidence(root, foreign)
 
 
+@pytest.mark.parametrize(
+    "pin",
+    [
+        "acquisition-head",
+        "capture-build",
+        "frame-width",
+        "frame-height",
+        "pixel-format",
+    ],
+)
+def test_loader_fails_closed_when_caller_identity_pins_drift(
+    tmp_path: Path,
+    pin: str,
+) -> None:
+    package, review, artifacts = _build_package()
+    root = tmp_path / "package"
+    _write_package(root, package, review, artifacts)
+    expected = _expectation(package, review)
+    if pin == "acquisition-head":
+        foreign = replace(expected, acquisition_head_sha256=_digest("foreign-head"))
+    elif pin == "capture-build":
+        foreign = replace(
+            expected,
+            capture_build=replace(
+                expected.capture_build,
+                content_sha256=_digest("foreign-capture-build"),
+            ),
+        )
+    elif pin == "frame-width":
+        foreign = replace(expected, frame_width=expected.frame_width + 1)
+    elif pin == "frame-height":
+        foreign = replace(expected, frame_height=expected.frame_height + 1)
+    else:
+        foreign = replace(expected, pixel_format=PixelFormat.RGBA8888)
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="expectation"):
+        load_and_verify_synthetic_route_evidence(root, foreign)
+
+
 def test_loader_pins_independent_review_digest_and_reviewer(tmp_path: Path) -> None:
     package, review, artifacts = _build_package()
     root = tmp_path / "package"
@@ -350,11 +427,14 @@ def test_loader_pins_independent_review_digest_and_reviewer(tmp_path: Path) -> N
 
 def test_loader_rejects_detector_report_rebound_to_another_case(tmp_path: Path) -> None:
     package, review, artifacts = _build_package()
-    owned = package.cases[1]
+    owned = package.cases[-1]
     report_path = owned.detector_report_artifact.relative_path
+    rebound_case_id = package.cases[0].case_id
+    rebound_acquisition = replace(owned.acquisition, case_id=rebound_case_id)
     rebound_report = replace(
         parse_synthetic_detector_report(artifacts[report_path]),
-        case_id=package.cases[0].case_id,
+        case_id=rebound_case_id,
+        acquisition=rebound_acquisition,
     )
     rebound_payload = rebound_report.canonical_bytes
     changed_owned = replace(
@@ -366,18 +446,19 @@ def test_loader_rejects_detector_report_rebound_to_another_case(tmp_path: Path) 
         ),
     )
     changed_package = FinalizedRouteEvidencePackage(
-        package.campaign_plan,
-        (package.cases[0], changed_owned, *package.cases[2:]),
-        package.finalized_at_utc,
+        campaign_plan=package.campaign_plan,
+        cases=(*package.cases[:-1], changed_owned),
+        finalized_at_utc=package.finalized_at_utc,
+        finalized_monotonic_s=package.finalized_monotonic_s,
     )
     changed_truth = replace(
-        review.cases[1],
+        review.cases[-1],
         detector_report_sha256=rebound_report.content_sha256,
     )
     changed_review = replace(
         review,
         finalized_package_sha256=changed_package.content_sha256,
-        cases=(review.cases[0], changed_truth, *review.cases[2:]),
+        cases=(*review.cases[:-1], changed_truth),
     )
     changed_artifacts = dict(artifacts)
     changed_artifacts[report_path] = rebound_payload
@@ -409,7 +490,7 @@ def test_loader_rejects_duplicate_json_key(tmp_path: Path) -> None:
         load_and_verify_synthetic_route_evidence(root, _expectation(package, review))
 
 
-@pytest.mark.parametrize("mutation", ["noncanonical", "unknown"])
+@pytest.mark.parametrize("mutation", ["noncanonical", "unknown", "old-schema"])
 def test_loader_rejects_noncanonical_or_unknown_manifest_fields(
     tmp_path: Path,
     mutation: str,
@@ -422,13 +503,217 @@ def test_loader_rejects_noncanonical_or_unknown_manifest_fields(
     if mutation == "noncanonical":
         path.write_text(json.dumps(value, indent=2), encoding="ascii", newline="\n")
         expected = "not canonical"
-    else:
+    elif mutation == "unknown":
         value["unknown"] = False
         path.write_bytes(canonical_route_evidence_bytes(value))
         expected = "unknown"
+    else:
+        value["schema"] = "fixed-route-evidence-finalized-package-v1"
+        path.write_bytes(canonical_route_evidence_bytes(value))
+        expected = "schema"
 
     with pytest.raises(RouteEvidenceIntegrityError, match=expected):
         load_and_verify_synthetic_route_evidence(root, _expectation(package, review))
+
+
+@pytest.mark.parametrize("manifest_kind", ("owned-frame", "review-truth"))
+def test_loader_rejects_integer_aliases_for_exact_float_fields(
+    tmp_path: Path,
+    manifest_kind: str,
+) -> None:
+    package, review, artifacts = _build_package()
+    root = tmp_path / "package"
+    _write_package(root, package, review, artifacts)
+    if manifest_kind == "owned-frame":
+        path = root / FINALIZED_PACKAGE_FILENAME
+        value = json.loads(path.read_text(encoding="ascii"))
+        value["cases"][0]["case"]["frame"]["captured_monotonic_s"] = 1
+    else:
+        path = root / INDEPENDENT_REVIEW_FILENAME
+        value = json.loads(path.read_text(encoding="ascii"))
+        value["cases"][0]["reviewed_detection"]["confidence"] = 1
+    path.write_bytes(canonical_route_evidence_bytes(value))
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="typed canonical round-trip"):
+        load_and_verify_synthetic_route_evidence(root, _expectation(package, review))
+
+
+@pytest.mark.parametrize(
+    "identity",
+    ("detector", "profile", "route", "review-route"),
+)
+def test_loader_rejects_nonportable_unicode_identity_fields(
+    tmp_path: Path,
+    identity: str,
+) -> None:
+    package, review, artifacts = _build_package()
+    root = tmp_path / "package"
+    _write_package(root, package, review, artifacts)
+    if identity == "review-route":
+        path = root / INDEPENDENT_REVIEW_FILENAME
+        value = json.loads(path.read_text(encoding="ascii"))
+        value["route"]["route_id"] = "rout\u00e9"
+    else:
+        path = root / FINALIZED_PACKAGE_FILENAME
+        value = json.loads(path.read_text(encoding="ascii"))
+        campaign = value["campaign_plan"]
+        if identity == "detector":
+            campaign["checkpoint_detector"]["detector_id"] = "d\u00e9tecteur"
+        elif identity == "profile":
+            campaign["checkpoint_profile"]["profile_id"] = "profil\u00e9"
+        else:
+            campaign["route_plan"]["identity"]["route_id"] = "rout\u00e9"
+    path.write_bytes(canonical_route_evidence_bytes(value))
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="portable identifier"):
+        load_and_verify_synthetic_route_evidence(root, _expectation(package, review))
+
+
+def test_loader_rejects_declared_acquisition_head_mismatch(tmp_path: Path) -> None:
+    package, review, artifacts = _build_package()
+    root = tmp_path / "package"
+    _write_package(root, package, review, artifacts)
+    path = root / FINALIZED_PACKAGE_FILENAME
+    value = json.loads(path.read_text(encoding="ascii"))
+    value["acquisition_head_sha256"] = _digest("foreign-acquisition-head").value
+    path.write_bytes(canonical_route_evidence_bytes(value))
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="acquisition-head"):
+        load_and_verify_synthetic_route_evidence(root, _expectation(package, review))
+
+
+@pytest.mark.parametrize(
+    ("finalized_monotonic_s", "expected"),
+    [
+        (4.1, "finalization must follow"),
+        (-1.0, "non-negative"),
+        ("5.0", "JSON number"),
+    ],
+)
+def test_loader_rejects_invalid_finalization_monotonic_time(
+    tmp_path: Path,
+    finalized_monotonic_s: object,
+    expected: str,
+) -> None:
+    package, review, artifacts = _build_package()
+    root = tmp_path / "package"
+    _write_package(root, package, review, artifacts)
+    path = root / FINALIZED_PACKAGE_FILENAME
+    value = json.loads(path.read_text(encoding="ascii"))
+    value["finalized_monotonic_s"] = finalized_monotonic_s
+    path.write_bytes(canonical_route_evidence_bytes(value))
+
+    with pytest.raises(RouteEvidenceIntegrityError, match=expected):
+        load_and_verify_synthetic_route_evidence(root, _expectation(package, review))
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ("duplicate-request", "request id"),
+        ("backdated-acknowledgement", "source chronology"),
+        ("source-identity", "foreign campaign provenance"),
+        ("fixed-false", "fixed schema value"),
+        ("old-acquisition-schema", "schema"),
+    ],
+)
+def test_loader_rejects_owned_acquisition_transcript_mutations(
+    tmp_path: Path,
+    mutation: str,
+    expected: str,
+) -> None:
+    package, review, artifacts = _build_package()
+    root = tmp_path / "package"
+    _write_package(root, package, review, artifacts)
+    path = root / FINALIZED_PACKAGE_FILENAME
+    value = json.loads(path.read_text(encoding="ascii"))
+    first_acquisition = value["cases"][0]["case"]["acquisition"]
+    prior_acquisition = value["cases"][-2]["case"]["acquisition"]
+    final_entry = value["cases"][-1]
+    final_case = final_entry["case"]
+    acquisition = final_case["acquisition"]
+    if mutation == "duplicate-request":
+        acquisition["request_id"] = first_acquisition["request_id"]
+    elif mutation == "backdated-acknowledgement":
+        acquisition["acknowledged_monotonic_s"] = prior_acquisition["recorded_monotonic_s"]
+        acquisition["expires_monotonic_s"] = acquisition["acknowledged_monotonic_s"] + 30.0
+    elif mutation == "source-identity":
+        acquisition["capture_source_identity_sha256"] = _digest("foreign-source-identity").value
+    elif mutation == "fixed-false":
+        acquisition["navigation_automation_enabled"] = True
+    else:
+        acquisition["schema"] = "fixed-route-evidence-acquisition-binding-v0"
+    final_entry["case_record_sha256"] = route_evidence_sha256(final_case).value
+    value["acquisition_head_sha256"] = final_entry["case_record_sha256"]
+    path.write_bytes(canonical_route_evidence_bytes(value))
+
+    with pytest.raises(RouteEvidenceIntegrityError, match=expected):
+        load_and_verify_synthetic_route_evidence(root, _expectation(package, review))
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ("request", "identity differs"),
+        ("source-identity", "identity differs"),
+        ("capture-build", "identity differs"),
+        ("old-acquisition-schema", "acquisition binding"),
+    ],
+)
+def test_loader_rejects_detector_report_acquisition_or_build_rebinding(
+    tmp_path: Path,
+    mutation: str,
+    expected: str,
+) -> None:
+    package, review, artifacts = _build_package()
+    owned = package.cases[-1]
+    report_path = owned.detector_report_artifact.relative_path
+    report_value = json.loads(artifacts[report_path].decode("ascii"))
+    if mutation == "request":
+        report_value["acquisition"]["request_id"] = "foreign-request"
+    elif mutation == "source-identity":
+        report_value["acquisition"]["capture_source_identity_sha256"] = _digest(
+            "foreign-source-identity"
+        ).value
+    elif mutation == "capture-build":
+        report_value["capture_build"]["content_sha256"] = _digest("foreign-capture-build").value
+    else:
+        report_value["acquisition"]["schema"] = "fixed-route-evidence-acquisition-binding-v0"
+    rebound_payload = canonical_route_evidence_bytes(report_value)
+    rebound_sha256 = Sha256Digest.from_bytes(rebound_payload)
+    changed_owned = replace(
+        owned,
+        detector_report_artifact=RouteEvidenceArtifactRef(
+            report_path,
+            len(rebound_payload),
+            rebound_sha256,
+        ),
+    )
+    changed_package = FinalizedRouteEvidencePackage(
+        campaign_plan=package.campaign_plan,
+        cases=(*package.cases[:-1], changed_owned),
+        finalized_at_utc=package.finalized_at_utc,
+        finalized_monotonic_s=package.finalized_monotonic_s,
+    )
+    changed_truth = replace(
+        review.cases[-1],
+        detector_report_sha256=rebound_sha256,
+    )
+    changed_review = replace(
+        review,
+        finalized_package_sha256=changed_package.content_sha256,
+        cases=(*review.cases[:-1], changed_truth),
+    )
+    changed_artifacts = dict(artifacts)
+    changed_artifacts[report_path] = rebound_payload
+    root = tmp_path / "package"
+    _write_package(root, changed_package, changed_review, changed_artifacts)
+
+    with pytest.raises(RouteEvidenceIntegrityError, match=expected):
+        load_and_verify_synthetic_route_evidence(
+            root,
+            _expectation(changed_package, changed_review),
+        )
 
 
 @pytest.mark.parametrize(
@@ -562,14 +847,30 @@ def test_loader_rejects_case_fold_artifact_aliases(tmp_path: Path) -> None:
         load_and_verify_synthetic_route_evidence(root, _expectation(package, review))
 
 
-def test_loader_rejects_windows_unsafe_artifact_path_in_manifest(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("unsafe_path", "expected"),
+    (
+        ("cases/file:stream", "Windows-unsafe"),
+        ("cases/COM\u00b9/frame.bgra", "reserved Windows device"),
+        ("cases/COM\u00b2/frame.bgra", "reserved Windows device"),
+        ("cases/COM\u00b3/frame.bgra", "reserved Windows device"),
+        ("cases/LPT\u00b9/frame.bgra", "reserved Windows device"),
+        ("cases/LPT\u00b2/frame.bgra", "reserved Windows device"),
+        ("cases/LPT\u00b3/frame.bgra", "reserved Windows device"),
+    ),
+)
+def test_loader_rejects_windows_unsafe_artifact_path_in_manifest(
+    tmp_path: Path,
+    unsafe_path: str,
+    expected: str,
+) -> None:
     package, review, artifacts = _build_package()
     root = tmp_path / "package"
     _write_package(root, package, review, artifacts)
     manifest_path = root / FINALIZED_PACKAGE_FILENAME
     manifest = json.loads(manifest_path.read_text(encoding="ascii"))
-    manifest["cases"][0]["case"]["frame"]["artifact"]["path"] = "cases/file:stream"
+    manifest["cases"][0]["case"]["frame"]["artifact"]["path"] = unsafe_path
     manifest_path.write_bytes(canonical_route_evidence_bytes(manifest))
 
-    with pytest.raises(RouteEvidenceIntegrityError, match="Windows-unsafe"):
+    with pytest.raises(RouteEvidenceIntegrityError, match=expected):
         load_and_verify_synthetic_route_evidence(root, _expectation(package, review))

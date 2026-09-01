@@ -9,11 +9,11 @@ expected to arrive later through separately validated evidence.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
-from enum import StrEnum
+from dataclasses import MISSING, dataclass, field, fields
+from enum import Enum, StrEnum
 from hashlib import sha256
-from math import isfinite
-from typing import Literal
+from math import copysign, isfinite
+from typing import Any, Final, Literal, cast
 
 from ..capture.frame import PixelFormat
 from ..contracts import FrameRef
@@ -57,24 +57,31 @@ __all__ = [
 
 
 def _is_integer(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
+    return type(value) is int
 
 
 def _is_finite_number(value: object) -> bool:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    return type(value) is float and isfinite(value)
+
+
+def _is_non_negative_time(value: object) -> bool:
+    if type(value) is not float:
         return False
-    try:
-        return isfinite(float(value))
-    except OverflowError:
-        return False
+    time_value = value
+    return (
+        isfinite(time_value)
+        and time_value >= 0.0
+        and not (time_value == 0.0 and copysign(1.0, time_value) < 0.0)
+    )
 
 
 def _require_identifier(value: object, field_name: str) -> str:
     if (
-        not isinstance(value, str)
+        type(value) is not str
         or not value
         or value != value.strip()
         or not value.isprintable()
+        or any(0xD800 <= ord(character) <= 0xDFFF for character in value)
     ):
         raise ValueError(f"{field_name} must be a non-empty, trimmed, printable string")
     return value
@@ -88,7 +95,7 @@ class Sha256Digest:
 
     def __post_init__(self) -> None:
         if (
-            not isinstance(self.value, str)
+            type(self.value) is not str
             or len(self.value) != 64
             or any(character not in "0123456789abcdef" for character in self.value)
         ):
@@ -96,7 +103,7 @@ class Sha256Digest:
 
     @classmethod
     def from_bytes(cls, payload: bytes) -> Sha256Digest:
-        if not isinstance(payload, bytes):
+        if type(payload) is not bytes:
             raise ValueError("SHA-256 payload must be immutable bytes")
         return cls(sha256(payload).hexdigest())
 
@@ -132,7 +139,7 @@ class CheckpointProfileIdentity:
     def __post_init__(self) -> None:
         _require_identifier(self.profile_id, "checkpoint profile id")
         _require_identifier(self.version, "checkpoint profile version")
-        if not isinstance(self.content_sha256, Sha256Digest):
+        if type(self.content_sha256) is not Sha256Digest:
             raise ValueError("checkpoint profile content digest must be Sha256Digest")
 
 
@@ -159,7 +166,7 @@ class CheckpointProfile:
             raise ValueError("checkpoint profile frame height must be a positive integer")
         if not isinstance(self.pixel_format, PixelFormat):
             raise ValueError("checkpoint profile pixel format must be PixelFormat")
-        if not isinstance(self.checkpoint_ids, tuple) or not self.checkpoint_ids:
+        if type(self.checkpoint_ids) is not tuple or not self.checkpoint_ids:
             raise ValueError("checkpoint profile ids must be a non-empty tuple")
         for checkpoint_id in self.checkpoint_ids:
             _require_identifier(checkpoint_id, "checkpoint profile checkpoint id")
@@ -168,21 +175,24 @@ class CheckpointProfile:
 
     @property
     def identity(self) -> CheckpointProfileIdentity:
-        canonical = json.dumps(
-            {
-                "checkpoint_ids": self.checkpoint_ids,
-                "evidence_role": self.evidence_role.value,
-                "frame_height": self.frame_height,
-                "frame_width": self.frame_width,
-                "pixel_format": self.pixel_format.value,
-                "profile_id": self.profile_id,
-                "version": self.version,
-            },
-            allow_nan=False,
-            ensure_ascii=True,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("ascii") + b"\n"
+        canonical = (
+            json.dumps(
+                {
+                    "checkpoint_ids": self.checkpoint_ids,
+                    "evidence_role": self.evidence_role.value,
+                    "frame_height": self.frame_height,
+                    "frame_width": self.frame_width,
+                    "pixel_format": self.pixel_format.value,
+                    "profile_id": self.profile_id,
+                    "version": self.version,
+                },
+                allow_nan=False,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("ascii")
+            + b"\n"
+        )
         return CheckpointProfileIdentity(
             self.profile_id,
             self.version,
@@ -256,6 +266,11 @@ class NavigationFailureReason(StrEnum):
     ATTEMPT_NOT_AFTER_PREPARATION = "attempt_not_after_preparation"
     STALE_ATTEMPT_RECEIPT = "stale_attempt_receipt"
     OUT_OF_ORDER_EVALUATION = "out_of_order_evaluation"
+    SESSION_INTERRUPTED = "session_interrupted"
+    CHECKPOINT_TIMEOUT = "checkpoint_timeout"
+    STEP_TIMEOUT = "step_timeout"
+    ATTEMPT_TIMEOUT = "attempt_timeout"
+    ROUTE_SESSION_REPLACED = "route_session_replaced"
 
 
 class NavigationTransitionOutcome(StrEnum):
@@ -323,7 +338,7 @@ class StepAttemptIdentity:
     attempt_id: str
 
     def __post_init__(self) -> None:
-        if not isinstance(self.route, RouteIdentity):
+        if type(self.route) is not RouteIdentity:
             raise ValueError("step attempt route must be RouteIdentity")
         _require_identifier(self.step_id, "step attempt step id")
         _require_identifier(self.attempt_id, "step attempt id")
@@ -357,17 +372,20 @@ class SyntheticStepAttemptReceipt:
     live_input_enabled: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.identity, StepAttemptIdentity):
+        if type(self.identity) is not StepAttemptIdentity:
             raise ValueError("attempt receipt identity must be StepAttemptIdentity")
-        if not isinstance(self.source, StepAttemptSourceIdentity):
+        if type(self.source) is not StepAttemptSourceIdentity:
             raise ValueError("attempt receipt source must be StepAttemptSourceIdentity")
         if (
-            not _is_finite_number(self.prepared_monotonic_s)
-            or self.prepared_monotonic_s < 0
+            self.authoritative is not False
+            or self.movement_success_proven is not False
+            or self.live_input_enabled is not False
         ):
+            raise ValueError("synthetic attempt receipts cannot carry authority or live input")
+        if not _is_non_negative_time(self.prepared_monotonic_s):
             raise ValueError("receipt preparation boundary must be finite and non-negative")
         if (
-            not _is_finite_number(self.post_attempt_monotonic_s)
+            not _is_non_negative_time(self.post_attempt_monotonic_s)
             or self.post_attempt_monotonic_s <= self.prepared_monotonic_s
         ):
             raise ValueError("post-attempt boundary must be finite and after preparation")
@@ -388,11 +406,9 @@ class RoutePlan:
     steps: tuple[RouteStep, ...]
 
     def __post_init__(self) -> None:
-        if not isinstance(self.identity, RouteIdentity):
+        if type(self.identity) is not RouteIdentity:
             raise ValueError("route identity must be a RouteIdentity")
-        if not isinstance(self.origin, RouteEndpoint) or not isinstance(
-            self.destination, RouteEndpoint
-        ):
+        if type(self.origin) is not RouteEndpoint or type(self.destination) is not RouteEndpoint:
             raise ValueError("route origin and destination must be RouteEndpoint values")
         if self.origin.location_id == self.destination.location_id:
             raise ValueError("route origin and destination must be different locations")
@@ -404,9 +420,9 @@ class RoutePlan:
         if (self.origin.role, self.destination.role) != expected_roles[self.identity.direction]:
             raise ValueError("route endpoints do not match the declared direction")
 
-        if not isinstance(self.checkpoints, tuple) or len(self.checkpoints) < 2:
+        if type(self.checkpoints) is not tuple or len(self.checkpoints) < 2:
             raise ValueError("route checkpoints must be a tuple with departure and arrival")
-        if any(not isinstance(checkpoint, Checkpoint) for checkpoint in self.checkpoints):
+        if any(type(checkpoint) is not Checkpoint for checkpoint in self.checkpoints):
             raise ValueError("route checkpoints must contain Checkpoint values")
         checkpoint_ids = tuple(checkpoint.checkpoint_id for checkpoint in self.checkpoints)
         if len(set(checkpoint_ids)) != len(checkpoint_ids):
@@ -419,9 +435,7 @@ class RoutePlan:
         if tuple(checkpoint.role for checkpoint in self.checkpoints) != expected_checkpoint_roles:
             raise ValueError("route checkpoints must be departure, transit..., arrival")
 
-        if not isinstance(self.steps, tuple) or any(
-            not isinstance(step, RouteStep) for step in self.steps
-        ):
+        if type(self.steps) is not tuple or any(type(step) is not RouteStep for step in self.steps):
             raise ValueError("route steps must be a tuple of RouteStep values")
         if len(self.steps) != len(self.checkpoints) - 1:
             raise ValueError("route must contain exactly one step per adjacent checkpoint pair")
@@ -457,9 +471,9 @@ class CheckpointSourceIdentity:
     capture_session_id: str
 
     def __post_init__(self) -> None:
-        if not isinstance(self.detector, CheckpointDetectorIdentity):
+        if type(self.detector) is not CheckpointDetectorIdentity:
             raise ValueError("checkpoint source detector must be CheckpointDetectorIdentity")
-        if not isinstance(self.profile, CheckpointProfile):
+        if type(self.profile) is not CheckpointProfile:
             raise ValueError("checkpoint source profile must be CheckpointProfile")
         _require_identifier(self.frame_source_id, "frame_source_id")
         _require_identifier(self.capture_session_id, "capture_session_id")
@@ -501,17 +515,19 @@ class FrameProvenance:
     frame_payload_sha256: Sha256Digest
 
     def __post_init__(self) -> None:
-        if not isinstance(self.source, CheckpointSourceIdentity):
+        if type(self.source) is not CheckpointSourceIdentity:
             raise ValueError("source must be a CheckpointSourceIdentity")
-        if not isinstance(self.frame, FrameRef):
+        if type(self.frame) is not FrameRef:
             raise ValueError("frame must be a FrameRef")
-        if not _is_finite_number(self.frame.captured_monotonic_s):
+        if not _is_non_negative_time(self.frame.captured_monotonic_s):
             raise ValueError("checkpoint frame time must be finite and representable")
-        if self.frame.frame_id < 1:
+        if type(self.frame.frame_id) is not int or self.frame.frame_id < 1:
             raise ValueError("checkpoint evidence requires a positive captured frame id")
+        if type(self.frame.width) is not int or type(self.frame.height) is not int:
+            raise ValueError("checkpoint frame geometry must use exact integers")
         if not isinstance(self.pixel_format, PixelFormat):
             raise ValueError("checkpoint evidence pixel format must be PixelFormat")
-        if not isinstance(self.frame_payload_sha256, Sha256Digest):
+        if type(self.frame_payload_sha256) is not Sha256Digest:
             raise ValueError("checkpoint frame payload digest must be Sha256Digest")
         if (self.frame.width, self.frame.height) != (
             self.source.frame_width,
@@ -533,7 +549,7 @@ class CheckpointDetection:
     def __post_init__(self) -> None:
         if not isinstance(self.match, CheckpointMatchKind):
             raise ValueError("checkpoint detection match must be CheckpointMatchKind")
-        if not isinstance(self.candidate_checkpoint_ids, tuple):
+        if type(self.candidate_checkpoint_ids) is not tuple:
             raise ValueError("candidate_checkpoint_ids must be a tuple")
         for checkpoint_id in self.candidate_checkpoint_ids:
             _require_identifier(checkpoint_id, "candidate checkpoint id")
@@ -564,9 +580,9 @@ class CheckpointEvidence:
     detection: CheckpointDetection
 
     def __post_init__(self) -> None:
-        if not isinstance(self.provenance, FrameProvenance):
+        if type(self.provenance) is not FrameProvenance:
             raise ValueError("checkpoint evidence provenance must be FrameProvenance")
-        if not isinstance(self.detection, CheckpointDetection):
+        if type(self.detection) is not CheckpointDetection:
             raise ValueError("checkpoint evidence detection must be CheckpointDetection")
         allowed_ids = set(self.provenance.source.profile.checkpoint_ids)
         if any(
@@ -584,9 +600,9 @@ class CheckpointObservation:
     evidence: CheckpointEvidence
 
     def __post_init__(self) -> None:
-        if not isinstance(self.route, RouteIdentity):
+        if type(self.route) is not RouteIdentity:
             raise ValueError("observation route must be a RouteIdentity")
-        if not isinstance(self.evidence, CheckpointEvidence):
+        if type(self.evidence) is not CheckpointEvidence:
             raise ValueError("observation evidence must be CheckpointEvidence")
 
     @property
@@ -619,7 +635,10 @@ class NavigationPolicy:
     def __post_init__(self) -> None:
         if not _is_finite_number(self.max_frame_age_s) or self.max_frame_age_s <= 0:
             raise ValueError("max_frame_age_s must be finite and positive")
-        if not _is_finite_number(self.minimum_confidence) or not 0.0 < self.minimum_confidence <= 1.0:
+        if (
+            not _is_finite_number(self.minimum_confidence)
+            or not 0.0 < self.minimum_confidence <= 1.0
+        ):
             raise ValueError("minimum_confidence must be finite, positive, and at most 1")
         if (
             not _is_finite_number(self.max_attempt_receipt_age_s)
@@ -636,13 +655,13 @@ class RouteEvaluationContext:
     policy: NavigationPolicy
 
     def __post_init__(self) -> None:
-        if not isinstance(self.plan, RoutePlan):
+        if type(self.plan) is not RoutePlan:
             raise ValueError("plan must be a RoutePlan")
-        if not isinstance(self.expected_source, CheckpointSourceIdentity):
+        if type(self.expected_source) is not CheckpointSourceIdentity:
             raise ValueError("expected_source must be a CheckpointSourceIdentity")
-        if not isinstance(self.expected_attempt_source, StepAttemptSourceIdentity):
+        if type(self.expected_attempt_source) is not StepAttemptSourceIdentity:
             raise ValueError("expected_attempt_source must be StepAttemptSourceIdentity")
-        if not isinstance(self.policy, NavigationPolicy):
+        if type(self.policy) is not NavigationPolicy:
             raise ValueError("policy must be a NavigationPolicy")
 
 
@@ -667,21 +686,26 @@ class ArrivalEvidence:
 
     def __post_init__(self) -> None:
         if (
-            not isinstance(self.context, RouteEvaluationContext)
-            or not isinstance(self.observation, CheckpointObservation)
+            type(self.context) is not RouteEvaluationContext
+            or type(self.observation) is not CheckpointObservation
             or self.observation.route != self.context.plan.identity
             or self.observation.provenance.source != self.context.expected_source
             or self.observation.confidence < self.context.policy.minimum_confidence
         ):
             raise ValueError("arrival evidence must match one evaluation context")
         if (
-            not isinstance(self.checkpoint, Checkpoint)
+            type(self.checkpoint) is not Checkpoint
             or self.checkpoint != self.context.plan.checkpoints[-1]
             or self.checkpoint.role is not CheckpointRole.ARRIVAL
         ):
             raise ValueError("arrival evidence requires the plan's terminal checkpoint")
         if self.observation.matched_checkpoint_id != self.checkpoint.checkpoint_id:
             raise ValueError("arrival observation must match the arrival checkpoint")
+        if (
+            self.supported_mining_view_proven is not False
+            or self.bank_interface_open_proven is not False
+        ):
+            raise ValueError("route arrival cannot prove downstream endpoint state")
 
     @property
     def route(self) -> RouteIdentity:
@@ -705,29 +729,33 @@ class OfflineStepProposal:
 
     def __post_init__(self) -> None:
         if (
-            not isinstance(self.context, RouteEvaluationContext)
-            or not isinstance(self.checkpoint_evidence, CheckpointObservation)
+            type(self.context) is not RouteEvaluationContext
+            or type(self.checkpoint_evidence) is not CheckpointObservation
             or self.checkpoint_evidence.route != self.context.plan.identity
             or self.checkpoint_evidence.provenance.source != self.context.expected_source
             or self.checkpoint_evidence.confidence < self.context.policy.minimum_confidence
         ):
             raise ValueError("step proposal must match one evaluation context")
-        if not isinstance(self.step, RouteStep) or self.step not in self.context.plan.steps:
+        if type(self.step) is not RouteStep or self.step not in self.context.plan.steps:
             raise ValueError("step proposal must contain a step from its plan")
         if (
-            not isinstance(self.attempt_identity, StepAttemptIdentity)
+            type(self.attempt_identity) is not StepAttemptIdentity
             or self.attempt_identity.route != self.route
             or self.attempt_identity.step_id != self.step.step_id
         ):
             raise ValueError("step proposal attempt identity must bind its exact route and step")
         if self.checkpoint_evidence.matched_checkpoint_id != self.step.from_checkpoint_id:
             raise ValueError("step proposal evidence must match the step departure checkpoint")
+        if self.live_input_enabled is not False:
+            raise ValueError("offline step proposals cannot carry live input authority")
         if (
-            not _is_finite_number(self.prepared_monotonic_s)
+            not _is_non_negative_time(self.prepared_monotonic_s)
             or self.prepared_monotonic_s
             < self.checkpoint_evidence.provenance.frame.captured_monotonic_s
         ):
-            raise ValueError("step preparation time must be finite and no earlier than its evidence")
+            raise ValueError(
+                "step preparation time must be finite and no earlier than its evidence"
+            )
         if (
             self.prepared_monotonic_s
             - self.checkpoint_evidence.provenance.frame.captured_monotonic_s
@@ -749,22 +777,20 @@ class CompletedStepAttempt:
     recorded_monotonic_s: float
 
     def __post_init__(self) -> None:
-        if not isinstance(self.proposal, OfflineStepProposal):
+        if type(self.proposal) is not OfflineStepProposal:
             raise ValueError("completed attempt proposal must be OfflineStepProposal")
-        if not isinstance(self.receipt, SyntheticStepAttemptReceipt):
+        if type(self.receipt) is not SyntheticStepAttemptReceipt:
             raise ValueError("completed attempt receipt must be SyntheticStepAttemptReceipt")
         if (
             self.receipt.identity != self.proposal.attempt_identity
             or self.receipt.source != self.proposal.context.expected_attempt_source
-            or self.receipt.prepared_monotonic_s
-            != self.proposal.prepared_monotonic_s
+            or self.receipt.prepared_monotonic_s != self.proposal.prepared_monotonic_s
         ):
             raise ValueError("completed attempt must bind one exact proposal and receipt")
         if (
-            not _is_finite_number(self.recorded_monotonic_s)
+            not _is_non_negative_time(self.recorded_monotonic_s)
             or self.recorded_monotonic_s < self.receipt.post_attempt_monotonic_s
-            or self.recorded_monotonic_s
-            - self.receipt.post_attempt_monotonic_s
+            or self.recorded_monotonic_s - self.receipt.post_attempt_monotonic_s
             > self.proposal.context.policy.max_attempt_receipt_age_s
         ):
             raise ValueError("completed attempt must retain its fresh receipt evaluation time")
@@ -791,7 +817,7 @@ class RouteProgress:
     stop: NavigationStop | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.context, RouteEvaluationContext):
+        if type(self.context) is not RouteEvaluationContext:
             raise ValueError("progress context must be a RouteEvaluationContext")
         if not isinstance(self.phase, NavigationPhase):
             raise ValueError("progress phase must be a NavigationPhase")
@@ -801,24 +827,24 @@ class RouteProgress:
             or not 0 <= self.accepted_checkpoint_count <= checkpoint_count
         ):
             raise ValueError("accepted checkpoint count must fit the route plan")
-        if (
-            not _is_finite_number(self.evidence_boundary_monotonic_s)
-            or self.evidence_boundary_monotonic_s < 0
-        ):
+        if not _is_non_negative_time(self.evidence_boundary_monotonic_s):
             raise ValueError("evidence boundary must be finite and non-negative")
         if (
-            not _is_finite_number(self.last_transition_monotonic_s)
+            not _is_non_negative_time(self.last_transition_monotonic_s)
             or self.last_transition_monotonic_s < self.evidence_boundary_monotonic_s
         ):
-            raise ValueError("last transition time must be finite and not precede the evidence boundary")
+            raise ValueError(
+                "last transition time must be finite and not precede the evidence boundary"
+            )
         for value, name in (
             (self.current_checkpoint_id, "current_checkpoint_id"),
             (self.expected_next_checkpoint_id, "expected_next_checkpoint_id"),
         ):
             if value is not None:
                 _require_identifier(value, name)
-        if self.last_accepted_provenance is not None and not isinstance(
-            self.last_accepted_provenance, FrameProvenance
+        if (
+            self.last_accepted_provenance is not None
+            and type(self.last_accepted_provenance) is not FrameProvenance
         ):
             raise ValueError("last accepted provenance must be FrameProvenance or None")
         if (self.accepted_checkpoint_count == 0) != (self.last_accepted_provenance is None):
@@ -829,14 +855,11 @@ class RouteProgress:
             > self.last_transition_monotonic_s
         ):
             raise ValueError("accepted frame history must match the context and transition time")
-        if not isinstance(self.completed_attempts, tuple) or any(
-            not isinstance(attempt, CompletedStepAttempt)
-            for attempt in self.completed_attempts
+        if type(self.completed_attempts) is not tuple or any(
+            type(attempt) is not CompletedStepAttempt for attempt in self.completed_attempts
         ):
             raise ValueError("completed attempts must be a tuple of causal attempt records")
-        attempt_ids = tuple(
-            attempt.identity.attempt_id for attempt in self.completed_attempts
-        )
+        attempt_ids = tuple(attempt.identity.attempt_id for attempt in self.completed_attempts)
         if len(set(attempt_ids)) != len(attempt_ids):
             raise ValueError("completed attempt ids must be unique")
         for index, attempt in enumerate(self.completed_attempts):
@@ -845,8 +868,7 @@ class RouteProgress:
                 or attempt.proposal.context != self.context
                 or attempt.identity.route != self.route
                 or attempt.identity.step_id != self.context.plan.steps[index].step_id
-                or attempt.recorded_monotonic_s
-                > self.last_transition_monotonic_s
+                or attempt.recorded_monotonic_s > self.last_transition_monotonic_s
             ):
                 raise ValueError("completed attempts must follow the route's exact step order")
             if index > 0:
@@ -859,22 +881,20 @@ class RouteProgress:
                     <= previous.receipt.post_attempt_monotonic_s
                     or attempt.proposal.prepared_monotonic_s
                     <= previous.receipt.post_attempt_monotonic_s
-                    or attempt.proposal.prepared_monotonic_s
-                    < previous.recorded_monotonic_s
+                    or attempt.proposal.prepared_monotonic_s < previous.recorded_monotonic_s
                 ):
                     raise ValueError("completed attempts must preserve strict causal frame order")
         if self.pending_step_proposal is not None:
             pending = self.pending_step_proposal
             if (
-                not isinstance(pending, OfflineStepProposal)
+                type(pending) is not OfflineStepProposal
                 or pending.context != self.context
                 or pending.route != self.route
                 or len(self.completed_attempts) >= len(self.context.plan.steps)
                 or pending.step != self.context.plan.steps[len(self.completed_attempts)]
                 or pending.attempt_identity.attempt_id in set(attempt_ids)
                 or pending.prepared_monotonic_s != self.last_transition_monotonic_s
-                or self.last_accepted_provenance
-                != pending.checkpoint_evidence.provenance
+                or self.last_accepted_provenance != pending.checkpoint_evidence.provenance
             ):
                 raise ValueError("pending proposal must be the route's exact new attempt")
             if self.completed_attempts:
@@ -888,7 +908,7 @@ class RouteProgress:
                     or pending.prepared_monotonic_s < previous.recorded_monotonic_s
                 ):
                     raise ValueError("pending proposal must use strictly post-attempt evidence")
-        if self.stop is not None and not isinstance(self.stop, NavigationStop):
+        if self.stop is not None and type(self.stop) is not NavigationStop:
             raise ValueError("stop must be a NavigationStop or None")
 
         if self.phase is NavigationPhase.AWAITING_CHECKPOINT:
@@ -897,9 +917,7 @@ class RouteProgress:
                 or len(self.completed_attempts) != self.accepted_checkpoint_count
                 or self.current_checkpoint_id is not None
                 or self.expected_next_checkpoint_id
-                != self.context.plan.checkpoints[
-                    self.accepted_checkpoint_count
-                ].checkpoint_id
+                != self.context.plan.checkpoints[self.accepted_checkpoint_count].checkpoint_id
                 or self.active_checkpoint_evidence is not None
                 or self.pending_step_proposal is not None
                 or self.arrival_evidence is not None
@@ -916,29 +934,26 @@ class RouteProgress:
                     != self.completed_attempts[-1].proposal.checkpoint_evidence.provenance
                 )
             ):
-                raise ValueError("awaiting progress may retain only the expected checkpoint and history")
+                raise ValueError(
+                    "awaiting progress may retain only the expected checkpoint and history"
+                )
         elif self.phase is NavigationPhase.READY_FOR_STEP:
             if (
                 not 0 < self.accepted_checkpoint_count < checkpoint_count
                 or len(self.completed_attempts) != self.accepted_checkpoint_count - 1
                 or self.current_checkpoint_id
-                != self.context.plan.checkpoints[
-                    self.accepted_checkpoint_count - 1
-                ].checkpoint_id
+                != self.context.plan.checkpoints[self.accepted_checkpoint_count - 1].checkpoint_id
                 or self.expected_next_checkpoint_id
-                != self.context.plan.checkpoints[
-                    self.accepted_checkpoint_count
-                ].checkpoint_id
+                != self.context.plan.checkpoints[self.accepted_checkpoint_count].checkpoint_id
                 or self.active_checkpoint_evidence is None
                 or self.pending_step_proposal is not None
-                or not isinstance(self.active_checkpoint_evidence, CheckpointObservation)
+                or type(self.active_checkpoint_evidence) is not CheckpointObservation
                 or self.arrival_evidence is not None
                 or self.stop is not None
                 or self.active_checkpoint_evidence.matched_checkpoint_id
                 != self.current_checkpoint_id
                 or self.active_checkpoint_evidence.route != self.route
-                or self.last_accepted_provenance
-                != self.active_checkpoint_evidence.provenance
+                or self.last_accepted_provenance != self.active_checkpoint_evidence.provenance
                 or self.active_checkpoint_evidence.confidence
                 < self.context.policy.minimum_confidence
                 or self.active_checkpoint_evidence.provenance.frame.captured_monotonic_s
@@ -959,46 +974,40 @@ class RouteProgress:
                 - self.active_checkpoint_evidence.provenance.frame.captured_monotonic_s
                 > self.context.policy.max_frame_age_s
             ):
-                raise ValueError("ready progress requires active evidence for its current checkpoint")
+                raise ValueError(
+                    "ready progress requires active evidence for its current checkpoint"
+                )
         elif self.phase is NavigationPhase.AWAITING_ATTEMPT_RECEIPT:
             if (
                 not 0 < self.accepted_checkpoint_count < checkpoint_count
                 or len(self.completed_attempts) != self.accepted_checkpoint_count - 1
                 or self.current_checkpoint_id is not None
                 or self.expected_next_checkpoint_id
-                != self.context.plan.checkpoints[
-                    self.accepted_checkpoint_count
-                ].checkpoint_id
+                != self.context.plan.checkpoints[self.accepted_checkpoint_count].checkpoint_id
                 or self.active_checkpoint_evidence is not None
                 or self.pending_step_proposal is None
                 or self.pending_step_proposal.step.step_id
-                != self.context.plan.steps[
-                    self.accepted_checkpoint_count - 1
-                ].step_id
+                != self.context.plan.steps[self.accepted_checkpoint_count - 1].step_id
                 or self.arrival_evidence is not None
                 or self.stop is not None
-                or self.evidence_boundary_monotonic_s
-                != self.last_transition_monotonic_s
+                or self.evidence_boundary_monotonic_s != self.last_transition_monotonic_s
             ):
                 raise ValueError("awaiting receipt progress must retain one exact pending attempt")
         elif self.phase is NavigationPhase.ARRIVED:
             if (
                 self.accepted_checkpoint_count != checkpoint_count
                 or len(self.completed_attempts) != len(self.context.plan.steps)
-                or self.current_checkpoint_id
-                != self.context.plan.checkpoints[-1].checkpoint_id
+                or self.current_checkpoint_id != self.context.plan.checkpoints[-1].checkpoint_id
                 or self.expected_next_checkpoint_id is not None
                 or self.active_checkpoint_evidence is not None
                 or self.pending_step_proposal is not None
                 or self.arrival_evidence is None
-                or not isinstance(self.arrival_evidence, ArrivalEvidence)
+                or type(self.arrival_evidence) is not ArrivalEvidence
                 or self.stop is not None
-                or self.current_checkpoint_id
-                != self.arrival_evidence.checkpoint.checkpoint_id
+                or self.current_checkpoint_id != self.arrival_evidence.checkpoint.checkpoint_id
                 or self.arrival_evidence.route != self.route
                 or self.arrival_evidence.context != self.context
-                or self.last_accepted_provenance
-                != self.arrival_evidence.observation.provenance
+                or self.last_accepted_provenance != self.arrival_evidence.observation.provenance
                 or self.arrival_evidence.observation.provenance.frame.captured_monotonic_s
                 <= self.evidence_boundary_monotonic_s
                 or (
@@ -1025,8 +1034,7 @@ class RouteProgress:
             or self.pending_step_proposal is not None
             or self.arrival_evidence is not None
             or self.stop is None
-            or len(self.completed_attempts)
-            < max(0, self.accepted_checkpoint_count - 1)
+            or len(self.completed_attempts) < max(0, self.accepted_checkpoint_count - 1)
             or len(self.completed_attempts)
             > min(self.accepted_checkpoint_count, len(self.context.plan.steps))
         ):
@@ -1064,13 +1072,13 @@ class NavigationTransition:
     def __post_init__(self) -> None:
         if not isinstance(self.outcome, NavigationTransitionOutcome):
             raise ValueError("transition outcome must be a NavigationTransitionOutcome")
-        if not isinstance(self.progress, RouteProgress):
+        if type(self.progress) is not RouteProgress:
             raise ValueError("transition progress must be RouteProgress")
         if self.outcome is NavigationTransitionOutcome.STEP_PREPARED:
             if self.step_proposal is None:
                 raise ValueError("a prepared-step transition requires a proposal")
             if (
-                not isinstance(self.step_proposal, OfflineStepProposal)
+                type(self.step_proposal) is not OfflineStepProposal
                 or self.step_proposal.context != self.progress.context
                 or self.step_proposal.checkpoint_evidence.provenance
                 != self.progress.last_accepted_provenance
@@ -1087,7 +1095,7 @@ class NavigationTransition:
             if self.attempt_receipt is None:
                 raise ValueError("a recorded-attempt transition requires a receipt")
             if (
-                not isinstance(self.attempt_receipt, SyntheticStepAttemptReceipt)
+                type(self.attempt_receipt) is not SyntheticStepAttemptReceipt
                 or self.progress.last_attempt_receipt != self.attempt_receipt
                 or not self.progress.attempt_history
                 or self.progress.attempt_history[-1] != self.attempt_receipt.identity
@@ -1111,3 +1119,68 @@ class NavigationTransition:
             and self.progress.phase not in {NavigationPhase.ARRIVED, NavigationPhase.STOPPED}
         ):
             raise ValueError("terminal no-change requires terminal progress")
+
+
+_CORE_CONTRACT_TYPES: Final[frozenset[type[object]]] = frozenset(
+    {
+        ArrivalEvidence,
+        Checkpoint,
+        CheckpointDetection,
+        CheckpointDetectorIdentity,
+        CheckpointEvidence,
+        CheckpointObservation,
+        CheckpointProfile,
+        CheckpointProfileIdentity,
+        CheckpointSourceIdentity,
+        CompletedStepAttempt,
+        FrameProvenance,
+        FrameRef,
+        NavigationPolicy,
+        NavigationStop,
+        NavigationTransition,
+        OfflineStepProposal,
+        RouteEndpoint,
+        RouteEvaluationContext,
+        RouteIdentity,
+        RoutePlan,
+        RouteProgress,
+        RouteStep,
+        Sha256Digest,
+        StepAttemptIdentity,
+        StepAttemptSourceIdentity,
+        SyntheticStepAttemptReceipt,
+    }
+)
+
+
+def _snapshot_navigation_contract[ContractT](value: ContractT) -> ContractT:
+    """Reconstruct a closed contract graph using only exact owned values."""
+
+    value_type = type(value)
+    if value is None or value_type in {bool, bytes, float, int, str}:
+        return value
+    if isinstance(value, Enum):
+        return value
+    if value_type is tuple:
+        tuple_value = cast(tuple[object, ...], value)
+        return cast(
+            ContractT,
+            tuple(_snapshot_navigation_contract(item) for item in tuple_value),
+        )
+    if value_type not in _CORE_CONTRACT_TYPES:
+        raise ValueError("navigation data must use exact core contract types")
+
+    constructor = cast(Any, value_type)
+    arguments: dict[str, object] = {}
+    for contract_field in fields(cast(Any, value)):
+        field_value = getattr(value, contract_field.name)
+        if contract_field.init:
+            arguments[contract_field.name] = _snapshot_navigation_contract(field_value)
+            continue
+        if (
+            contract_field.default is MISSING
+            or type(field_value) is not type(contract_field.default)
+            or field_value != contract_field.default
+        ):
+            raise ValueError("navigation data carries mutated fixed-authority fields")
+    return cast(ContractT, constructor(**arguments))

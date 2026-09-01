@@ -29,8 +29,10 @@ from mining_automation.navigation.route_evidence import (
     FinalizedRouteEvidencePackage,
     OwnedRouteEvidenceCase,
     RouteEndpointVerification,
+    RouteEvidenceAcquisitionBinding,
     RouteEvidenceArtifactRef,
     RouteEvidenceCampaignPlan,
+    RouteEvidenceCaptureBuildIdentity,
     RouteEvidenceCaseRole,
     RouteEvidenceCaseSpec,
     RouteEvidenceCaseTruth,
@@ -147,6 +149,14 @@ def _build_package(
         ),
         capture_source_id=f"synthetic-{direction.value}-source",
         capture_session_id=f"synthetic-{direction.value}-session",
+        capture_build=RouteEvidenceCaptureBuildIdentity(
+            "synthetic-passive-capture",
+            "0.0.0",
+            _digest("synthetic-passive-capture-build"),
+        ),
+        frame_width=2,
+        frame_height=1,
+        pixel_format=PixelFormat.BGRA8888,
         capture_configuration_sha256=_digest(
             capture_configuration_label
             if capture_configuration_label is not None
@@ -160,11 +170,27 @@ def _build_package(
     )
     artifacts: dict[str, bytes] = {}
     owned_cases: list[OwnedRouteEvidenceCase] = []
+    previous_acquisition_sha256 = plan.content_sha256
     for spec in plan.cases:
         frame_payload = bytes([spec.ordinal]) * 8
         frame_ref = FrameRef(spec.ordinal, float(spec.ordinal), 2, 1)
         frame_sha256 = Sha256Digest.from_bytes(frame_payload)
         detection = _detection_for_spec(spec)
+        acquisition = RouteEvidenceAcquisitionBinding(
+            campaign_plan_sha256=plan.content_sha256,
+            capture_source_identity_sha256=plan.capture_source_identity_sha256,
+            capture_session_id=plan.capture_session_id,
+            request_id=f"synthetic-request-{spec.ordinal}",
+            sequence_index=spec.ordinal,
+            case_id=spec.case_id,
+            capture_id=f"synthetic-capture-{spec.ordinal}",
+            operator_id=plan.operator_id,
+            acknowledged_monotonic_s=float(spec.ordinal) - 0.5,
+            expires_monotonic_s=float(spec.ordinal) + 29.5,
+            frame_captured_monotonic_s=float(spec.ordinal),
+            recorded_monotonic_s=float(spec.ordinal) + 0.25,
+            previous_acquisition_sha256=previous_acquisition_sha256,
+        )
         detector_report = SyntheticRouteEvidenceDetectorReport(
             campaign_id=plan.campaign_id,
             campaign_plan_sha256=plan.content_sha256,
@@ -173,10 +199,12 @@ def _build_package(
             sequence_index=spec.ordinal,
             case_id=spec.case_id,
             capture_id=f"synthetic-capture-{spec.ordinal}",
+            acquisition=acquisition,
             detector=plan.detector,
             profile=plan.profile,
             capture_source_id=plan.capture_source_id,
             capture_session_id=plan.capture_session_id,
+            capture_build=plan.capture_build,
             capture_configuration_sha256=plan.capture_configuration_sha256,
             capture_environment_sha256=plan.capture_environment_sha256,
             support_envelope_sha256=plan.support_envelope_sha256,
@@ -205,10 +233,12 @@ def _build_package(
                     spec.role,
                     spec.checkpoint_id,
                 ),
+                acquisition=acquisition,
                 detector=plan.detector,
                 profile=plan.profile,
                 capture_source_id=plan.capture_source_id,
                 capture_session_id=plan.capture_session_id,
+                capture_build=plan.capture_build,
                 capture_configuration_sha256=plan.capture_configuration_sha256,
                 capture_environment_sha256=plan.capture_environment_sha256,
                 support_envelope_sha256=plan.support_envelope_sha256,
@@ -227,10 +257,12 @@ def _build_package(
                 ),
             )
         )
+        previous_acquisition_sha256 = owned_cases[-1].content_sha256
     package = FinalizedRouteEvidencePackage(
         campaign_plan=plan,
         cases=tuple(owned_cases),
         finalized_at_utc="2026-09-01T00:00:10Z",
+        finalized_monotonic_s=10.0,
     )
     truths: list[RouteEvidenceCaseTruth] = []
     for spec, owned in zip(plan.cases, package.cases, strict=True):
@@ -262,6 +294,7 @@ def _expectation(
     plan = package.campaign_plan
     return RouteEvidenceLoadExpectation(
         finalized_package_sha256=package.content_sha256,
+        acquisition_head_sha256=package.acquisition_head_sha256,
         campaign_id=plan.campaign_id,
         route=plan.route,
         direction=plan.route.direction,
@@ -270,6 +303,10 @@ def _expectation(
         profile=plan.profile,
         capture_source_id=plan.capture_source_id,
         capture_session_id=plan.capture_session_id,
+        capture_build=plan.capture_build,
+        frame_width=plan.frame_width,
+        frame_height=plan.frame_height,
+        pixel_format=plan.pixel_format,
         capture_configuration_sha256=plan.capture_configuration_sha256,
         capture_environment_sha256=plan.capture_environment_sha256,
         support_envelope_sha256=plan.support_envelope_sha256,
@@ -301,30 +338,49 @@ def _with_detector_report(
     dict[str, bytes],
 ]:
     payload = detector_report.canonical_bytes
-    original_owned = package.cases[case_index]
-    changed_owned = replace(
-        original_owned,
-        detector_report_artifact=replace(
-            original_owned.detector_report_artifact,
-            size_bytes=len(payload),
-            sha256=Sha256Digest.from_bytes(payload),
-        ),
-    )
-    owned_cases = list(package.cases)
-    owned_cases[case_index] = changed_owned
+    changed_artifacts = dict(artifacts)
+    owned_cases = list(package.cases[:case_index])
+    for index in range(case_index, len(package.cases)):
+        original_owned = package.cases[index]
+        if index == case_index:
+            report_payload = payload
+            acquisition = original_owned.acquisition
+        else:
+            acquisition = replace(
+                original_owned.acquisition,
+                previous_acquisition_sha256=owned_cases[-1].content_sha256,
+            )
+            original_report_payload = artifacts[
+                original_owned.detector_report_artifact.relative_path
+            ]
+            original_report = parse_synthetic_detector_report(original_report_payload)
+            report_payload = replace(
+                original_report,
+                acquisition=acquisition,
+            ).canonical_bytes
+        changed_owned = replace(
+            original_owned,
+            acquisition=acquisition,
+            detector_report_artifact=replace(
+                original_owned.detector_report_artifact,
+                size_bytes=len(report_payload),
+                sha256=Sha256Digest.from_bytes(report_payload),
+            ),
+        )
+        owned_cases.append(changed_owned)
+        changed_artifacts[original_owned.detector_report_artifact.relative_path] = report_payload
     changed_package = replace(package, cases=tuple(owned_cases))
     truths = list(review.cases)
-    truths[case_index] = replace(
-        truths[case_index],
-        detector_report_sha256=changed_owned.detector_report_artifact.sha256,
-    )
+    for index in range(case_index, len(truths)):
+        truths[index] = replace(
+            truths[index],
+            detector_report_sha256=owned_cases[index].detector_report_artifact.sha256,
+        )
     changed_review = replace(
         review,
         finalized_package_sha256=changed_package.content_sha256,
         cases=tuple(truths),
     )
-    changed_artifacts = dict(artifacts)
-    changed_artifacts[original_owned.detector_report_artifact.relative_path] = payload
     return changed_package, changed_review, changed_artifacts
 
 
@@ -354,8 +410,74 @@ def test_canonical_digest_is_compact_sorted_ascii_with_one_lf() -> None:
 
     assert payload == b'{"a":1,"unicode":"caf\\u00e9"}\n'
     assert Sha256Digest.from_bytes(payload).value == sha256(payload).hexdigest()
-    with pytest.raises(ValueError, match="non-canonical"):
+    with pytest.raises(ValueError, match="numbers must be finite"):
         canonical_route_evidence_bytes({"bad": float("nan")})
+
+
+def test_canonical_evidence_rejects_surrogate_alias_but_accepts_scalar_unicode() -> None:
+    scalar = canonical_route_evidence_bytes({"label": "\U0001f600"})
+    assert b"\\ud83d\\ude00" in scalar
+    with pytest.raises(ValueError, match="surrogate"):
+        canonical_route_evidence_bytes({"label": "\ud83d\ude00"})
+
+
+def test_route_evidence_rejects_primitive_subclass_identity_and_lineage_spoofs() -> None:
+    class AdversarialStr(str):
+        def __eq__(self, other: object) -> bool:
+            del other
+            return True
+
+        def __ne__(self, other: object) -> bool:
+            del other
+            return False
+
+        def endswith(
+            self,
+            suffix: str | tuple[str, ...],
+            start: int | None = None,
+            end: int | None = None,
+        ) -> bool:
+            del suffix, start, end
+            return True
+
+        __hash__ = str.__hash__
+
+    class AdversarialInt(int):
+        def __le__(self, other: object) -> bool:
+            del other
+            return False
+
+    package, _, _ = _build_package()
+    plan = package.campaign_plan
+    with pytest.raises(ValueError, match="operator_id"):
+        replace(plan, operator_id=AdversarialStr("foreign-operator"))
+    with pytest.raises(ValueError, match="ordinal"):
+        replace(plan.cases[0], ordinal=AdversarialInt(-99))
+    with pytest.raises(ValueError, match="UTC"):
+        replace(plan, created_at_utc=AdversarialStr("not-a-utc-timestamp"))
+    with pytest.raises(TypeError, match="non-canonical JSON value"):
+        canonical_route_evidence_bytes({"operator_id": AdversarialStr("foreign-operator")})
+
+
+def test_acquisition_binding_requires_fixed_timeout_and_exact_float_times() -> None:
+    package, _, _ = _build_package()
+    acquisition = package.cases[0].acquisition
+    with pytest.raises(ValueError, match="fixed passive capture timeout"):
+        replace(acquisition, expires_monotonic_s=acquisition.expires_monotonic_s + 1.0)
+    with pytest.raises(ValueError, match="exact finite"):
+        replace(acquisition, recorded_monotonic_s=2**53 + 1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="exact finite"):
+        replace(acquisition, acknowledged_monotonic_s=-0.0)
+    large_acknowledgement = float(2**57)
+    rounded_expiry = large_acknowledgement + 30.0
+    with pytest.raises(ValueError, match="fixed passive capture timeout"):
+        replace(
+            acquisition,
+            acknowledged_monotonic_s=large_acknowledgement,
+            expires_monotonic_s=rounded_expiry,
+            frame_captured_monotonic_s=rounded_expiry,
+            recorded_monotonic_s=rounded_expiry,
+        )
 
 
 def test_synthetic_detector_report_round_trips_exact_canonical_contract() -> None:
@@ -377,6 +499,67 @@ def test_synthetic_detector_report_round_trips_exact_canonical_contract() -> Non
     assert report.input_authority is False
 
 
+def test_evidence_boundaries_reject_integer_float_aliases_before_serialization() -> None:
+    package, review, artifacts = _build_package()
+    owned = package.cases[0]
+    report = parse_synthetic_detector_report(
+        artifacts[owned.detector_report_artifact.relative_path]
+    )
+    integer_frame_time = FrameRef(
+        report.frame_ref.frame_id,
+        int(report.frame_ref.captured_monotonic_s),
+        report.frame_ref.width,
+        report.frame_ref.height,
+    )
+    integer_confidence = replace(report.detection)
+    object.__setattr__(integer_confidence, "confidence", 1)
+
+    with pytest.raises(ValueError, match="exact finite"):
+        replace(report, frame_ref=integer_frame_time)
+    with pytest.raises(ValueError, match="exact finite"):
+        replace(owned, frame_ref=integer_frame_time)
+    with pytest.raises(ValueError, match="exact finite"):
+        replace(report, detection=integer_confidence)
+    with pytest.raises(ValueError, match="exact finite"):
+        replace(review.cases[0], detection=integer_confidence)
+
+
+def test_evidence_boundaries_reject_nonportable_embedded_identities() -> None:
+    package, review, artifacts = _build_package()
+    plan = package.campaign_plan
+    owned = package.cases[0]
+    report = parse_synthetic_detector_report(
+        artifacts[owned.detector_report_artifact.relative_path]
+    )
+    unicode_detector = replace(plan.detector, detector_id="d\u00e9tecteur")
+    unicode_profile = replace(plan.profile, profile_id="profil\u00e9")
+    unicode_route = replace(plan.route, route_id="rout\u00e9")
+
+    for field_name, foreign_value in (
+        ("detector", unicode_detector),
+        ("profile", unicode_profile),
+    ):
+        with pytest.raises(ValueError, match="portable"):
+            replace(plan, **{field_name: foreign_value})
+        with pytest.raises(ValueError, match="portable"):
+            replace(report, **{field_name: foreign_value})
+        with pytest.raises(ValueError, match="portable"):
+            replace(owned, **{field_name: foreign_value})
+        with pytest.raises(ValueError, match="portable"):
+            replace(_expectation(package), **{field_name: foreign_value})
+
+    with pytest.raises(ValueError, match="portable"):
+        replace(plan, route_plan=replace(plan.route_plan, identity=unicode_route))
+    with pytest.raises(ValueError, match="portable"):
+        replace(report, route=unicode_route)
+    with pytest.raises(ValueError, match="portable"):
+        replace(owned, route=unicode_route)
+    with pytest.raises(ValueError, match="portable"):
+        replace(_expectation(package), route=unicode_route)
+    with pytest.raises(ValueError, match="portable"):
+        replace(review, route=unicode_route)
+
+
 @pytest.mark.parametrize(
     "mutation",
     (
@@ -385,6 +568,9 @@ def test_synthetic_detector_report_round_trips_exact_canonical_contract() -> Non
         "unknown-field",
         "noncanonical",
         "authority",
+        "old-schema",
+        "integer-confidence",
+        "integer-frame-time",
         "unrepresentable-number",
     ),
 )
@@ -408,6 +594,12 @@ def test_detector_report_parser_rejects_nonexact_or_noncanonical_json(
             b'"activation_allowed":true',
             1,
         )
+    elif mutation == "old-schema":
+        changed = payload.replace(
+            b"fixed-route-evidence-synthetic-detector-report-v2",
+            b"fixed-route-evidence-synthetic-detector-report-v1",
+            1,
+        )
     else:
         decoded: dict[str, object] = json.loads(payload)
         if mutation == "missing-field":
@@ -416,6 +608,14 @@ def test_detector_report_parser_rejects_nonexact_or_noncanonical_json(
             frame = decoded["frame"]
             assert isinstance(frame, dict)
             frame["captured_monotonic_s"] = 10**400
+        elif mutation == "integer-frame-time":
+            frame = decoded["frame"]
+            assert isinstance(frame, dict)
+            frame["captured_monotonic_s"] = 1
+        elif mutation == "integer-confidence":
+            detection = decoded["detection"]
+            assert isinstance(detection, dict)
+            detection["confidence"] = 1
         else:
             decoded["foreign"] = False
         changed = canonical_route_evidence_bytes(decoded)
@@ -439,6 +639,7 @@ def test_verifier_requires_an_explicit_caller_load_expectation() -> None:
     ("field_name", "foreign_value"),
     (
         ("finalized_package_sha256", _digest("foreign-package")),
+        ("acquisition_head_sha256", _digest("foreign-acquisition-head")),
         ("campaign_id", "foreign-campaign"),
         (
             "route",
@@ -463,6 +664,17 @@ def test_verifier_requires_an_explicit_caller_load_expectation() -> None:
         ),
         ("capture_source_id", "foreign-source"),
         ("capture_session_id", "foreign-session"),
+        (
+            "capture_build",
+            RouteEvidenceCaptureBuildIdentity(
+                "foreign-capture-build",
+                "0.0.1",
+                _digest("foreign-capture-build"),
+            ),
+        ),
+        ("frame_width", 3),
+        ("frame_height", 2),
+        ("pixel_format", PixelFormat.RGBA8888),
         ("capture_configuration_sha256", _digest("foreign-configuration")),
         ("capture_environment_sha256", _digest("foreign-environment")),
         ("support_envelope_sha256", _digest("foreign-support-envelope")),
@@ -549,6 +761,13 @@ def test_operator_cannot_independently_review_own_package() -> None:
     with pytest.raises(RouteEvidenceIntegrityError, match="differ from.*operator"):
         _verify(package, self_review, artifacts)
 
+    case_alias = replace(
+        review,
+        reviewer_id=package.campaign_plan.operator_id.upper(),
+    )
+    with pytest.raises(RouteEvidenceIntegrityError, match="differ from.*operator"):
+        _verify(package, case_alias, artifacts)
+
 
 def test_review_must_bind_exact_finalized_package_hash() -> None:
     package, review, artifacts = _build_package()
@@ -615,16 +834,44 @@ def test_verifier_rejects_every_detector_report_identity_rebinding() -> None:
         },
         {"capture_source_id": "foreign-source"},
         {"capture_session_id": "foreign-session"},
+        {
+            "capture_build": RouteEvidenceCaptureBuildIdentity(
+                "foreign-capture-build",
+                "0.0.1",
+                _digest("foreign-capture-build"),
+            )
+        },
         {"capture_configuration_sha256": _digest("foreign-configuration")},
         {"capture_environment_sha256": _digest("foreign-environment")},
         {"support_envelope_sha256": _digest("foreign-support-envelope")},
-        {"frame_ref": FrameRef(99, 99.0, 2, 1)},
+        {
+            "frame_ref": FrameRef(
+                99,
+                report.frame_ref.captured_monotonic_s,
+                2,
+                1,
+            )
+        },
         {"pixel_format": PixelFormat.RGBA8888},
         {"frame_sha256": _digest("foreign-frame")},
     )
 
     for mutation in mutations:
-        foreign_report = replace(report, **mutation)  # type: ignore[arg-type]
+        acquisition_mutation: dict[str, object] = {}
+        for field_name in (
+            "campaign_plan_sha256",
+            "sequence_index",
+            "case_id",
+            "capture_id",
+            "capture_session_id",
+        ):
+            if field_name in mutation:
+                acquisition_mutation[field_name] = mutation[field_name]
+        foreign_report = replace(
+            report,
+            acquisition=replace(report.acquisition, **acquisition_mutation),  # type: ignore[arg-type]
+            **mutation,  # type: ignore[arg-type]
+        )
         changed_package, changed_review, changed_artifacts = _with_detector_report(
             package,
             review,
@@ -686,6 +933,10 @@ def test_package_rejects_duplicate_capture_and_artifact_ownership() -> None:
     reused = replace(
         package.cases[1],
         capture_id=package.cases[0].capture_id,
+        acquisition=replace(
+            package.cases[1].acquisition,
+            capture_id=package.cases[0].capture_id,
+        ),
         frame_artifact=replace(
             package.cases[1].frame_artifact,
             relative_path=package.cases[0].frame_artifact.relative_path,
@@ -697,6 +948,7 @@ def test_package_rejects_duplicate_capture_and_artifact_ownership() -> None:
             package.campaign_plan,
             (package.cases[0], reused, *package.cases[2:]),
             package.finalized_at_utc,
+            package.finalized_monotonic_s,
         )
 
 
@@ -715,6 +967,7 @@ def test_package_rejects_artifact_path_reuse_even_with_distinct_capture_id() -> 
             package.campaign_plan,
             (package.cases[0], reused, *package.cases[2:]),
             package.finalized_at_utc,
+            package.finalized_monotonic_s,
         )
 
 
@@ -733,6 +986,7 @@ def test_package_rejects_case_folded_artifact_path_alias() -> None:
             package.campaign_plan,
             (package.cases[0], aliased, *package.cases[2:]),
             package.finalized_at_utc,
+            package.finalized_monotonic_s,
         )
 
 
@@ -751,6 +1005,7 @@ def test_package_rejects_duplicate_exact_frame_content() -> None:
             package.campaign_plan,
             (package.cases[0], duplicate, *package.cases[2:]),
             package.finalized_at_utc,
+            package.finalized_monotonic_s,
         )
 
 
@@ -770,6 +1025,7 @@ def test_package_rejects_duplicate_exact_detector_report_content() -> None:
             package.campaign_plan,
             (package.cases[0], duplicate, *package.cases[2:]),
             package.finalized_at_utc,
+            package.finalized_monotonic_s,
         )
 
 
@@ -780,6 +1036,12 @@ def test_package_rejects_duplicate_exact_detector_report_content() -> None:
         "cases/CON/frame.bgra",
         "cases/aux.json",
         "cases/CON .json",
+        "cases/COM\u00b9/frame.bgra",
+        "cases/COM\u00b2/frame.bgra",
+        "cases/COM\u00b3/frame.bgra",
+        "cases/LPT\u00b9/frame.bgra",
+        "cases/LPT\u00b2/frame.bgra",
+        "cases/LPT\u00b3/frame.bgra",
         "cases/trailing./frame.bgra",
         "cases/trailing /frame.bgra",
     ),
@@ -798,14 +1060,24 @@ def test_package_rejects_missing_case_and_foreign_plan_provenance() -> None:
             package.campaign_plan,
             package.cases[:-1],
             package.finalized_at_utc,
+            package.finalized_monotonic_s,
         )
 
-    foreign = replace(package.cases[0], campaign_plan_sha256=_digest("foreign-plan"))
+    foreign_digest = _digest("foreign-plan")
+    foreign = replace(
+        package.cases[0],
+        campaign_plan_sha256=foreign_digest,
+        acquisition=replace(
+            package.cases[0].acquisition,
+            campaign_plan_sha256=foreign_digest,
+        ),
+    )
     with pytest.raises(ValueError, match="foreign campaign provenance"):
         FinalizedRouteEvidencePackage(
             package.campaign_plan,
             (foreign, *package.cases[1:]),
             package.finalized_at_utc,
+            package.finalized_monotonic_s,
         )
 
 
@@ -827,6 +1099,14 @@ def test_package_rejects_missing_case_and_foreign_plan_provenance() -> None:
         ("capture_source_id", "foreign-capture-source"),
         ("capture_session_id", "foreign-capture-session"),
         (
+            "capture_build",
+            RouteEvidenceCaptureBuildIdentity(
+                "stale-capture-build",
+                "0.0.1",
+                _digest("stale-capture-build"),
+            ),
+        ),
+        (
             "capture_configuration_sha256",
             _digest("stale-capture-configuration"),
         ),
@@ -839,8 +1119,12 @@ def test_finalization_rejects_stale_or_mixed_source_session_and_configuration(
     foreign_value: object,
 ) -> None:
     package, _, _ = _build_package()
+    acquisition = package.cases[1].acquisition
+    if field_name == "capture_session_id":
+        acquisition = replace(acquisition, capture_session_id=foreign_value)
     changed = replace(
         package.cases[1],
+        acquisition=acquisition,
         **{field_name: foreign_value},  # type: ignore[arg-type]
     )
 
@@ -849,6 +1133,31 @@ def test_finalization_rejects_stale_or_mixed_source_session_and_configuration(
             package.campaign_plan,
             (package.cases[0], changed, *package.cases[2:]),
             package.finalized_at_utc,
+            package.finalized_monotonic_s,
+        )
+
+
+@pytest.mark.parametrize(
+    ("frame_ref", "pixel_format"),
+    (
+        (FrameRef(2, 2.0, 1, 2), PixelFormat.BGRA8888),
+        (FrameRef(2, 2.0, 2, 1), PixelFormat.RGBA8888),
+    ),
+)
+def test_finalization_rejects_mixed_campaign_geometry_or_pixel_format(
+    frame_ref: FrameRef,
+    pixel_format: PixelFormat,
+) -> None:
+    package, _, _ = _build_package()
+    original = package.cases[1]
+    changed = replace(original, frame_ref=frame_ref, pixel_format=pixel_format)
+
+    with pytest.raises(ValueError, match="foreign campaign provenance"):
+        FinalizedRouteEvidencePackage(
+            package.campaign_plan,
+            (package.cases[0], changed, *package.cases[2:]),
+            package.finalized_at_utc,
+            package.finalized_monotonic_s,
         )
 
 

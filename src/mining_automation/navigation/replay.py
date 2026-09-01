@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
-from math import isfinite
+from math import copysign, isfinite
 from pathlib import Path
 from typing import Final, Literal, cast
 
@@ -173,9 +173,7 @@ class RecordStepAttemptReceiptEvent:
 
     def __post_init__(self) -> None:
         _require_nonnegative_time(self.evaluated_monotonic_s, "event evaluation time")
-        if self.receipt is not None and not isinstance(
-            self.receipt, SyntheticStepAttemptReceipt
-        ):
+        if self.receipt is not None and not isinstance(self.receipt, SyntheticStepAttemptReceipt):
             raise ValueError(
                 "record-attempt event receipt must be SyntheticStepAttemptReceipt or None"
             )
@@ -317,10 +315,10 @@ class ReplayTraceEntry:
         }.get(self.outcome)
         if expected_phase is not None and self.phase is not expected_phase:
             raise ValueError("trace outcome does not match its phase")
-        if (
-            self.outcome is NavigationTransitionOutcome.TERMINAL_NO_CHANGE
-            and self.phase not in {NavigationPhase.ARRIVED, NavigationPhase.STOPPED}
-        ):
+        if self.outcome is NavigationTransitionOutcome.TERMINAL_NO_CHANGE and self.phase not in {
+            NavigationPhase.ARRIVED,
+            NavigationPhase.STOPPED,
+        }:
             raise ValueError("trace terminal no-change requires a terminal phase")
         proposal_fields = (
             self.proposed_step_id,
@@ -346,10 +344,8 @@ class ReplayTraceEntry:
             assert self.recorded_prepared_monotonic_s is not None
             assert self.recorded_post_attempt_monotonic_s is not None
             if (
-                self.recorded_post_attempt_monotonic_s
-                <= self.recorded_prepared_monotonic_s
-                or self.recorded_post_attempt_monotonic_s
-                > self.evaluated_monotonic_s
+                self.recorded_post_attempt_monotonic_s <= self.recorded_prepared_monotonic_s
+                or self.recorded_post_attempt_monotonic_s > self.evaluated_monotonic_s
             ):
                 raise ValueError("recorded-attempt trace boundaries must preserve causality")
         elif any(value is not None for value in receipt_fields):
@@ -390,8 +386,10 @@ class NavigationReplayReport:
             raise ValueError("navigation replay reports must retain the synthetic fixture role")
         if not isinstance(self.route, RouteIdentity):
             raise ValueError("report route must be a RouteIdentity")
-        if not isinstance(self.trace, tuple) or not self.trace or any(
-            not isinstance(entry, ReplayTraceEntry) for entry in self.trace
+        if (
+            not isinstance(self.trace, tuple)
+            or not self.trace
+            or any(not isinstance(entry, ReplayTraceEntry) for entry in self.trace)
         ):
             raise ValueError("report trace must be a non-empty tuple of ReplayTraceEntry values")
         if tuple(entry.event_index for entry in self.trace) != tuple(range(len(self.trace))):
@@ -401,7 +399,10 @@ class NavigationReplayReport:
             for earlier, later in zip(self.trace, self.trace[1:], strict=False)
         ):
             raise ValueError("report trace evaluation times must be nondecreasing")
-        if not isinstance(self.final_progress, RouteProgress) or self.final_progress.route != self.route:
+        if (
+            not isinstance(self.final_progress, RouteProgress)
+            or self.final_progress.route != self.route
+        ):
             raise ValueError("report final progress must belong to its route")
         if not isinstance(self.step_proposals, tuple) or any(
             not isinstance(proposal, OfflineStepProposal)
@@ -436,9 +437,7 @@ class NavigationReplayReport:
             raise ValueError("report completed attempts must belong to its exact context")
         if self.completed_attempts != self.final_progress.completed_attempts:
             raise ValueError("report completed attempts must exactly match final progress")
-        completed_proposals = tuple(
-            attempt.proposal for attempt in self.completed_attempts
-        )
+        completed_proposals = tuple(attempt.proposal for attempt in self.completed_attempts)
         if completed_proposals != self.step_proposals[: len(completed_proposals)]:
             raise ValueError("report completed attempts must be a prefix of its proposals")
         traced_attempts = tuple(
@@ -518,14 +517,10 @@ class NavigationReplayReport:
                         "evidence_role": attempt.receipt.source.evidence_role.value,
                     },
                     "prepared_monotonic_s": attempt.receipt.prepared_monotonic_s,
-                    "post_attempt_monotonic_s": (
-                        attempt.receipt.post_attempt_monotonic_s
-                    ),
+                    "post_attempt_monotonic_s": (attempt.receipt.post_attempt_monotonic_s),
                     "recorded_monotonic_s": attempt.recorded_monotonic_s,
                     "authoritative": attempt.receipt.authoritative,
-                    "movement_success_proven": (
-                        attempt.receipt.movement_success_proven
-                    ),
+                    "movement_success_proven": (attempt.receipt.movement_success_proven),
                     "live_input_enabled": attempt.receipt.live_input_enabled,
                 }
                 for attempt in self.completed_attempts
@@ -550,17 +545,11 @@ class NavigationReplayReport:
                     "failure_reason": _enum_value(entry.failure_reason),
                     "proposed_step_id": entry.proposed_step_id,
                     "proposed_attempt_id": entry.proposed_attempt_id,
-                    "proposed_prepared_monotonic_s": (
-                        entry.proposed_prepared_monotonic_s
-                    ),
+                    "proposed_prepared_monotonic_s": (entry.proposed_prepared_monotonic_s),
                     "recorded_step_id": entry.recorded_step_id,
                     "recorded_attempt_id": entry.recorded_attempt_id,
-                    "recorded_prepared_monotonic_s": (
-                        entry.recorded_prepared_monotonic_s
-                    ),
-                    "recorded_post_attempt_monotonic_s": (
-                        entry.recorded_post_attempt_monotonic_s
-                    ),
+                    "recorded_prepared_monotonic_s": (entry.recorded_prepared_monotonic_s),
+                    "recorded_post_attempt_monotonic_s": (entry.recorded_post_attempt_monotonic_s),
                 }
                 for entry in self.trace
             ],
@@ -572,10 +561,7 @@ class NavigationReplayReport:
         lines = [
             f"navigation replay {result}: {self.case_id}",
             f"fixture role: {self.fixture_role}",
-            (
-                f"route: {self.route.route_id}@{self.route.version} "
-                f"({self.route.direction.value})"
-            ),
+            (f"route: {self.route.route_id}@{self.route.version} ({self.route.direction.value})"),
             "live navigation: disabled",
             f"final phase: {self.final_progress.phase.value}",
             f"events: {len(self.trace)}",
@@ -601,19 +587,22 @@ def _validate_trace_route_sequence(
     completed_attempts: list[tuple[str, str, float, float, float]] = []
     pending_attempt: tuple[str, str, float] | None = None
     seen_attempt_ids: set[str] = set()
-    terminal_snapshot: tuple[
-        NavigationPhase,
-        str | None,
-        str | None,
-        NavigationFailureReason | None,
-        str | None,
-        str | None,
-        float | None,
-        str | None,
-        str | None,
-        float | None,
-        float | None,
-    ] | None = None
+    terminal_snapshot: (
+        tuple[
+            NavigationPhase,
+            str | None,
+            str | None,
+            NavigationFailureReason | None,
+            str | None,
+            str | None,
+            float | None,
+            str | None,
+            str | None,
+            float | None,
+            float | None,
+        ]
+        | None
+    ) = None
 
     for entry in trace:
         snapshot = (
@@ -692,8 +681,7 @@ def _validate_trace_route_sequence(
                 phase is not NavigationPhase.AWAITING_ATTEMPT_RECEIPT
                 or pending_attempt is None
                 or receipt_proposal != pending_attempt
-                or entry.recorded_post_attempt_monotonic_s
-                <= entry.recorded_prepared_monotonic_s
+                or entry.recorded_post_attempt_monotonic_s <= entry.recorded_prepared_monotonic_s
             ):
                 raise ValueError("report recorded-attempt trace violates route causality")
             completed_attempts.append(
@@ -965,7 +953,9 @@ def _parse_manifest(raw: object) -> NavigationReplayManifest:
         raise NavigationManifestError(f"unsupported navigation replay schema {schema_version}")
     fixture_role = _string(root["fixture_role"], "fixture_role")
     if fixture_role != SYNTHETIC_FIXTURE_ROLE:
-        raise NavigationManifestError("only explicitly synthetic architecture fixtures are accepted")
+        raise NavigationManifestError(
+            "only explicitly synthetic architecture fixtures are accepted"
+        )
     events_raw = _sequence(root["events"], "events")
     return NavigationReplayManifest(
         schema_version=schema_version,
@@ -1018,8 +1008,7 @@ def _parse_plan(raw: object) -> RoutePlan:
             for index, checkpoint in enumerate(checkpoints)
         ),
         steps=tuple(
-            _parse_step(step, f"context.plan.steps[{index}]")
-            for index, step in enumerate(steps)
+            _parse_step(step, f"context.plan.steps[{index}]") for index, step in enumerate(steps)
         ),
     )
 
@@ -1324,9 +1313,7 @@ def _parse_expected(raw: object, path: str) -> ReplayExpectedState:
             mapping["failure_reason"],
             f"{path}.failure_reason",
         ),
-        proposed_step_id=_optional_string(
-            mapping["proposed_step_id"], f"{path}.proposed_step_id"
-        ),
+        proposed_step_id=_optional_string(mapping["proposed_step_id"], f"{path}.proposed_step_id"),
         proposed_attempt_id=_optional_string(
             mapping["proposed_attempt_id"], f"{path}.proposed_attempt_id"
         ),
@@ -1334,9 +1321,7 @@ def _parse_expected(raw: object, path: str) -> ReplayExpectedState:
             mapping["proposed_prepared_monotonic_s"],
             f"{path}.proposed_prepared_monotonic_s",
         ),
-        recorded_step_id=_optional_string(
-            mapping["recorded_step_id"], f"{path}.recorded_step_id"
-        ),
+        recorded_step_id=_optional_string(mapping["recorded_step_id"], f"{path}.recorded_step_id"),
         recorded_attempt_id=_optional_string(
             mapping["recorded_attempt_id"], f"{path}.recorded_attempt_id"
         ),
@@ -1352,13 +1337,13 @@ def _parse_expected(raw: object, path: str) -> ReplayExpectedState:
 
 
 def _mapping(value: object, path: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
+    if type(value) is not dict or any(type(key) is not str for key in value):
         raise NavigationManifestError(f"{path} must be a JSON object")
     return cast(Mapping[str, object], value)
 
 
 def _sequence(value: object, path: str) -> Sequence[object]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         raise NavigationManifestError(f"{path} must be a JSON array")
     return cast(Sequence[object], value)
 
@@ -1389,10 +1374,10 @@ def _integer(value: object, path: str) -> int:
 
 
 def _number(value: object, path: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if type(value) not in {int, float}:
         raise NavigationManifestError(f"{path} must be a finite JSON number")
     try:
-        converted = float(value)
+        converted = float(cast(int | float, value))
     except (OverflowError, ValueError) as exc:
         raise NavigationManifestError(f"{path} must be a finite JSON number") from exc
     if not isfinite(converted):
@@ -1405,7 +1390,7 @@ def _optional_number(value: object, path: str) -> float | None:
 
 
 def _enum[EnumT: Enum](enum_type: type[EnumT], value: object, path: str) -> EnumT:
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise NavigationManifestError(f"{path} must be a string")
     try:
         return enum_type(value)
@@ -1420,26 +1405,20 @@ def _optional_enum[EnumT: StrEnum](
 
 
 def _is_integer(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
+    return type(value) is int
 
 
 def _require_identifier(value: object, field_name: str) -> str:
-    if (
-        not isinstance(value, str)
-        or not value
-        or value != value.strip()
-        or not value.isprintable()
-    ):
+    if type(value) is not str or not value or value != value.strip() or not value.isprintable():
         raise ValueError(f"{field_name} must be a non-empty, trimmed, printable string")
     return value
 
 
 def _require_nonnegative_time(value: object, field_name: str) -> None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{field_name} must be finite and non-negative")
-    try:
-        finite = isfinite(float(value))
-    except (OverflowError, TypeError, ValueError):
-        finite = False
-    if not finite or value < 0:
-        raise ValueError(f"{field_name} must be finite and non-negative")
+    if (
+        type(value) is not float
+        or not isfinite(value)
+        or value < 0.0
+        or (value == 0.0 and copysign(1.0, value) < 0.0)
+    ):
+        raise ValueError(f"{field_name} must be an exact finite non-negative float")

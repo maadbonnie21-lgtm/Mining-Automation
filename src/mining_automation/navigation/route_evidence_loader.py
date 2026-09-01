@@ -40,8 +40,10 @@ from .route_evidence import (
     SYNTHETIC_ROUTE_EVIDENCE_ROLE,
     FinalizedRouteEvidencePackage,
     OwnedRouteEvidenceCase,
+    RouteEvidenceAcquisitionBinding,
     RouteEvidenceArtifactRef,
     RouteEvidenceCampaignPlan,
+    RouteEvidenceCaptureBuildIdentity,
     RouteEvidenceCaseRole,
     RouteEvidenceCaseSpec,
     RouteEvidenceCaseTruth,
@@ -67,9 +69,10 @@ __all__ = [
 FINALIZED_PACKAGE_FILENAME: Final[str] = "finalized-package.json"
 INDEPENDENT_REVIEW_FILENAME: Final[str] = "independent-review.json"
 
-_CAMPAIGN_SCHEMA: Final[str] = "fixed-route-evidence-campaign-plan-v1"
-_CASE_SCHEMA: Final[str] = "fixed-route-evidence-owned-case-v1"
-_PACKAGE_SCHEMA: Final[str] = "fixed-route-evidence-finalized-package-v1"
+_CAMPAIGN_SCHEMA: Final[str] = "fixed-route-evidence-campaign-plan-v2"
+_ACQUISITION_SCHEMA: Final[str] = "fixed-route-evidence-acquisition-binding-v1"
+_CASE_SCHEMA: Final[str] = "fixed-route-evidence-owned-case-v2"
+_PACKAGE_SCHEMA: Final[str] = "fixed-route-evidence-finalized-package-v2"
 _REVIEW_SCHEMA: Final[str] = "fixed-route-evidence-independent-review-v1"
 _SELECTION_POLICY: Final[str] = "all-owned-cases-in-plan-order-no-drop-no-replacement"
 _OPERATOR_ROLE: Final[str] = "operator-staging-not-reviewer-truth"
@@ -92,6 +95,12 @@ _WINDOWS_RESERVED_COMPONENTS: Final[frozenset[str]] = frozenset(
         "PRN",
         *(f"COM{index}" for index in range(1, 10)),
         *(f"LPT{index}" for index in range(1, 10)),
+        "COM¹",
+        "COM²",
+        "COM³",
+        "LPT¹",
+        "LPT²",
+        "LPT³",
     }
 )
 
@@ -370,6 +379,19 @@ def _profile(value: object, context: str) -> CheckpointProfileIdentity:
         raise RouteEvidenceIntegrityError(f"invalid {context}: {exc}") from exc
 
 
+def _capture_build(value: object, context: str) -> RouteEvidenceCaptureBuildIdentity:
+    root = _object(value, context)
+    _exact_keys(root, {"build_id", "content_sha256", "version"}, context)
+    try:
+        return RouteEvidenceCaptureBuildIdentity(
+            build_id=_identifier(root["build_id"], f"{context}.build_id"),
+            version=_identifier(root["version"], f"{context}.version"),
+            content_sha256=_digest(root["content_sha256"], f"{context}.content_sha256"),
+        )
+    except ValueError as exc:
+        raise RouteEvidenceIntegrityError(f"invalid {context}: {exc}") from exc
+
+
 def _detection(value: object, context: str) -> CheckpointDetection:
     root = _object(value, context)
     _exact_keys(root, {"candidate_checkpoint_ids", "confidence", "match"}, context)
@@ -444,6 +466,91 @@ def _operator_intent(value: object, context: str) -> RouteEvidenceOperatorIntent
         raise RouteEvidenceIntegrityError(f"invalid {context}: {exc}") from exc
 
 
+def _acquisition(value: object, context: str) -> RouteEvidenceAcquisitionBinding:
+    root = _object(value, context)
+    _exact_keys(
+        root,
+        {
+            "acknowledged_monotonic_s",
+            "camera_automation_enabled",
+            "campaign_plan_sha256",
+            "capture_id",
+            "capture_session_id",
+            "capture_source_identity_sha256",
+            "case_id",
+            "checkpoint_truth_asserted",
+            "expires_monotonic_s",
+            "frame_captured_monotonic_s",
+            "keyboard_input_enabled",
+            "mouse_input_enabled",
+            "navigation_automation_enabled",
+            "operator_acknowledgement_is_reviewer_truth",
+            "operator_id",
+            "previous_acquisition_sha256",
+            "recorded_monotonic_s",
+            "request_id",
+            "schema",
+            "sequence_index",
+        },
+        context,
+    )
+    _fixed(root["schema"], _ACQUISITION_SCHEMA, f"{context}.schema")
+    for key in (
+        "operator_acknowledgement_is_reviewer_truth",
+        "checkpoint_truth_asserted",
+        "navigation_automation_enabled",
+        "camera_automation_enabled",
+        "mouse_input_enabled",
+        "keyboard_input_enabled",
+    ):
+        _fixed(root[key], False, f"{context}.{key}")
+    try:
+        return RouteEvidenceAcquisitionBinding(
+            campaign_plan_sha256=_digest(
+                root["campaign_plan_sha256"],
+                f"{context}.campaign_plan_sha256",
+            ),
+            capture_source_identity_sha256=_digest(
+                root["capture_source_identity_sha256"],
+                f"{context}.capture_source_identity_sha256",
+            ),
+            capture_session_id=_identifier(
+                root["capture_session_id"],
+                f"{context}.capture_session_id",
+            ),
+            request_id=_identifier(root["request_id"], f"{context}.request_id"),
+            sequence_index=_positive_int(
+                root["sequence_index"],
+                f"{context}.sequence_index",
+            ),
+            case_id=_identifier(root["case_id"], f"{context}.case_id"),
+            capture_id=_identifier(root["capture_id"], f"{context}.capture_id"),
+            operator_id=_identifier(root["operator_id"], f"{context}.operator_id"),
+            acknowledged_monotonic_s=_number(
+                root["acknowledged_monotonic_s"],
+                f"{context}.acknowledged_monotonic_s",
+            ),
+            expires_monotonic_s=_number(
+                root["expires_monotonic_s"],
+                f"{context}.expires_monotonic_s",
+            ),
+            frame_captured_monotonic_s=_number(
+                root["frame_captured_monotonic_s"],
+                f"{context}.frame_captured_monotonic_s",
+            ),
+            recorded_monotonic_s=_number(
+                root["recorded_monotonic_s"],
+                f"{context}.recorded_monotonic_s",
+            ),
+            previous_acquisition_sha256=_digest(
+                root["previous_acquisition_sha256"],
+                f"{context}.previous_acquisition_sha256",
+            ),
+        )
+    except ValueError as exc:
+        raise RouteEvidenceIntegrityError(f"invalid {context}: {exc}") from exc
+
+
 def _campaign(value: object, context: str) -> RouteEvidenceCampaignPlan:
     root = _object(value, context)
     _exact_keys(
@@ -451,6 +558,7 @@ def _campaign(value: object, context: str) -> RouteEvidenceCampaignPlan:
         {
             "activation_allowed",
             "campaign_id",
+            "capture_build",
             "capture_configuration_sha256",
             "capture_environment_sha256",
             "capture_session_id",
@@ -462,6 +570,7 @@ def _campaign(value: object, context: str) -> RouteEvidenceCampaignPlan:
             "evidence_role",
             "input_authority",
             "operator",
+            "required_frame",
             "route_plan",
             "route_plan_sha256",
             "schema",
@@ -476,6 +585,12 @@ def _campaign(value: object, context: str) -> RouteEvidenceCampaignPlan:
     operator = _object(root["operator"], f"{context}.operator")
     _exact_keys(operator, {"operator_id", "role"}, f"{context}.operator")
     _fixed(operator["role"], _OPERATOR_ROLE, f"{context}.operator.role")
+    required_frame = _object(root["required_frame"], f"{context}.required_frame")
+    _exact_keys(
+        required_frame,
+        {"height", "pixel_format", "width"},
+        f"{context}.required_frame",
+    )
     route_plan = _route_plan(root["route_plan"], f"{context}.route_plan")
     declared_route_digest = _digest(root["route_plan_sha256"], f"{context}.route_plan_sha256")
     cases = tuple(
@@ -493,6 +608,17 @@ def _campaign(value: object, context: str) -> RouteEvidenceCampaignPlan:
             ),
             capture_session_id=_identifier(
                 root["capture_session_id"], f"{context}.capture_session_id"
+            ),
+            capture_build=_capture_build(root["capture_build"], f"{context}.capture_build"),
+            frame_width=_positive_int(required_frame["width"], f"{context}.required_frame.width"),
+            frame_height=_positive_int(
+                required_frame["height"], f"{context}.required_frame.height"
+            ),
+            pixel_format=PixelFormat(
+                _string(
+                    required_frame["pixel_format"],
+                    f"{context}.required_frame.pixel_format",
+                )
             ),
             capture_configuration_sha256=_digest(
                 root["capture_configuration_sha256"],
@@ -536,8 +662,10 @@ def _owned_case(value: object, context: str) -> OwnedRouteEvidenceCase:
         root,
         {
             "activation_allowed",
+            "acquisition",
             "campaign_id",
             "campaign_plan_sha256",
+            "capture_build",
             "capture_configuration_sha256",
             "capture_environment_sha256",
             "capture_id",
@@ -584,6 +712,7 @@ def _owned_case(value: object, context: str) -> OwnedRouteEvidenceCase:
             capture_id=_identifier(root["capture_id"], f"{context}.capture_id"),
             operator_id=_identifier(root["operator_id"], f"{context}.operator_id"),
             operator_intent=_operator_intent(root["operator_intent"], f"{context}.operator_intent"),
+            acquisition=_acquisition(root["acquisition"], f"{context}.acquisition"),
             detector=_detector(root["checkpoint_detector"], f"{context}.checkpoint_detector"),
             profile=_profile(root["checkpoint_profile"], f"{context}.checkpoint_profile"),
             capture_source_id=_identifier(
@@ -592,6 +721,7 @@ def _owned_case(value: object, context: str) -> OwnedRouteEvidenceCase:
             capture_session_id=_identifier(
                 root["capture_session_id"], f"{context}.capture_session_id"
             ),
+            capture_build=_capture_build(root["capture_build"], f"{context}.capture_build"),
             capture_configuration_sha256=_digest(
                 root["capture_configuration_sha256"],
                 f"{context}.capture_configuration_sha256",
@@ -623,12 +753,14 @@ def _parse_package(payload: bytes) -> FinalizedRouteEvidencePackage:
         root,
         {
             "activation_allowed",
+            "acquisition_head_sha256",
             "all_owned_cases_included",
             "campaign_plan",
             "campaign_plan_sha256",
             "cases",
             "evidence_role",
             "finalized_at_utc",
+            "finalized_monotonic_s",
             "input_authority",
             "schema",
             "selection_policy",
@@ -664,9 +796,21 @@ def _parse_package(payload: bytes) -> FinalizedRouteEvidencePackage:
             campaign_plan=campaign,
             cases=tuple(cases),
             finalized_at_utc=_string(root["finalized_at_utc"], "package.finalized_at_utc"),
+            finalized_monotonic_s=_number(
+                root["finalized_monotonic_s"],
+                "package.finalized_monotonic_s",
+            ),
         )
     except ValueError as exc:
         raise RouteEvidenceIntegrityError(f"invalid finalized package: {exc}") from exc
+    if (
+        _digest(
+            root["acquisition_head_sha256"],
+            "finalized package.acquisition_head_sha256",
+        )
+        != result.acquisition_head_sha256
+    ):
+        raise RouteEvidenceIntegrityError("finalized package acquisition-head digest mismatch")
     if canonical_route_evidence_bytes(result.to_json_value()) != payload:
         raise RouteEvidenceIntegrityError("finalized package typed canonical round-trip changed")
     return result
@@ -1022,10 +1166,12 @@ def _validate_detector_reports(
             or report.sequence_index != owned.sequence_index
             or report.case_id != owned.case_id
             or report.capture_id != owned.capture_id
+            or report.acquisition != owned.acquisition
             or report.detector != owned.detector
             or report.profile != owned.profile
             or report.capture_source_id != owned.capture_source_id
             or report.capture_session_id != owned.capture_session_id
+            or report.capture_build != owned.capture_build
             or report.capture_configuration_sha256 != owned.capture_configuration_sha256
             or report.capture_environment_sha256 != owned.capture_environment_sha256
             or report.support_envelope_sha256 != owned.support_envelope_sha256

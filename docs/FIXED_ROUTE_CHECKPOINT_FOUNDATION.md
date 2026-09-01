@@ -136,6 +136,16 @@ live-navigation-disabled marker.
 These fixtures test contracts and reducer behavior only. They are not evidence that any real mine,
 bank, checkpoint, route, client configuration, or traversal is supported.
 
+`navigation.offline_route_session` adds a single-head outer rehearsal identity. Explicit timeout,
+interruption, or session replacement emits a real STOP in the underlying reducer, and recovery
+requires a globally unused route-session ID plus fresh checkpoint-source and attempt-source
+session IDs in that lineage. Recovery preserves the exact route plan/version, policy,
+detector/profile/frame-source semantics, and attempt-source semantics. The sequencer owns exact
+reconstructed ingress, returns deep detached snapshots, and serializes every complete public
+transition so concurrent callers cannot fork the head or overwrite STOP. It has no automatic retry
+or executor. See
+[`NAVIGATION_PASSIVE_CAMPAIGN_READINESS.md`](NAVIGATION_PASSIVE_CAMPAIGN_READINESS.md).
+
 ## Endpoint proof boundary
 
 Route arrival proves only a fresh match of that direction's terminal checkpoint.

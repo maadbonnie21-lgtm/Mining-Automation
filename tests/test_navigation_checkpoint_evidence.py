@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from mining_automation.capture import Frame, PixelFormat, RawFrame
+from mining_automation.contracts import FrameRef
 from mining_automation.navigation.checkpoint_evidence import (
     CheckpointDetectorContractError,
     CheckpointDetectorExecutionError,
@@ -46,13 +47,19 @@ def _plan() -> RoutePlan:
         Checkpoint("synthetic-arrival", CheckpointRole.ARRIVAL),
     )
     return RoutePlan(
-        identity=RouteIdentity("synthetic-evidence-route", "synthetic-v1", RouteDirection.MINE_TO_BANK),
+        identity=RouteIdentity(
+            "synthetic-evidence-route", "synthetic-v1", RouteDirection.MINE_TO_BANK
+        ),
         origin=RouteEndpoint("synthetic-mine", RouteEndpointRole.MINE),
         destination=RouteEndpoint("synthetic-bank", RouteEndpointRole.BANK),
         checkpoints=checkpoints,
         steps=(
-            RouteStep("synthetic-step-1", checkpoints[0].checkpoint_id, checkpoints[1].checkpoint_id),
-            RouteStep("synthetic-step-2", checkpoints[1].checkpoint_id, checkpoints[2].checkpoint_id),
+            RouteStep(
+                "synthetic-step-1", checkpoints[0].checkpoint_id, checkpoints[1].checkpoint_id
+            ),
+            RouteStep(
+                "synthetic-step-2", checkpoints[1].checkpoint_id, checkpoints[2].checkpoint_id
+            ),
         ),
     )
 
@@ -137,9 +144,7 @@ class StaticCheckpointDetector:
         profile: CheckpointProfile | None = None,
         error: Exception | None = None,
     ) -> None:
-        self.identity = identity or CheckpointDetectorIdentity(
-            "synthetic-detector", "synthetic-v1"
-        )
+        self.identity = identity or CheckpointDetectorIdentity("synthetic-detector", "synthetic-v1")
         self.profile = profile or _profile()
         self.result = result
         self.error = error
@@ -261,14 +266,24 @@ def test_profile_content_digest_changes_with_every_binding_field() -> None:
         replace(original, pixel_format=PixelFormat.RGBA8888),
         replace(original, checkpoint_ids=original.checkpoint_ids[::-1]),
     )
-    assert len({original.identity.content_sha256, *(item.identity.content_sha256 for item in mutations)}) == 4
+    assert (
+        len(
+            {
+                original.identity.content_sha256,
+                *(item.identity.content_sha256 for item in mutations),
+            }
+        )
+        == 4
+    )
 
 
 def test_frame_geometry_format_and_payload_shape_are_checked_before_detection() -> None:
     detector = StaticCheckpointDetector(_matched())
     source = _source()
     with pytest.raises(CheckpointDetectorContractError, match="geometry"):
-        run_checkpoint_detector(detector, replace(_frame(), ref=replace(_frame().ref, width=3)), expected_source=source)
+        run_checkpoint_detector(
+            detector, replace(_frame(), ref=replace(_frame().ref, width=3)), expected_source=source
+        )
     with pytest.raises(CheckpointDetectorContractError, match="pixel format"):
         run_checkpoint_detector(
             detector,
@@ -286,7 +301,9 @@ def test_frame_geometry_format_and_payload_shape_are_checked_before_detection() 
 def test_detector_output_must_be_typed_and_inside_its_profile() -> None:
     source = _source()
     with pytest.raises(CheckpointDetectorContractError, match="exactly one"):
-        run_checkpoint_detector(StaticCheckpointDetector(object()), _frame(), expected_source=source)
+        run_checkpoint_detector(
+            StaticCheckpointDetector(object()), _frame(), expected_source=source
+        )
     with pytest.raises(CheckpointDetectorContractError, match="outside profile"):
         run_checkpoint_detector(
             StaticCheckpointDetector(_matched("not-in-profile")),
@@ -318,6 +335,93 @@ def test_detector_metadata_change_during_execution_is_rejected() -> None:
         run_checkpoint_detector(detector, _frame(), expected_source=_source())
 
 
+def test_post_detect_metadata_callback_cannot_rewrite_returned_detection() -> None:
+    source = _source()
+    result = _matched()
+
+    class ResultMutatingDetector:
+        def __init__(self) -> None:
+            self.identity_reads = 0
+
+        @property
+        def identity(self) -> CheckpointDetectorIdentity:
+            self.identity_reads += 1
+            if self.identity_reads == 2:
+                object.__setattr__(result, "match", CheckpointMatchKind.UNKNOWN)
+                object.__setattr__(result, "candidate_checkpoint_ids", ())
+                object.__setattr__(result, "confidence", 0.0)
+            return source.detector
+
+        @property
+        def profile(self) -> CheckpointProfile:
+            return source.profile
+
+        def detect(self, frame: Frame, /) -> CheckpointDetection:
+            del frame
+            return result
+
+    with pytest.raises(
+        CheckpointDetectorContractError,
+        match="changed after its exact output was snapshotted",
+    ):
+        run_checkpoint_detector(ResultMutatingDetector(), _frame(), expected_source=source)
+
+
+@pytest.mark.parametrize("mutated_component", ("detector", "profile"))
+def test_detector_cannot_mutate_the_expected_source_during_execution(
+    mutated_component: str,
+) -> None:
+    source = _source()
+    detector = StaticCheckpointDetector(_matched())
+
+    def mutate_expected_source(frame: Frame) -> CheckpointDetection:
+        del frame
+        target = source.detector if mutated_component == "detector" else source.profile
+        object.__setattr__(target, "version", "mutated-version")
+        return _matched()
+
+    detector.detect = mutate_expected_source  # type: ignore[method-assign]
+    with pytest.raises(
+        CheckpointDetectorContractError,
+        match="expected checkpoint source changed",
+    ):
+        run_checkpoint_detector(detector, _frame(), expected_source=source)
+
+
+def test_malformed_expected_source_mutation_remains_a_typed_contract_failure() -> None:
+    source = _source()
+    detector = StaticCheckpointDetector(_matched())
+
+    def corrupt_expected_source(frame: Frame) -> CheckpointDetection:
+        del frame
+        object.__setattr__(source, "detector", object())
+        return _matched()
+
+    detector.detect = corrupt_expected_source  # type: ignore[method-assign]
+    with pytest.raises(
+        CheckpointDetectorContractError,
+        match="expected checkpoint source could not be snapshotted",
+    ):
+        run_checkpoint_detector(detector, _frame(), expected_source=source)
+
+
+def test_detector_cannot_mutate_the_owned_frame_during_execution() -> None:
+    detector = StaticCheckpointDetector(_matched())
+    frame = _frame()
+
+    def mutate_frame(owned_frame: Frame) -> CheckpointDetection:
+        object.__setattr__(
+            owned_frame,
+            "ref",
+            FrameRef(999, owned_frame.captured_monotonic_s, 2, 1),
+        )
+        return _matched()
+
+    detector.detect = mutate_frame  # type: ignore[method-assign]
+    with pytest.raises(CheckpointDetectorContractError, match="changed during detection"):
+        run_checkpoint_detector(detector, frame, expected_source=_source())
+
+
 def test_binder_rejects_same_ref_with_different_bytes_and_same_bytes_with_different_ref() -> None:
     context = _context()
     frame = _frame()
@@ -335,7 +439,9 @@ def test_binder_rejects_same_ref_with_different_bytes_and_same_bytes_with_differ
         bind_checkpoint_evidence(context, evidence, current_frame=changed_ref)
 
 
-def test_binder_rejects_foreign_source_and_profile_route_binding_without_mutating_progress() -> None:
+def test_binder_rejects_foreign_source_and_profile_route_binding_without_mutating_progress() -> (
+    None
+):
     context = _context()
     progress = start_route(context, started_monotonic_s=0.9)
     frame = _frame()
@@ -349,9 +455,7 @@ def test_binder_rejects_foreign_source_and_profile_route_binding_without_mutatin
         bind_checkpoint_evidence(context, foreign_evidence, current_frame=frame)
     assert progress == start_route(context, started_monotonic_s=0.9)
 
-    incomplete_profile = _profile(
-        checkpoint_ids=("synthetic-departure", "synthetic-arrival")
-    )
+    incomplete_profile = _profile(checkpoint_ids=("synthetic-departure", "synthetic-arrival"))
     incomplete_source = _source(profile=incomplete_profile)
     incomplete_context = _context(source=incomplete_source)
     incomplete_evidence = run_checkpoint_detector(
