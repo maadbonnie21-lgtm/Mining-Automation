@@ -21,9 +21,9 @@ activation.
 * :mod:`mining_automation.banking.evidence_intake` -- the immutable future
   bank-evidence intake/reviewer-package design: operator intent vs. reviewer
   truth, cryptographically bound to a finalized package. No pixels collected.
-* :mod:`mining_automation.banking.integration_boundary` -- type/test-level
-  adapters for a future Codex B navigation-arrival source and a future
-  Codex C approved-inventory result, with zero coupling to their branches.
+* :mod:`mining_automation.banking.integration_boundary` -- deliberately closed
+  until navigation and inventory publish reviewed source-owned nominal
+  release receipts. No structural adapter can manufacture workflow evidence.
 
 See ``docs/BANKING.md`` for the full architecture, transition matrix,
 adversarial fail-closed matrix, and future real-evidence specification this
@@ -56,7 +56,6 @@ from .errors import (
     BankDetectorContractError,
     BankDetectorExecutionError,
     BankingError,
-    IntegrationBoundaryContractError,
 )
 from .evidence_intake import (
     MAX_EVIDENCE_PACKAGE_AGE_S,
@@ -66,14 +65,7 @@ from .evidence_intake import (
     OperatorIntentLabel,
     ReviewedBankEvidenceCase,
     ReviewerVerdict,
-    validate_evidence_case_batch,
-)
-from .integration_boundary import (
-    ExternalApprovedInventoryResult,
-    ExternalCheckpointArrivalSource,
-    adapt_checkpoint_arrival,
-    adapt_post_deposit_inventory,
-    adapt_pre_deposit_inventory,
+    validate_release_evidence_case_batch,
 )
 from .perception import (
     BANK_PUBLICATION_CONFIDENCE_FLOOR,
@@ -134,10 +126,7 @@ __all__ = [
     "DepositAttempted",
     "DepositAttemptReceipt",
     "DepositReadiness",
-    "ExternalApprovedInventoryResult",
-    "ExternalCheckpointArrivalSource",
     "FinalizedBankEvidencePackage",
-    "IntegrationBoundaryContractError",
     "InventoryPerceptionResult",
     "OpenBankAttempted",
     "OpenBankAttemptReceipt",
@@ -148,9 +137,6 @@ __all__ = [
     "PreDepositInventoryObservationEvidence",
     "ReviewedBankEvidenceCase",
     "ReviewerVerdict",
-    "adapt_checkpoint_arrival",
-    "adapt_post_deposit_inventory",
-    "adapt_pre_deposit_inventory",
     "advance_banking_workflow",
     "deposit_readiness",
     "evaluate_attempt_receipt_causality",
@@ -159,5 +145,5 @@ __all__ = [
     "initial_banking_workflow_context",
     "run_bank_detector",
     "validate_bank_detector",
-    "validate_evidence_case_batch",
+    "validate_release_evidence_case_batch",
 ]

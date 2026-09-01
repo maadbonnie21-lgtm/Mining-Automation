@@ -6,7 +6,8 @@ This is the offline, non-input architectural foundation for verified banking:
 typed contracts, a platform-independent bank perception seam, a deterministic
 workflow state machine, future attempt-receipt causality contracts, an
 immutable future evidence intake/reviewer design, and a type-level
-integration boundary with the future navigation and inventory subsystems. It
+closed boundary reserved for future source-owned navigation and inventory
+release receipts. It
 does not interact with RuneLite, open a real bank, deposit or withdraw
 anything, implement `WorldState` (Issue #14), activate `MiningController`, or
 implement navigation. See `mining_automation.banking` for the implementation
@@ -67,9 +68,15 @@ BANKING_COMPLETE is terminal; start a new context for the next visit.
 
 The central invariant, enforced structurally rather than by convention: **an
 attempted input action never proves its own success.** `OpenBankAttempted`
-and `DepositAttempted` carry no evidence and can only move the workflow into a
-`*_PENDING` state; only a following fresh, jointly-verified observation can
-advance past it. `CheckpointArrivalEvidence` can only ever produce
+and `DepositAttempted` must carry a causally valid exact receipt before the
+workflow can enter a `*_PENDING` state. The pending state retains that exact
+receipt as an exclusive evidence boundary; only a higher ordered observation
+captured strictly after the receipt time and no more than
+`MAX_ATTEMPT_RECEIPT_AGE_S` later can advance past it. Cached arrival or
+bank-open evidence must also remain within `MAX_BANKING_EVIDENCE_AGE_S` when
+it is composed with a later bank or inventory observation; a shared
+`cycle_id` never makes old evidence durable.
+`CheckpointArrivalEvidence` can only ever produce
 `ARRIVED_AT_BANK_CHECKPOINT` -- it is structurally incapable of producing a
 bank-open or inventory result.
 
@@ -86,8 +93,13 @@ reading. Required semantics:
 | ambiguous/unsupported reading, clean evidence        | `UNKNOWN`, no blocker (genuine uncertainty) |
 | wrong capture geometry                               | `UNKNOWN`, `BANK_GEOMETRY_UNSUPPORTED`      |
 | wrong profile/version                                | rejected, `BANK_PROFILE_MISMATCH`           |
+| wrong bank detector ID/version                       | rejected, `BANK_DETECTOR_*_MISMATCH`        |
+| detector output digest differs from `sha256(frame.payload)` | runner rejects the detector contract; the observation is never published |
 | stale evidence (older than `MAX_BANKING_EVIDENCE_AGE_S`) | rejected, `*_EVIDENCE_STALE`            |
+| fresh observation composed with stale cached arrival/OPEN support | rejected, `SUPPORTING_EVIDENCE_STALE` |
 | mixed-frame provenance (independent source disagrees) | rejected, `EVIDENCE_PROVENANCE_MISMATCH`  |
+| advancing frame from a different evidence `cycle_id`  | rejected, `EVIDENCE_PROVENANCE_MISMATCH`  |
+| duck-typed inventory shape instead of an exact banking observation | rejected, `INVENTORY_EVIDENCE_TYPE_INVALID` |
 | missing detector delivery                            | rejected, `*_OBSERVATION_MISSING` / `*_EVIDENCE_MISSING` -- zero banking authority |
 | obstructed view / ambiguous UI (detector confidently reports UNKNOWN) | accepted, `UNKNOWN`, no blocker -- same as any genuine ambiguous reading |
 | confidently-labeled OPEN/CLOSED below `BANK_PUBLICATION_CONFIDENCE_FLOOR` ("false OPEN"/"false CLOSED") | rejected, `BANK_CONFIDENCE_BELOW_FLOOR`, forced to `UNKNOWN` |
@@ -111,6 +123,7 @@ unsafe case yields zero banking-complete authority (the workflow state does
 not advance and `blockers` is non-empty).
 
 - arrival evidence missing
+- forged or post-construction-mutated arrival contract
 - arrival evidence stale
 - arrival wrong checkpoint identity
 - bank observation missing
@@ -118,6 +131,7 @@ not advance and `blockers` is non-empty).
 - bank wrong profile/version
 - bank wrong frame geometry
 - bank/inventory mixed-frame provenance
+- cross-cycle evidence substituted into an advancing frame
 - bank target found but UI still CLOSED after an open attempt
 - open-bank attempt without a fresh following verification (repeated attempt)
 - deposit requested with inventory UNKNOWN
@@ -127,6 +141,9 @@ not advance and `blockers` is non-empty).
 - duplicate conflicting bank observations (duplicate *agreeing* observations
   are collapsed, not rejected)
 - duplicate conflicting inventory observations
+- malformed second/late observations cannot hide inside an apparently
+  agreeing duplicate; every member is recursively revalidated before equality
+  or collapse
 - unsupported/mismatched capture geometry
 - evidence ordering regression (frame does not advance)
 - route arrival assumption substituted for a bank observation
@@ -138,8 +155,24 @@ not advance and `blockers` is non-empty).
 - ambiguous UI presentation, e.g. mid-transition (same handling as obstruction)
 - false OPEN / false CLOSED: a confidently-labeled reading below the
   publication confidence floor is rejected, never treated as the label it claims
-- duplicate, wrong-provenance, or stale open-bank/deposit attempt receipts
+- missing, duplicate, wrong-provenance, pre-evidence, or stale
+  open-bank/deposit attempt receipts
   (see "Attempt-receipt causality" below) -- every one denies the transition
+- a receipt issued against evidence already older than the attempt freshness
+  limit -- denied with `ATTEMPT_PRECEDING_EVIDENCE_STALE`
+- a higher-frame-id observation captured before or exactly at its accepted
+  attempt-receipt boundary -- remains pending with
+  `POST_ATTEMPT_EVIDENCE_NOT_FRESH`
+- a fresh current observation delivered more than
+  `MAX_ATTEMPT_RECEIPT_AGE_S` after its retained receipt -- remains pending
+  with `POST_ATTEMPT_EVIDENCE_STALE` (the exact upper boundary is accepted)
+- a fresh bank observation composed with stale cached arrival evidence, or a
+  fresh inventory observation composed with stale cached OPEN evidence --
+  denied with `SUPPORTING_EVIDENCE_STALE`
+- a malformed nested pending observation -- rejected by its evidence-type
+  blocker before any receipt-boundary field is dereferenced
+- detector output whose claimed frame digest does not equal the SHA-256 of the
+  exact input payload, or a detector that mutates that payload during a run
 - bank closes unexpectedly after `BANK_OPEN_VERIFIED` (a stray re-observation
   is an unexpected event for that state, not a re-verification)
 - interrupted transaction: a stray/replayed event (e.g. an old arrival) while
@@ -168,6 +201,14 @@ and blockers, and that replaying the same scenario twice is byte-identical:
 - a retried open-bank attempt after a fault reuses a receipt id and is
   rejected as a duplicate, even though its provenance is otherwise valid
   (fault/recovery, ties attempt-receipt causality to replay)
+- delayed delivery of a higher-frame-id OPEN observation captured before the
+  open attempt -- remains pending
+- delayed delivery of a higher-frame-id EMPTY inventory observation captured
+  before the deposit attempt -- remains pending
+- delayed fresh-current OPEN/EMPTY observations outside the retained receipt
+  window -- remain pending with `POST_ATTEMPT_EVIDENCE_STALE`
+- fresh inventory paired with an old cached bank-OPEN prerequisite -- remains
+  `BANK_OPEN_VERIFIED` with `SUPPORTING_EVIDENCE_STALE`
 
 None of these scenarios may be described as real OSRS evidence; they are
 built exclusively from `mining_automation.banking.testing` synthetic fixtures.
@@ -177,9 +218,11 @@ built exclusively from `mining_automation.banking.testing` synthetic fixtures.
 `mining_automation.banking.attempts` defines `OpenBankAttemptReceipt` and
 `DepositAttemptReceipt`: typed, data-only records a future orchestrator that
 *does* issue a real click could attach to `OpenBankAttempted`/`DepositAttempted`
-purely for causality bookkeeping. Supplying a receipt is optional -- omitting
-it (`receipt=None`, the default) behaves exactly as if receipts did not
-exist, so every pre-existing test and transition is unaffected.
+purely for causality bookkeeping. A missing receipt is denied with
+`ATTEMPT_RECEIPT_MISSING`; there is no receipt-less path into either pending
+state. These local dataclasses do not prove that an input source issued a
+physical action; a future live source must supply its own authenticated
+issuance identity/seal.
 
 A receipt proves nothing about the attempted action's outcome. It only lets
 `evaluate_attempt_receipt_causality` check that the attempt is not a replay:
@@ -188,15 +231,26 @@ A receipt proves nothing about the attempted action's outcome. It only lets
 | --- | --- |
 | `attempt_id` already used earlier in this visit | rejected, `ATTEMPT_RECEIPT_DUPLICATE` |
 | bound to evidence other than what the workflow currently holds | rejected, `ATTEMPT_RECEIPT_WRONG_PROVENANCE` |
+| issued before its bound preceding evidence | rejected, `ATTEMPT_RECEIPT_PRECEDES_EVIDENCE` |
+| bound preceding evidence already stale when issued | rejected, `ATTEMPT_PRECEDING_EVIDENCE_STALE` |
 | issued too long before the evaluation time | rejected, `ATTEMPT_RECEIPT_STALE` |
 | issued after the evaluation time | rejected, `ATTEMPT_RECEIPT_FROM_FUTURE` |
+| outcome capture is not strictly after the retained receipt | rejected, `POST_ATTEMPT_EVIDENCE_NOT_FRESH` |
+| outcome capture is more than `MAX_ATTEMPT_RECEIPT_AGE_S` after the retained receipt | rejected, `POST_ATTEMPT_EVIDENCE_STALE` |
 
 A rejected receipt denies the `OpenBankAttempted`/`DepositAttempted`
 transition outright -- the workflow stays in `BANK_CLOSED_VERIFIED` or
 `DEPOSIT_READY_VERIFIED` respectively. An accepted receipt still only reaches
-a `*_PENDING` state; only a subsequent fresh `BankObservationEvidence` or
-inventory observation event can prove the attempt worked, exactly as for a
-receipt-less attempt.
+a `*_PENDING` state and is retained there. Only a strictly post-receipt fresh
+`BankObservationEvidence` or inventory observation event captured inside the
+fixed receipt window can prove the attempt worked. Equal-boundary timestamps
+are not post-attempt evidence; over-window outcomes remain pending and retain
+the exact receipt.
+
+`deposit_readiness` is likewise a time-bounded, blocker-aware snapshot. Its
+caller must provide the current monotonic evaluation time; stale/future
+support or blockers from a denied transition always resolve to `NOT_READY`.
+It is not a durable token and cannot authorize physical input.
 
 ## Immutable future bank-evidence intake / reviewer design (not yet collected)
 
@@ -213,50 +267,47 @@ Two invariants, both enforced by construction:
   the operator's claim -- can make a package releasable.
 * **Reviewer truth is cryptographically bound to a finalized package.**
   `ReviewedBankEvidenceCase` can only be constructed when
-  `verdict.bound_package_sha256 == package.raw_sha256`; a mismatch raises at
-  construction time. There is no update/replace path -- correcting a case
-  means producing a brand-new package and verdict, never mutating an
-  accepted one.
+  `verdict.bound_package_sha256 == package.package_sha256`; the canonical
+  package digest covers the raw hash, manifest hash, checkpoint/profile,
+  operator label, identities, and chronology. A mismatch raises at
+  construction time. Operator and reviewer identities must differ, and
+  operator labeling -> package finalization -> review order is strict
+  (equality at either boundary is rejected). Canonical timestamps are exact,
+  finite, non-negative floats, with signed zero normalized before hashing.
 
-`validate_evidence_case_batch` is the pure adversarial check a future release
-gate would run over a proposed batch, covering every case
+`validate_release_evidence_case_batch` is the fixed-policy release check over
+a proposed batch, covering every case
 `docs/BANKING.md`'s real-evidence table above requires
 (`REQUIRED_BANK_EVIDENCE_CASES` == every `BankEvidenceCase` member, including
-`OBSTRUCTED_AMBIGUOUS` and `WRONG_LOCATION_NEGATIVE`):
+`OBSTRUCTED_AMBIGUOUS` and `WRONG_LOCATION_NEGATIVE`). Its coverage and
+freshness policy cannot be overridden by a caller. The configurable
+policy engine is underscore-private and absent from both module and package
+`__all__`; it is not a supported release-facing API. The expected
+checkpoint/profile are still explicit caller inputs until a source-owned
+deployment policy exists:
 
 | Defect | Blocker |
 | --- | --- |
-| duplicate `package_id` in the batch | `DUPLICATE_EVIDENCE_PACKAGE` |
+| duplicate package ID, canonical package digest, or raw digest in the batch | `DUPLICATE_EVIDENCE_PACKAGE` |
 | a rejected verdict included as if it were release evidence | `REJECTED_EVIDENCE_PACKAGE_INCLUDED` |
-| verdict reviewed a package before that package was finalized | `REVIEWER_VERDICT_PRECEDES_FINALIZATION` |
 | package older than `MAX_EVIDENCE_PACKAGE_AGE_S` | `EVIDENCE_PACKAGE_STALE` |
 | package foreign to the expected checkpoint/profile | `CHECKPOINT_IDENTITY_MISMATCH` / `BANK_PROFILE_MISMATCH` |
+| operator/package/review chronology is in the future | `EVIDENCE_FROM_FUTURE` |
 | batch missing coverage of a required case | `MISSING_REQUIRED_EVIDENCE_CASE` |
 
-An empty result means the batch is structurally acceptable, never that any
-pixel inside it is real or correct -- this function never inspects pixels.
+An empty result means the batch is structurally acceptable for the supplied
+target, never that any pixel or opaque manifest digest is real or correct --
+this function never loads a manifest or inspects pixels.
 
-## Integration boundary with Codex B and Codex C (type/test level only)
+## Closed integration boundary
 
-`mining_automation.banking.integration_boundary` defines the minimal
-`Protocol` shape a future Codex B fixed-route/checkpoint arrival result
-(`ExternalCheckpointArrivalSource`) and a future Codex C approved-inventory
-result (`ExternalApprovedInventoryResult`) must satisfy, plus pure adapters
-(`adapt_checkpoint_arrival`, `adapt_pre_deposit_inventory`,
-`adapt_post_deposit_inventory`) that convert a conforming external value into
-this package's own workflow events. Conformance is checked structurally, the
-same way `BankDetector` already lets an unrelated detector implementation
-plug in without a shared base class -- this module never imports, depends on,
-or merges Codex B's or Codex C's branches. A non-conforming source raises
-`IntegrationBoundaryContractError` rather than being guessed or repaired.
-
-The adapters produce ordinary workflow events (`CheckpointArrivalEvidence`,
-`PreDepositInventoryObservationEvidence`, `PostDepositInventoryObservationEvidence`)
-and nothing else -- they cannot construct or return a `BankInterfaceState`, a
-verified workflow state, or any other form of authority. Composing navigation
-arrival, bank perception, and inventory perception into one end-to-end "safe
-to resume mining" decision remains out of scope for this package (see
-"Architecture boundary" below) and is not implemented anywhere in this module.
+`mining_automation.banking.integration_boundary` deliberately exports no
+protocols or adapters. Codex B's current navigation endpoint export is
+explicitly non-authoritative, and Inventory V3 does not yet publish a reviewed
+nominal release identity/receipt contract. Duck typing either lane into a
+banking workflow event would manufacture authority, so no convenience seam is
+available. A future integration change must consume the exact source-owned
+nominal contracts after their owning lanes publish and approve them.
 
 ## Future real-evidence specification (not yet collected)
 
@@ -270,8 +321,8 @@ has been collected, and this foundation does not depend on it existing yet.
 | Valid bank target / interface presentation         | A frame in which the bank booth/chest geometry matches an approved `BankProfileIdentity` (exact `frame_width`/`frame_height` and `schema_version`) for the current client window. |
 | CLOSED state                                       | A frame with no bank interface panel visible, at the approved profile geometry, with detector confidence at or above its published floor. |
 | OPEN interface                                     | A frame with the bank interface panel fully rendered (not mid-transition/animating), at the approved profile geometry, confidence at or above its published floor. |
-| Non-empty / full inventory while OPEN              | An inventory reading bound to the *same* evidence cycle as the OPEN reading (matching `BankEvidenceProvenance`), with a known `occupied_slots` count and confidence at or above `INVENTORY_PUBLICATION_CONFIDENCE_FLOOR`. |
-| Empty inventory after deposit                      | A fresh post-deposit inventory reading (new `BankEvidenceProvenance`, strictly advancing frame id, age within `MAX_BANKING_EVIDENCE_AGE_S`) with `occupied_slots == 0` and confidence at or above the floor. |
+| Non-empty / full inventory while OPEN              | An inventory reading bound to the *same* evidence cycle as the OPEN reading (matching `cycle_id`, while frame id/time still advance), with a known `occupied_slots` count and confidence at or above `INVENTORY_PUBLICATION_CONFIDENCE_FLOOR`. |
+| Empty inventory after deposit                      | A fresh post-deposit inventory reading captured strictly after and no more than `MAX_ATTEMPT_RECEIPT_AGE_S` beyond the accepted deposit-attempt receipt boundary (new `BankEvidenceProvenance`, strictly advancing frame id and capture time, age within `MAX_BANKING_EVIDENCE_AGE_S`) with `occupied_slots == 0` and confidence at or above the floor. |
 | Obstruction / ambiguous presentation               | A frame where the detector cannot confidently classify OPEN vs. CLOSED (partial occlusion, mid-animation, overlapping UI) -- must resolve to `UNKNOWN` with no blocker, never guessed as OPEN or CLOSED. |
 | Wrong-location negative                            | A frame captured away from any approved `BankCheckpointIdentity` -- must be rejected via `CHECKPOINT_IDENTITY_MISMATCH`/`BANK_GEOMETRY_UNSUPPORTED`, never silently treated as UNKNOWN-and-ignored. |
 
@@ -287,11 +338,29 @@ A future banking orchestrator may only grant end-to-end authority
 
 1. approved navigation arrival evidence (owned by fixed-route/checkpoint
    navigation, not this package),
-2. an accepted `BankPerceptionResult` at `OPEN` for the expected checkpoint
-   and profile, and
-3. an accepted inventory reading (via `evaluate_inventory_observation`)
-   showing `occupied_slots == 0`, bound to the same evidence cycle as (2).
+2. an accepted `BankPerceptionResult` at `OPEN` for the expected checkpoint,
+   profile, and exact bank detector ID/version, and
+3. a future source-owned approved inventory result (no adapter exists yet)
+   showing `occupied_slots == 0`, bound
+   to the same evidence cycle as (2).
 
 No subsystem may synthesize any of the other two. This package supplies (2)
-and the inventory half of (3) as pure, typed, non-input building blocks; it
-does not itself perform (1) and does not decide when to resume mining.
+and banking-local exact inventory-observation evaluation as pure, typed,
+non-input building blocks; that local evaluation is not Inventory V3 approval.
+It does not itself perform (1) and does not decide when to resume mining.
+
+These contracts remain offline and non-authoritative. Actor IDs are
+self-asserted strings, the evidence package has no source-owned attestation
+seal or raw-capture clock identity, and monotonic timestamps are comparable
+only inside one identified clock domain/boot. The manifest is an opaque digest,
+not a schema-validated proof of cross-artifact causality. Python objects also
+cannot defend against a hostile caller coordinating `object.__setattr__`
+mutation of both a value and its retained snapshot/binding. A live release
+boundary must replace those local assumptions with an authenticated
+source-owned immutable seal. None is invented here.
+
+The banking-local inventory observation types and detector identity strings
+are synthetic contract scaffolding, not an Inventory V3 release receipt. No
+adapter is exported, and no live caller may treat local `READY` or
+`BANKING_COMPLETE` state as cross-lane authority until the source-owned
+navigation and inventory release contracts are approved and integrated.

@@ -25,6 +25,29 @@ from mining_automation.banking.testing import (
 )
 
 
+class _OverloadedFloat(float):
+    def __le__(self, other: object) -> bool:
+        return False
+
+    def __ge__(self, other: object) -> bool:
+        return True
+
+    def __rsub__(self, other: object) -> float:
+        return 0.0
+
+
+class _OverloadedString(str):
+    def __eq__(self, other: object) -> bool:
+        return False
+
+    __hash__ = str.__hash__
+
+
+class _OverloadedFrozenSet(frozenset[str]):
+    def __contains__(self, item: object) -> bool:
+        return False
+
+
 def test_open_bank_attempt_receipt_accepts_valid_values() -> None:
     receipt = build_open_bank_attempt_receipt()
     assert receipt.attempt_id == "synthetic-open-attempt-1"
@@ -51,7 +74,9 @@ def test_open_bank_attempt_receipt_rejects_invalid_issued_time(issued_monotonic_
 def test_open_bank_attempt_receipt_rejects_non_exact_provenance() -> None:
     with pytest.raises(ValueError, match="preceding_provenance must be an exact"):
         OpenBankAttemptReceipt(
-            attempt_id="a", issued_monotonic_s=0.0, preceding_provenance="not-a-provenance"  # type: ignore[arg-type]
+            attempt_id="a",
+            issued_monotonic_s=0.0,
+            preceding_provenance="not-a-provenance",  # type: ignore[arg-type]
         )
 
 
@@ -60,10 +85,36 @@ def test_deposit_attempt_receipt_accepts_valid_values() -> None:
     assert receipt.attempt_id == "synthetic-deposit-attempt-1"
 
 
+@pytest.mark.parametrize("receipt_type", [OpenBankAttemptReceipt, DepositAttemptReceipt])
+def test_attempt_receipt_rejects_overloaded_timestamp_subclass(
+    receipt_type: type[OpenBankAttemptReceipt] | type[DepositAttemptReceipt],
+) -> None:
+    with pytest.raises(ValueError, match="issued_monotonic_s must be a finite number"):
+        receipt_type(
+            attempt_id="attempt",
+            issued_monotonic_s=_OverloadedFloat(1.0),
+            preceding_provenance=build_provenance(),
+        )
+
+
+@pytest.mark.parametrize("receipt_type", [OpenBankAttemptReceipt, DepositAttemptReceipt])
+def test_attempt_receipt_rejects_overloaded_id_subclass(
+    receipt_type: type[OpenBankAttemptReceipt] | type[DepositAttemptReceipt],
+) -> None:
+    with pytest.raises(ValueError, match="attempt_id must be a non-empty string"):
+        receipt_type(
+            attempt_id=_OverloadedString("duplicate"),
+            issued_monotonic_s=0.0,
+            preceding_provenance=build_provenance(),
+        )
+
+
 def test_deposit_attempt_receipt_rejects_non_exact_provenance() -> None:
     with pytest.raises(ValueError, match="preceding_provenance must be an exact"):
         DepositAttemptReceipt(
-            attempt_id="a", issued_monotonic_s=0.0, preceding_provenance="not-a-provenance"  # type: ignore[arg-type]
+            attempt_id="a",
+            issued_monotonic_s=0.0,
+            preceding_provenance="not-a-provenance",  # type: ignore[arg-type]
         )
 
 
@@ -88,7 +139,9 @@ def test_attempt_causality_result_accepted_rejects_blockers() -> None:
 
 
 def test_attempt_causality_result_rejected_requires_a_blocker() -> None:
-    with pytest.raises(ValueError, match="a rejected causality result must carry at least one blocker"):
+    with pytest.raises(
+        ValueError, match="a rejected causality result must carry at least one blocker"
+    ):
         AttemptCausalityResult(accepted=False)
 
 
@@ -143,7 +196,9 @@ def test_evaluate_attempt_receipt_causality_rejects_wrong_provenance() -> None:
 
 def test_evaluate_attempt_receipt_causality_rejects_stale_receipt() -> None:
     provenance = build_provenance()
-    receipt = build_open_bank_attempt_receipt(issued_monotonic_s=0.0, preceding_provenance=provenance)
+    receipt = build_open_bank_attempt_receipt(
+        issued_monotonic_s=0.0, preceding_provenance=provenance
+    )
     result = evaluate_attempt_receipt_causality(
         receipt,
         expected_preceding_provenance=provenance,
@@ -154,8 +209,10 @@ def test_evaluate_attempt_receipt_causality_rejects_stale_receipt() -> None:
 
 
 def test_evaluate_attempt_receipt_causality_rejects_receipt_from_the_future() -> None:
-    provenance = build_provenance()
-    receipt = build_open_bank_attempt_receipt(issued_monotonic_s=10.0, preceding_provenance=provenance)
+    provenance = build_provenance(captured_monotonic_s=10.0)
+    receipt = build_open_bank_attempt_receipt(
+        issued_monotonic_s=10.0, preceding_provenance=provenance
+    )
     result = evaluate_attempt_receipt_causality(
         receipt,
         expected_preceding_provenance=provenance,
@@ -163,6 +220,66 @@ def test_evaluate_attempt_receipt_causality_rejects_receipt_from_the_future() ->
         evaluated_monotonic_s=0.0,
     )
     assert result.blockers == (BankingBlocker.ATTEMPT_RECEIPT_FROM_FUTURE,)
+
+
+def test_evaluate_attempt_receipt_causality_rejects_receipt_predating_bound_evidence() -> None:
+    provenance = build_provenance(frame_id=5, captured_monotonic_s=5.0)
+    receipt = build_open_bank_attempt_receipt(
+        issued_monotonic_s=4.0,
+        preceding_provenance=provenance,
+    )
+    result = evaluate_attempt_receipt_causality(
+        receipt,
+        expected_preceding_provenance=provenance,
+        used_attempt_ids=frozenset(),
+        evaluated_monotonic_s=5.0,
+    )
+    assert result.blockers == (BankingBlocker.ATTEMPT_RECEIPT_PRECEDES_EVIDENCE,)
+
+
+def test_attempt_receipt_accepts_preceding_evidence_at_exact_freshness_boundary() -> None:
+    provenance = build_provenance(captured_monotonic_s=0.0)
+    receipt = build_open_bank_attempt_receipt(
+        issued_monotonic_s=MAX_ATTEMPT_RECEIPT_AGE_S,
+        preceding_provenance=provenance,
+    )
+    result = evaluate_attempt_receipt_causality(
+        receipt,
+        expected_preceding_provenance=provenance,
+        used_attempt_ids=frozenset(),
+        evaluated_monotonic_s=MAX_ATTEMPT_RECEIPT_AGE_S,
+    )
+    assert result.accepted
+
+
+def test_attempt_receipt_rejects_stale_preceding_evidence_at_issue_time() -> None:
+    provenance = build_provenance(captured_monotonic_s=0.0)
+    issued = MAX_ATTEMPT_RECEIPT_AGE_S + 0.001
+    receipt = build_open_bank_attempt_receipt(
+        issued_monotonic_s=issued,
+        preceding_provenance=provenance,
+    )
+    result = evaluate_attempt_receipt_causality(
+        receipt,
+        expected_preceding_provenance=provenance,
+        used_attempt_ids=frozenset(),
+        evaluated_monotonic_s=issued,
+    )
+    assert result.blockers == (BankingBlocker.ATTEMPT_PRECEDING_EVIDENCE_STALE,)
+
+
+def test_attempt_evaluator_revalidates_mutated_exact_receipt() -> None:
+    provenance = build_provenance()
+    receipt = build_open_bank_attempt_receipt(preceding_provenance=provenance)
+    object.__setattr__(receipt, "issued_monotonic_s", float("nan"))
+
+    with pytest.raises(ValueError, match="issued_monotonic_s must be a finite number"):
+        evaluate_attempt_receipt_causality(
+            receipt,
+            expected_preceding_provenance=provenance,
+            used_attempt_ids=frozenset(),
+            evaluated_monotonic_s=0.0,
+        )
 
 
 @pytest.mark.parametrize("evaluated_monotonic_s", [float("nan"), True, "not-a-number"])
@@ -229,10 +346,34 @@ def test_evaluate_attempt_receipt_causality_rejects_wrong_expected_provenance_ty
 
 
 def test_evaluate_attempt_receipt_causality_rejects_wrong_used_attempt_ids_type() -> None:
-    with pytest.raises(TypeError, match="used_attempt_ids must be a frozenset of str"):
+    with pytest.raises(TypeError, match="used_attempt_ids must be a frozenset of exact"):
         evaluate_attempt_receipt_causality(
             build_open_bank_attempt_receipt(),
             expected_preceding_provenance=build_provenance(),
             used_attempt_ids={"not", "a", "frozenset"},  # type: ignore[arg-type]
             evaluated_monotonic_s=0.0,
+        )
+
+
+def test_evaluate_attempt_receipt_causality_rejects_overloaded_frozenset() -> None:
+    with pytest.raises(TypeError, match="frozenset of exact"):
+        evaluate_attempt_receipt_causality(
+            build_open_bank_attempt_receipt(attempt_id="duplicate"),
+            expected_preceding_provenance=build_provenance(),
+            used_attempt_ids=_OverloadedFrozenSet({"duplicate"}),
+            evaluated_monotonic_s=0.0,
+        )
+
+
+@pytest.mark.parametrize("max_age_s", [float("nan"), float("inf"), -1.0, True])
+def test_evaluate_attempt_receipt_causality_rejects_invalid_max_age(
+    max_age_s: object,
+) -> None:
+    with pytest.raises(ValueError, match="max_age_s must be finite and non-negative"):
+        evaluate_attempt_receipt_causality(
+            build_open_bank_attempt_receipt(),
+            expected_preceding_provenance=build_provenance(),
+            used_attempt_ids=frozenset(),
+            evaluated_monotonic_s=0.0,
+            max_age_s=max_age_s,  # type: ignore[arg-type]
         )

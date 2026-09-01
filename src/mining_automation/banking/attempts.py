@@ -48,21 +48,27 @@ MAX_ATTEMPT_RECEIPT_AGE_S: Final[float] = 1.0
 
 
 def _finite_float(value: object) -> float | None:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return None
-    converted = float(value)
-    return converted if isfinite(converted) else None
+    if type(value) is int:
+        try:
+            return float(value)
+        except OverflowError:
+            return None
+    if type(value) is float:
+        converted = value
+        return converted if isfinite(converted) else None
+    return None
 
 
 def _validate_receipt_fields(
     attempt_id: str, issued_monotonic_s: float, preceding_provenance: BankEvidenceProvenance
 ) -> None:
-    if not isinstance(attempt_id, str) or not attempt_id.strip():
+    if type(attempt_id) is not str or not attempt_id.strip():
         raise ValueError("attempt_id must be a non-empty string")
     if _finite_float(issued_monotonic_s) is None:
         raise ValueError("issued_monotonic_s must be a finite number")
     if type(preceding_provenance) is not BankEvidenceProvenance:
         raise ValueError("preceding_provenance must be an exact BankEvidenceProvenance")
+    BankEvidenceProvenance.__post_init__(preceding_provenance)
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,20 +148,27 @@ def evaluate_attempt_receipt_causality(
     """Resolve one attempt receipt into a trustworthy-bookkeeping verdict.
 
     Duplicate (``attempt_id`` already in ``used_attempt_ids``), wrong-provenance
-    (bound to evidence other than ``expected_preceding_provenance``), and stale
-    or from-the-future receipts are all rejected. A caller must never advance
-    workflow state on an accepted result alone -- see the module docstring.
+    (bound to evidence other than ``expected_preceding_provenance``), receipts
+    claiming to predate that evidence, and stale or from-the-future receipts
+    are all rejected. A caller must never advance workflow state on an accepted
+    result alone -- see the module docstring.
     """
-    if type(receipt) is not OpenBankAttemptReceipt and type(receipt) is not DepositAttemptReceipt:
-        raise TypeError(
-            "receipt must be an exact OpenBankAttemptReceipt or DepositAttemptReceipt"
-        )
+    if type(receipt) is OpenBankAttemptReceipt:
+        OpenBankAttemptReceipt.__post_init__(receipt)
+    elif type(receipt) is DepositAttemptReceipt:
+        DepositAttemptReceipt.__post_init__(receipt)
+    else:
+        raise TypeError("receipt must be an exact OpenBankAttemptReceipt or DepositAttemptReceipt")
     if type(expected_preceding_provenance) is not BankEvidenceProvenance:
         raise TypeError("expected_preceding_provenance must be an exact BankEvidenceProvenance")
-    if not isinstance(used_attempt_ids, frozenset) or any(
-        not isinstance(item, str) for item in used_attempt_ids
+    BankEvidenceProvenance.__post_init__(expected_preceding_provenance)
+    if type(used_attempt_ids) is not frozenset or any(
+        type(item) is not str or not item.strip() for item in used_attempt_ids
     ):
-        raise TypeError("used_attempt_ids must be a frozenset of str")
+        raise TypeError("used_attempt_ids must be a frozenset of exact non-empty str")
+    maximum_age = _finite_float(max_age_s)
+    if maximum_age is None or maximum_age < 0.0:
+        raise ValueError("max_age_s must be finite and non-negative")
 
     blockers: list[BankingBlocker] = []
 
@@ -163,15 +176,23 @@ def evaluate_attempt_receipt_causality(
         blockers.append(BankingBlocker.ATTEMPT_RECEIPT_DUPLICATE)
     if receipt.preceding_provenance != expected_preceding_provenance:
         blockers.append(BankingBlocker.ATTEMPT_RECEIPT_WRONG_PROVENANCE)
+    issued = _finite_float(receipt.issued_monotonic_s)
+    preceding_captured = _finite_float(receipt.preceding_provenance.frame.captured_monotonic_s)
+    if issued is None or preceding_captured is None:  # revalidation above makes this defensive
+        raise ValueError("receipt timestamps must use exact finite numeric primitives")
+    if issued < preceding_captured:
+        blockers.append(BankingBlocker.ATTEMPT_RECEIPT_PRECEDES_EVIDENCE)
+    elif issued - preceding_captured > maximum_age:
+        blockers.append(BankingBlocker.ATTEMPT_PRECEDING_EVIDENCE_STALE)
 
     evaluated = _finite_float(evaluated_monotonic_s)
     if evaluated is None:
         blockers.append(BankingBlocker.ATTEMPT_RECEIPT_EVALUATION_TIME_INVALID)
     else:
-        age_s = evaluated - receipt.issued_monotonic_s
+        age_s = evaluated - issued
         if age_s < 0.0:
             blockers.append(BankingBlocker.ATTEMPT_RECEIPT_FROM_FUTURE)
-        elif age_s > max_age_s:
+        elif age_s > maximum_age:
             blockers.append(BankingBlocker.ATTEMPT_RECEIPT_STALE)
 
     if blockers:

@@ -45,15 +45,13 @@ INVENTORY_CAPACITY: Final[int] = 28
 
 
 def _is_integer(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
+    return type(value) is int
 
 
 def _is_finite_number(value: object) -> bool:
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, int):
+    if type(value) is int:
         return True
-    return isinstance(value, float) and isfinite(value)
+    return type(value) is float and isfinite(value)
 
 
 def _validate_confidence(confidence: float) -> None:
@@ -62,13 +60,13 @@ def _validate_confidence(confidence: float) -> None:
 
 
 def _validate_non_empty_string(value: object, field_name: str) -> None:
-    if not isinstance(value, str) or not value.strip():
+    if type(value) is not str or not value.strip():
         raise ValueError(f"{field_name} must be a non-empty string")
 
 
 def _validate_sha256_digest(value: object, field_name: str) -> None:
     if (
-        not isinstance(value, str)
+        type(value) is not str
         or len(value) != 64
         or any(character not in "0123456789abcdef" for character in value)
     ):
@@ -144,6 +142,14 @@ class BankEvidenceProvenance:
     def __post_init__(self) -> None:
         if type(self.frame) is not FrameRef:
             raise ValueError("frame must be an exact FrameRef")
+        if (
+            type(self.frame.frame_id) is not int
+            or type(self.frame.captured_monotonic_s) not in (int, float)
+            or type(self.frame.width) is not int
+            or type(self.frame.height) is not int
+        ):
+            raise ValueError("frame identity fields must use exact numeric primitives")
+        FrameRef.__post_init__(self.frame)
         _validate_non_empty_string(self.cycle_id, "cycle_id")
         _validate_sha256_digest(self.frame_sha256, "frame_sha256")
 
@@ -172,6 +178,9 @@ class BankObservation:
         _validate_confidence(self.confidence)
         _validate_non_empty_string(self.detector_id, "detector_id")
         _validate_non_empty_string(self.detector_version, "detector_version")
+        BankCheckpointIdentity.__post_init__(self.identity)
+        BankProfileIdentity.__post_init__(self.profile)
+        BankEvidenceProvenance.__post_init__(self.provenance)
 
 
 def _validate_inventory_observation_fields(
@@ -182,8 +191,16 @@ def _validate_inventory_observation_fields(
 ) -> None:
     if type(state) is not InventoryState:
         raise ValueError("state must be an exact InventoryState")
+    if (
+        (state.occupied_slots is not None and type(state.occupied_slots) is not int)
+        or type(state.capacity) is not int
+        or type(state.confidence) not in (int, float)
+    ):
+        raise ValueError("inventory state fields must use exact numeric primitives")
+    InventoryState.__post_init__(state)
     if type(provenance) is not BankEvidenceProvenance:
         raise ValueError("provenance must be an exact BankEvidenceProvenance")
+    BankEvidenceProvenance.__post_init__(provenance)
     _validate_non_empty_string(detector_id, "detector_id")
     _validate_non_empty_string(detector_version, "detector_version")
 
@@ -245,8 +262,10 @@ class BankingBlocker(StrEnum):
     EVIDENCE_FROM_FUTURE = "evidence_from_future"
     EVIDENCE_ORDERING_REGRESSION = "evidence_ordering_regression"
     EVIDENCE_PROVENANCE_MISMATCH = "evidence_provenance_mismatch"
+    SUPPORTING_EVIDENCE_STALE = "supporting_evidence_stale"
 
     ARRIVAL_EVIDENCE_MISSING = "arrival_evidence_missing"
+    ARRIVAL_EVIDENCE_TYPE_INVALID = "arrival_evidence_type_invalid"
     ARRIVAL_EVIDENCE_STALE = "arrival_evidence_stale"
     ARRIVAL_SUBSTITUTED_FOR_OBSERVATION = "arrival_substituted_for_observation"
 
@@ -257,22 +276,29 @@ class BankingBlocker(StrEnum):
     BANK_PROFILE_MISMATCH = "bank_profile_mismatch"
     BANK_GEOMETRY_UNSUPPORTED = "bank_geometry_unsupported"
     BANK_EVIDENCE_STALE = "bank_evidence_stale"
+    BANK_DETECTOR_ID_MISMATCH = "bank_detector_id_mismatch"
+    BANK_DETECTOR_VERSION_MISMATCH = "bank_detector_version_mismatch"
     BANK_STATE_UNKNOWN = "bank_state_unknown"
     BANK_CONFIDENCE_BELOW_FLOOR = "bank_confidence_below_floor"
     DUPLICATE_CONFLICTING_BANK_OBSERVATIONS = "duplicate_conflicting_bank_observations"
     OPEN_ATTEMPT_WITHOUT_VERIFICATION = "open_attempt_without_verification"
 
+    ATTEMPT_RECEIPT_MISSING = "attempt_receipt_missing"
+    ATTEMPT_RECEIPT_TYPE_INVALID = "attempt_receipt_type_invalid"
     ATTEMPT_RECEIPT_EVALUATION_TIME_INVALID = "attempt_receipt_evaluation_time_invalid"
     ATTEMPT_RECEIPT_FROM_FUTURE = "attempt_receipt_from_future"
     ATTEMPT_RECEIPT_STALE = "attempt_receipt_stale"
+    ATTEMPT_RECEIPT_PRECEDES_EVIDENCE = "attempt_receipt_precedes_evidence"
+    ATTEMPT_PRECEDING_EVIDENCE_STALE = "attempt_preceding_evidence_stale"
     ATTEMPT_RECEIPT_WRONG_PROVENANCE = "attempt_receipt_wrong_provenance"
     ATTEMPT_RECEIPT_DUPLICATE = "attempt_receipt_duplicate"
+    POST_ATTEMPT_EVIDENCE_NOT_FRESH = "post_attempt_evidence_not_fresh"
+    POST_ATTEMPT_EVIDENCE_STALE = "post_attempt_evidence_stale"
 
     DUPLICATE_EVIDENCE_PACKAGE = "duplicate_evidence_package"
     REJECTED_EVIDENCE_PACKAGE_INCLUDED = "rejected_evidence_package_included"
     MISSING_REQUIRED_EVIDENCE_CASE = "missing_required_evidence_case"
     EVIDENCE_PACKAGE_STALE = "evidence_package_stale"
-    REVIEWER_VERDICT_PRECEDES_FINALIZATION = "reviewer_verdict_precedes_finalization"
 
     INVENTORY_EVIDENCE_MISSING = "inventory_evidence_missing"
     INVENTORY_EVIDENCE_TYPE_INVALID = "inventory_evidence_type_invalid"
@@ -281,9 +307,7 @@ class BankingBlocker(StrEnum):
     INVENTORY_LAYOUT_MISMATCH = "inventory_layout_mismatch"
     INVENTORY_CONFIDENCE_BELOW_FLOOR = "inventory_confidence_below_floor"
     INVENTORY_ALREADY_EMPTY = "inventory_already_empty"
-    DUPLICATE_CONFLICTING_INVENTORY_OBSERVATIONS = (
-        "duplicate_conflicting_inventory_observations"
-    )
+    DUPLICATE_CONFLICTING_INVENTORY_OBSERVATIONS = "duplicate_conflicting_inventory_observations"
     DEPOSIT_WITHOUT_INVENTORY_VERIFICATION = "deposit_without_inventory_verification"
     DEPOSIT_INVENTORY_STILL_NON_EMPTY = "deposit_inventory_still_non_empty"
     POST_DEPOSIT_INVENTORY_UNKNOWN = "post_deposit_inventory_unknown"
