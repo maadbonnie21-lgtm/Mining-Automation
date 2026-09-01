@@ -25,15 +25,29 @@ activation or a supported end-to-end workflow.
 
 ## Open perception release gates
 
-- Inventory: one separately authorized, independently reviewed seven-case
-  campaign, exact evaluator PASS, source-owned approval, and a later reviewed
-  production binding.
-- Resource: real depletion/respawn cycles for north-west, center, and
-  north-east; real obstruction; unsupported-location and neighboring
-  copper/tin/terrain negatives; and final exact-view startup/envelope review.
+- **B — offline resource release-evidence boundary:** the generic development
+  capture/annotation tools are not a release authority. A separate passive,
+  source-owned immutable campaign and independent-review boundary must be
+  implemented and accepted before resource C1 collection.
+- **C1 — fresh empirical evidence:** inventory live authorization, the
+  seven-case campaign, independent reviewer truth, and exact frozen-evaluator
+  conformance; plus resource depletion/respawn cycles for north-west, center,
+  and north-east, a real obstruction, unsupported location, neighboring
+  copper/tin/terrain negatives, and a fresh exact-view startup positive through
+  the accepted release-evidence boundary.
+- **C2 — evidence-contingent source/review gates:** source-owned inventory
+  approval and a later reviewed production binding; resource failure-to-replay
+  promotion, final lead review of the exact client/renderer/profile envelope,
+  and the resulting source-owned resource release/promotion record. Reported
+  DPI `96` is a required candidate constraint for that envelope; it remains
+  pending fresh review and is not packaged-profile identity.
 
-See `docs/V1_PERCEPTION_RELEASE_GATE_AUDIT.md` for the exact closed/offline/
-fresh-evidence ledger and immutable evidence identities.
+Machine-readable release eligibility remains `false` while either C1 or C2 is
+open, and the resource lineage also remains ineligible while B is open.
+Completing captures alone cannot close the later review/promotion chain.
+
+See `docs/V1_PERCEPTION_RELEASE_GATE_AUDIT.md` for the exact closed/offline,
+C1, and C2 ledgers and immutable evidence identities.
 
 ## Next integration target
 

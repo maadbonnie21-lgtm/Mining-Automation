@@ -299,8 +299,11 @@ cannot override that result.
 The accepted real drift proof already establishes that all 36 reviewed camera
 drift frames remain uncertain with zero false definitive targets. The reviewed
 fixtures also establish all-node available states, the complete south-west
-available/depleted/respawn cycle, and mixed states. Before Issue #11 can close,
-the remaining evidence must collect and pass:
+available/depleted/respawn cycle, and mixed states.
+
+Release gates are split into two independent categories, with a separate
+offline boundary that must close first. Eligibility remains `false` while B,
+C1, or C2 is open. **C1 fresh empirical evidence** must collect and pass:
 
 - a real depletion/respawn sequence for north-west
 - a real depletion/respawn sequence for center
@@ -312,10 +315,21 @@ the remaining evidence must collect and pass:
   a synthetic mutation — see above — not yet against a genuinely captured
   occlusion event)
 - one fresh current-client positive startup capture already in the exact
-  reviewed `1005x1078` BGRA supported view
-- final lead review of the exact constrained-v1 client/capture/profile envelope
+  reviewed `1005x1078` BGRA supported view, reporting candidate DPI `96`
+
+Before C1 collection, the open **B release-evidence boundary** must provide a
+source-owned immutable package finalized before independently authored reviewer
+truth, with operator staging kept non-authoritative. The generic development
+capture and annotation workflow cannot close that offline blocker.
+
+**C2 evidence-contingent source/review gates** then require final review of the
+exact client/renderer/profile envelope and candidate DPI `96`, permanent
+privacy-safe replay promotion for every retained failure, and a source-owned
+release/promotion record. Candidate DPI `96` is a required operating-envelope
+constraint pending fresh review; it is not packaged-profile identity and a
+reported value cannot approve itself.
 
 The 36-frame drift corpus must still be rerun on any detector/profile-changing
 head. Client-restart camera reacquisition and repeated automatic camera
 normalization are intentionally retired requirements, not deferred evidence.
-PR #12 remains a draft until the genuine remaining gates pass.
+PR #12 remains a draft until B closes and every genuine C1 and C2 gate passes.

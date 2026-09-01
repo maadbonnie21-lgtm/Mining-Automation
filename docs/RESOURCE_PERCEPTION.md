@@ -141,6 +141,14 @@ Before any real frame enters the repository:
 
 Raw local capture folders are development artifacts and are not production-supported datasets merely because they exist.
 
+This generic development workflow is not a release-evidence boundary. Future
+release evidence must be captured into a source-owned immutable campaign,
+finalized before independent reviewer truth is written, and bound to exact
+capture/detector/profile/schema/location/environment identities and hashes.
+Operator case labels are staging metadata, never reviewer truth. A retained
+failure must become a privacy-safe permanent replay regression rather than a
+reason to relax detector policy.
+
 ## Initial support envelope
 
 Production support is not yet claimed merely by this infrastructure. The Varrock East profile must be calibrated and pass real fixtures for:
@@ -161,6 +169,14 @@ than a camera-control objective. The resource pipeline captures and evaluates
 one frame. It does not retry, normalize, or move the camera. An unsupported or
 scene-uncertain frame exposes zero actionable targets and requires the future
 workflow to stop; development diagnostics cannot promote it.
+
+The candidate constrained-v1 operating envelope additionally requires a
+reported DPI of `96`, pending fresh source-owned capture and independent final
+review. DPI is not packaged-profile identity: a missing or different value is
+retained as evidence but cannot close the supported-envelope release gate, and
+a captured value of `96` cannot approve itself. Release eligibility remains
+false until the B release-evidence boundary and every C1 empirical and C2
+review/promotion gate closes.
 
 ## Research basis
 
