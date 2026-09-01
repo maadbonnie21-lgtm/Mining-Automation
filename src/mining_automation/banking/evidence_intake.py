@@ -56,6 +56,7 @@ __all__ = [
     "MAX_EVIDENCE_PACKAGE_AGE_S",
     "REQUIRED_BANK_EVIDENCE_CASES",
     "BankEvidenceCase",
+    "CaptureEnvironmentIdentity",
     "DepositResultEvidenceRecord",
     "FinalizedBankEvidencePackage",
     "OperatorIntentLabel",
@@ -158,6 +159,31 @@ class OperatorIntentLabel:
 
 
 @dataclass(frozen=True, slots=True)
+class CaptureEnvironmentIdentity:
+    """Identity of the exact source session, capture build, config, and environment.
+
+    A shared ``cycle_id`` on live evidence (see
+    :class:`~mining_automation.banking.contracts.BankEvidenceProvenance`) is a
+    caller-chosen label -- it does not prove two archival packages came from
+    the same actual capture session, build, configuration, or environment.
+    This is the smallest additional identity a :class:`FinalizedBankEvidencePackage`
+    binds into its own canonical digest so that claim can be checked, not
+    merely asserted by an unbound caller-supplied string.
+    """
+
+    source_session_id: str
+    capture_build_id: str
+    capture_config_digest: str
+    environment_id: str
+
+    def __post_init__(self) -> None:
+        _validate_non_empty_string(self.source_session_id, "source_session_id")
+        _validate_non_empty_string(self.capture_build_id, "capture_build_id")
+        _validate_sha256_digest(self.capture_config_digest, "capture_config_digest")
+        _validate_non_empty_string(self.environment_id, "environment_id")
+
+
+@dataclass(frozen=True, slots=True)
 class FinalizedBankEvidencePackage:
     """An immutable, hash-identified bank-evidence package.
 
@@ -165,12 +191,15 @@ class FinalizedBankEvidencePackage:
     one-field ``object.__setattr__`` forging against the retained construction
     snapshot. ``operator_label`` is intent only; it does not make this package
     usable as release evidence on its own (see
-    :class:`ReviewedBankEvidenceCase`).
+    :class:`ReviewedBankEvidenceCase`). ``capture_environment`` binds the
+    exact source session/build/config/environment identity into this
+    package's own canonical digest -- see :class:`CaptureEnvironmentIdentity`.
     """
 
     package_id: str
     checkpoint: BankCheckpointIdentity
     profile: BankProfileIdentity
+    capture_environment: CaptureEnvironmentIdentity
     raw_sha256: str
     manifest_sha256: str
     operator_label: OperatorIntentLabel
@@ -191,6 +220,10 @@ class FinalizedBankEvidencePackage:
             self.profile.schema_version,
             self.profile.frame_width,
             self.profile.frame_height,
+            self.capture_environment.source_session_id,
+            self.capture_environment.capture_build_id,
+            self.capture_environment.capture_config_digest,
+            self.capture_environment.environment_id,
             self.raw_sha256,
             self.manifest_sha256,
             self.operator_label.operator_id,
@@ -206,8 +239,11 @@ class FinalizedBankEvidencePackage:
             raise ValueError("checkpoint must be an exact BankCheckpointIdentity")
         if type(self.profile) is not BankProfileIdentity:
             raise ValueError("profile must be an exact BankProfileIdentity")
+        if type(self.capture_environment) is not CaptureEnvironmentIdentity:
+            raise ValueError("capture_environment must be an exact CaptureEnvironmentIdentity")
         BankCheckpointIdentity.__post_init__(self.checkpoint)
         BankProfileIdentity.__post_init__(self.profile)
+        CaptureEnvironmentIdentity.__post_init__(self.capture_environment)
         _validate_sha256_digest(self.raw_sha256, "raw_sha256")
         _validate_sha256_digest(self.manifest_sha256, "manifest_sha256")
         if type(self.operator_label) is not OperatorIntentLabel:
@@ -240,6 +276,10 @@ class FinalizedBankEvidencePackage:
                         str,
                         str,
                         str,
+                        str,
+                        str,
+                        str,
+                        str,
                         BankEvidenceCase,
                         str,
                         float,
@@ -253,19 +293,28 @@ class FinalizedBankEvidencePackage:
 
     @property
     def package_sha256(self) -> str:
-        """Digest the exact finalized package using a canonical v1 encoding.
+        """Digest the exact finalized package using a canonical v2 encoding.
 
         ``manifest_sha256`` alone cannot bind the surrounding package
         metadata, while ``raw_sha256`` binds only the captured bytes. This
         domain-separated digest deliberately includes every release-bearing
-        package field and every field of its nested identities/label. The
-        hidden construction-integrity snapshot is not itself release data.
-        Times use ``float.hex`` so semantically equal accepted numeric inputs
-        have one stable representation.
+        package field, every field of its nested identities/label, and the
+        exact source session/build/config/environment identity. The hidden
+        construction-integrity snapshot is not itself release data. Times use
+        ``float.hex`` so semantically equal accepted numeric inputs have one
+        stable representation. ``v2`` adds ``capture_environment``; it is
+        deliberately distinct from any ``v1`` digest so the two schemas can
+        never collide.
         """
 
         FinalizedBankEvidencePackage.__post_init__(self)
         canonical_payload: dict[str, object] = {
+            "capture_environment": {
+                "capture_build_id": self.capture_environment.capture_build_id,
+                "capture_config_digest": self.capture_environment.capture_config_digest,
+                "environment_id": self.capture_environment.environment_id,
+                "source_session_id": self.capture_environment.source_session_id,
+            },
             "checkpoint": {
                 "checkpoint_id": self.checkpoint.checkpoint_id,
                 "location_id": self.checkpoint.location_id,
@@ -289,7 +338,7 @@ class FinalizedBankEvidencePackage:
                 "schema_version": self.profile.schema_version,
             },
             "raw_sha256": self.raw_sha256,
-            "schema": "mining-automation.bank-evidence-package.v1",
+            "schema": "mining-automation.bank-evidence-package.v2",
         }
         encoded = dumps(
             canonical_payload,
@@ -460,9 +509,14 @@ class DepositResultEvidenceRecord:
         if type(self.post_deposit_provenance) is not BankEvidenceProvenance:
             raise ValueError("post_deposit_provenance must be an exact BankEvidenceProvenance")
         ReviewedBankEvidenceCase.__post_init__(self.pre_deposit)
-        DepositAttemptReceipt.__post_init__(self.attempt_receipt)
         ReviewedBankEvidenceCase.__post_init__(self.post_deposit)
         BankEvidenceProvenance.__post_init__(self.post_deposit_provenance)
+        # Recomputing the receipt's canonical digest -- rather than merely
+        # re-running its __post_init__ -- also enforces that every timestamp
+        # on the receipt side is an exact finite non-negative float (no
+        # int/NaN/Inf/negative alias) and detects any post-construction
+        # object.__setattr__ forgery of the receipt's fields.
+        _ = self.attempt_receipt.receipt_sha256
 
         if not self.pre_deposit.verdict.accepted:
             raise ValueError("pre_deposit verdict must be accepted")
@@ -476,6 +530,15 @@ class DepositResultEvidenceRecord:
             raise ValueError("pre_deposit and post_deposit must share the same checkpoint")
         if self.pre_deposit.package.profile != self.post_deposit.package.profile:
             raise ValueError("pre_deposit and post_deposit must share the same profile")
+        if (
+            self.pre_deposit.package.capture_environment
+            != self.post_deposit.package.capture_environment
+        ):
+            raise ValueError(
+                "pre_deposit and post_deposit must share the same exact source session, "
+                "capture build, capture config, and environment identity -- a shared cycle_id "
+                "alone does not prove the same capture session/build/config/environment"
+            )
         if self.pre_deposit.package.raw_sha256 == self.post_deposit.package.raw_sha256:
             raise ValueError(
                 "pre_deposit and post_deposit must not be backed by the same underlying evidence"
@@ -496,8 +559,12 @@ class DepositResultEvidenceRecord:
                 "post_deposit_provenance must belong to the same visit/cycle as the attempt receipt"
             )
 
-        issued = self.attempt_receipt.issued_monotonic_s
-        preceding_captured = preceding.frame.captured_monotonic_s
+        issued = _validate_exact_finite_timestamp(
+            self.attempt_receipt.issued_monotonic_s, "attempt_receipt.issued_monotonic_s"
+        )
+        preceding_captured = _validate_exact_finite_timestamp(
+            preceding.frame.captured_monotonic_s, "attempt_receipt.preceding_provenance timestamp"
+        )
         if issued < preceding_captured:
             raise ValueError("attempt_receipt must be issued at or after the pre_deposit evidence")
         if issued - preceding_captured > MAX_ATTEMPT_RECEIPT_AGE_S:
@@ -505,7 +572,10 @@ class DepositResultEvidenceRecord:
                 "attempt_receipt issued too long after the pre_deposit evidence to be causally bound"
             )
 
-        post_captured = self.post_deposit_provenance.frame.captured_monotonic_s
+        post_captured = _validate_exact_finite_timestamp(
+            self.post_deposit_provenance.frame.captured_monotonic_s,
+            "post_deposit_provenance timestamp",
+        )
         if post_captured <= issued:
             raise ValueError(
                 "post_deposit_provenance must be captured strictly after the attempt receipt"

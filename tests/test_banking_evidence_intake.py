@@ -23,6 +23,7 @@ from mining_automation.banking.evidence_intake import (
     MAX_EVIDENCE_PACKAGE_AGE_S,
     REQUIRED_BANK_EVIDENCE_CASES,
     BankEvidenceCase,
+    CaptureEnvironmentIdentity,
     FinalizedBankEvidencePackage,
     OperatorIntentLabel,
     ReviewedBankEvidenceCase,
@@ -33,6 +34,13 @@ from mining_automation.banking.testing import SYNTHETIC_BANK_CHECKPOINT, SYNTHET
 
 _RAW_HASH = "a" * 64
 _MANIFEST_HASH = "b" * 64
+_CONFIG_DIGEST = "c" * 64
+_SYNTHETIC_CAPTURE_ENVIRONMENT = CaptureEnvironmentIdentity(
+    source_session_id="session-1",
+    capture_build_id="build-1",
+    capture_config_digest=_CONFIG_DIGEST,
+    environment_id="env-1",
+)
 
 # The configurable engine is private so no caller can confuse a weakened
 # policy result with the release-facing validator. Tests exercise it directly
@@ -60,6 +68,7 @@ def _package(
     package_id: str = "pkg-1",
     checkpoint: BankCheckpointIdentity = SYNTHETIC_BANK_CHECKPOINT,
     profile: BankProfileIdentity = SYNTHETIC_BANK_PROFILE,
+    capture_environment: CaptureEnvironmentIdentity = _SYNTHETIC_CAPTURE_ENVIRONMENT,
     raw_sha256: str = _RAW_HASH,
     manifest_sha256: str = _MANIFEST_HASH,
     operator_label: OperatorIntentLabel | None = None,
@@ -69,6 +78,7 @@ def _package(
         package_id=package_id,
         checkpoint=checkpoint,
         profile=profile,
+        capture_environment=capture_environment,
         raw_sha256=raw_sha256,
         manifest_sha256=manifest_sha256,
         operator_label=operator_label if operator_label is not None else _operator_label(),
@@ -181,6 +191,7 @@ def test_finalized_package_rejects_invalid_fields(
         "package_id": "pkg-1",
         "checkpoint": SYNTHETIC_BANK_CHECKPOINT,
         "profile": SYNTHETIC_BANK_PROFILE,
+        "capture_environment": _SYNTHETIC_CAPTURE_ENVIRONMENT,
         "raw_sha256": _RAW_HASH,
         "manifest_sha256": _MANIFEST_HASH,
         "operator_label": _operator_label(),
@@ -204,6 +215,42 @@ def test_finalized_package_rejects_non_exact_checkpoint() -> None:
 def test_finalized_package_rejects_non_exact_profile() -> None:
     with pytest.raises(ValueError, match="profile must be an exact BankProfileIdentity"):
         _package(profile="not-a-profile")  # type: ignore[arg-type]
+
+
+def test_finalized_package_rejects_non_exact_capture_environment() -> None:
+    with pytest.raises(
+        ValueError, match="capture_environment must be an exact CaptureEnvironmentIdentity"
+    ):
+        _package(capture_environment="not-an-environment")  # type: ignore[arg-type]
+
+
+def test_capture_environment_identity_accepts_valid_values() -> None:
+    assert _SYNTHETIC_CAPTURE_ENVIRONMENT.source_session_id == "session-1"
+
+
+@pytest.mark.parametrize("field_name", ["source_session_id", "capture_build_id", "environment_id"])
+def test_capture_environment_identity_rejects_blank_string_fields(field_name: str) -> None:
+    kwargs: dict[str, object] = {
+        "source_session_id": "s",
+        "capture_build_id": "b",
+        "capture_config_digest": _CONFIG_DIGEST,
+        "environment_id": "e",
+    }
+    kwargs[field_name] = "   "
+    with pytest.raises(ValueError, match=f"{field_name} must be a non-empty string"):
+        CaptureEnvironmentIdentity(**kwargs)  # type: ignore[arg-type]
+
+
+def test_capture_environment_identity_rejects_invalid_config_digest() -> None:
+    with pytest.raises(
+        ValueError, match="capture_config_digest must be a 64-character lowercase hex digest"
+    ):
+        CaptureEnvironmentIdentity(
+            source_session_id="s",
+            capture_build_id="b",
+            capture_config_digest="not-hex",
+            environment_id="e",
+        )
 
 
 @pytest.mark.parametrize("finalized_monotonic_s", [float("nan"), float("inf"), "not-a-number"])
@@ -274,7 +321,7 @@ def test_finalized_package_digest_is_deterministic_and_domain_separated() -> Non
 
     assert package.package_sha256 == equivalent.package_sha256
     assert (
-        package.package_sha256 == "b7fd51ae43a9736fc4dbf6a1b870620c1b6b09a9da65f56126538c695f14d6e4"
+        package.package_sha256 == "a5e2ffb342c39942a4b53a9e7e777bf2d812e3ad14f9159fdf408841b4339057"
     )
     assert len(package.package_sha256) == 64
     assert package.package_sha256 not in {package.raw_sha256, package.manifest_sha256}
@@ -391,12 +438,13 @@ def test_canonical_digest_known_answer_and_field_schema_are_frozen() -> None:
         finalized_monotonic_s=2.0,
     )
     assert (
-        package.package_sha256 == "b7fd51ae43a9736fc4dbf6a1b870620c1b6b09a9da65f56126538c695f14d6e4"
+        package.package_sha256 == "a5e2ffb342c39942a4b53a9e7e777bf2d812e3ad14f9159fdf408841b4339057"
     )
     assert {field.name for field in fields(FinalizedBankEvidencePackage) if field.init} == {
         "package_id",
         "checkpoint",
         "profile",
+        "capture_environment",
         "raw_sha256",
         "manifest_sha256",
         "operator_label",

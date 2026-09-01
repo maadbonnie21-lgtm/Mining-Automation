@@ -31,6 +31,7 @@ from mining_automation.banking.attempts import MAX_ATTEMPT_RECEIPT_AGE_S, Deposi
 from mining_automation.banking.contracts import BankCheckpointIdentity
 from mining_automation.banking.evidence_intake import (
     BankEvidenceCase,
+    CaptureEnvironmentIdentity,
     DepositResultEvidenceRecord,
     FinalizedBankEvidencePackage,
     OperatorIntentLabel,
@@ -46,6 +47,19 @@ from mining_automation.banking.testing import (
 _PRE_RAW_HASH = "1" * 64
 _POST_RAW_HASH = "2" * 64
 _MANIFEST_HASH = "b" * 64
+_CONFIG_DIGEST = "c" * 64
+_SYNTHETIC_CAPTURE_ENVIRONMENT = CaptureEnvironmentIdentity(
+    source_session_id="session-1",
+    capture_build_id="build-1",
+    capture_config_digest=_CONFIG_DIGEST,
+    environment_id="env-1",
+)
+_FOREIGN_CAPTURE_ENVIRONMENT = CaptureEnvironmentIdentity(
+    source_session_id="session-FOREIGN",
+    capture_build_id="build-FOREIGN",
+    capture_config_digest="d" * 64,
+    environment_id="env-FOREIGN",
+)
 
 
 def _operator_label(
@@ -66,12 +80,14 @@ def _package(
     claimed_case: BankEvidenceCase,
     checkpoint: BankCheckpointIdentity = SYNTHETIC_BANK_CHECKPOINT,
     profile=SYNTHETIC_BANK_PROFILE,
+    capture_environment: CaptureEnvironmentIdentity = _SYNTHETIC_CAPTURE_ENVIRONMENT,
     finalized_monotonic_s: float = 1.0,
 ) -> FinalizedBankEvidencePackage:
     return FinalizedBankEvidencePackage(
         package_id=package_id,
         checkpoint=checkpoint,
         profile=profile,
+        capture_environment=capture_environment,
         raw_sha256=raw_sha256,
         manifest_sha256=_MANIFEST_HASH,
         operator_label=_operator_label(claimed_case=claimed_case),
@@ -100,6 +116,7 @@ def _pre_deposit_case(
     raw_sha256: str = _PRE_RAW_HASH,
     checkpoint: BankCheckpointIdentity = SYNTHETIC_BANK_CHECKPOINT,
     profile=SYNTHETIC_BANK_PROFILE,
+    capture_environment: CaptureEnvironmentIdentity = _SYNTHETIC_CAPTURE_ENVIRONMENT,
     accepted: bool = True,
     finalized_monotonic_s: float = 1.0,
     reviewed_monotonic_s: float = 2.0,
@@ -110,6 +127,7 @@ def _pre_deposit_case(
         claimed_case=BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT,
         checkpoint=checkpoint,
         profile=profile,
+        capture_environment=capture_environment,
         finalized_monotonic_s=finalized_monotonic_s,
     )
     verdict = _verdict(
@@ -126,6 +144,7 @@ def _post_deposit_case(
     raw_sha256: str = _POST_RAW_HASH,
     checkpoint: BankCheckpointIdentity = SYNTHETIC_BANK_CHECKPOINT,
     profile=SYNTHETIC_BANK_PROFILE,
+    capture_environment: CaptureEnvironmentIdentity = _SYNTHETIC_CAPTURE_ENVIRONMENT,
     accepted: bool = True,
     finalized_monotonic_s: float = 100.0,
     reviewed_monotonic_s: float = 101.0,
@@ -136,6 +155,7 @@ def _post_deposit_case(
         claimed_case=BankEvidenceCase.EMPTY_AFTER_DEPOSIT,
         checkpoint=checkpoint,
         profile=profile,
+        capture_environment=capture_environment,
         finalized_monotonic_s=finalized_monotonic_s,
     )
     verdict = _verdict(
@@ -372,3 +392,123 @@ def test_deposit_result_evidence_record_rejects_foreign_checkpoint() -> None:
     foreign = _post_deposit_case(checkpoint=BankCheckpointIdentity("other", "other"))
     with pytest.raises(ValueError, match="same checkpoint"):
         _valid_record(post_deposit=foreign)
+
+
+# ---------------------------------------------------------------------------
+# LEAD correction 1: cycle_id alone is not source session/build/config/
+# environment provenance. Failing-regression-first: before this correction,
+# two packages sharing the same caller-chosen cycle_id but declaring
+# different CaptureEnvironmentIdentity values were wrongly accepted, because
+# nothing on FinalizedBankEvidencePackage or DepositResultEvidenceRecord
+# checked capture_environment at all -- proven by the fact that, prior to
+# adding the capture_environment field and this check, constructing this
+# exact scenario raised no error. The check below is what makes it fail now.
+# ---------------------------------------------------------------------------
+
+
+def test_deposit_result_evidence_record_rejects_same_cycle_different_capture_environment() -> (
+    None
+):
+    """Same cycle_id (the pre-existing 'session' proxy) but genuinely
+    different source session/build/config/environment must still reject."""
+    foreign_post = _post_deposit_case(capture_environment=_FOREIGN_CAPTURE_ENVIRONMENT)
+    # cycle_id still matches (both default to "cycle-1" via _post_deposit_provenance),
+    # so only the capture_environment mismatch should be responsible for the rejection.
+    with pytest.raises(
+        ValueError,
+        match="same exact source session, capture build, capture config, and environment",
+    ):
+        _valid_record(post_deposit=foreign_post)
+
+
+def test_deposit_result_evidence_record_accepts_matching_capture_environment() -> None:
+    record = _valid_record()
+    assert (
+        record.pre_deposit.package.capture_environment
+        == record.post_deposit.package.capture_environment
+    )
+
+
+# ---------------------------------------------------------------------------
+# LEAD correction 2: DepositAttemptReceipt must be immutably identity-bound.
+# Failing-regression-first: before adding the retained snapshot / canonical
+# digest to DepositAttemptReceipt, forging a field via object.__setattr__
+# after construction was completely undetectable -- the mutated receipt
+# still passed DepositResultEvidenceRecord's checks because they only read
+# the (now-forged) live attribute values. attempts.py's own test suite
+# proves the underlying mechanism directly; these confirm it is actually
+# exercised from within DepositResultEvidenceRecord's construction path.
+# ---------------------------------------------------------------------------
+
+
+def test_deposit_result_evidence_record_rejects_receipt_forged_after_construction() -> None:
+    receipt = _receipt(preceding_provenance=_pre_deposit_provenance())
+    valid_record = _valid_record(attempt_receipt=receipt)
+    assert valid_record is not None  # baseline: construction succeeded once
+
+    # Forge the attempt_id on the SAME receipt object after it was accepted.
+    object.__setattr__(receipt, "attempt_id", "forged-after-acceptance")
+    with pytest.raises(
+        ValueError, match="deposit attempt receipt differs from its construction-time snapshot"
+    ):
+        _valid_record(attempt_receipt=receipt)
+
+
+def test_deposit_result_evidence_record_rejects_receipt_with_forged_provenance() -> None:
+    receipt = _receipt(preceding_provenance=_pre_deposit_provenance())
+    _valid_record(attempt_receipt=receipt)  # baseline acceptance
+
+    object.__setattr__(
+        receipt, "preceding_provenance", build_provenance(frame_id=12345, frame_sha256="9" * 64)
+    )
+    with pytest.raises(
+        ValueError, match="deposit attempt receipt differs from its construction-time snapshot"
+    ):
+        _valid_record(attempt_receipt=receipt)
+
+
+# ---------------------------------------------------------------------------
+# LEAD correction 3: release-bearing receipt/provenance timestamps must be
+# exact floats. Failing-regression-first: before evidence_intake.py switched
+# to _validate_exact_finite_timestamp for these three reads, an int
+# issued_monotonic_s (accepted by attempts.py's lenient _finite_float at
+# construction) passed straight through DepositResultEvidenceRecord's
+# arithmetic comparisons with no error at all.
+# ---------------------------------------------------------------------------
+
+
+def test_deposit_result_evidence_record_rejects_integer_issued_monotonic_s() -> None:
+    receipt = DepositAttemptReceipt(
+        attempt_id="int-attempt",
+        issued_monotonic_s=10,  # type: ignore[arg-type]
+        preceding_provenance=_pre_deposit_provenance(),
+    )
+    with pytest.raises(
+        ValueError, match="issued_monotonic_s must be an exact finite non-negative float"
+    ):
+        _valid_record(attempt_receipt=receipt)
+
+
+def test_deposit_result_evidence_record_rejects_integer_post_deposit_captured_time() -> None:
+    bad_provenance = build_provenance(
+        frame_id=2,
+        captured_monotonic_s=11,  # type: ignore[arg-type]
+        cycle_id="cycle-1",
+        frame_sha256=_POST_RAW_HASH,
+    )
+    with pytest.raises(
+        ValueError, match="post_deposit_provenance timestamp must be an exact finite"
+    ):
+        _valid_record(post_deposit_provenance=bad_provenance)
+
+
+def test_deposit_result_evidence_record_rejects_negative_issued_monotonic_s() -> None:
+    receipt = DepositAttemptReceipt(
+        attempt_id="negative-attempt",
+        issued_monotonic_s=-1.0,
+        preceding_provenance=_pre_deposit_provenance(),
+    )
+    with pytest.raises(
+        ValueError, match="issued_monotonic_s must be an exact finite non-negative float"
+    ):
+        _valid_record(attempt_receipt=receipt)
