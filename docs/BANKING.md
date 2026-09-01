@@ -344,11 +344,29 @@ cannot round across the release freshness boundary.
 | package older than `MAX_EVIDENCE_PACKAGE_AGE_S` | `EVIDENCE_PACKAGE_STALE` |
 | package foreign to the expected checkpoint/profile | `CHECKPOINT_IDENTITY_MISMATCH` / `BANK_PROFILE_MISMATCH` |
 | operator/package/review chronology is in the future | `EVIDENCE_FROM_FUTURE` |
-| batch missing coverage of a required case | `MISSING_REQUIRED_EVIDENCE_CASE` |
+| batch missing coverage of a required *independent* case (everything except `NON_EMPTY_BEFORE_DEPOSIT`/`EMPTY_AFTER_DEPOSIT`) | `MISSING_REQUIRED_EVIDENCE_CASE` |
+| `NON_EMPTY_BEFORE_DEPOSIT`/`EMPTY_AFTER_DEPOSIT` coverage claimed with no valid, batch-referencing `DepositResultEvidenceRecord` in `deposit_results` | `DEPOSIT_RESULT_COVERAGE_MISSING` |
+| a supplied `DepositResultEvidenceRecord`'s `pre_deposit`/`post_deposit` is not itself present in the batch's `cases` | `DEPOSIT_RESULT_PACKAGE_NOT_IN_BATCH` |
 
 An empty result means the batch is structurally acceptable for the supplied
 target, never that any pixel or opaque manifest digest is real or correct --
 this function never loads a manifest or inspects pixels.
+
+**`NON_EMPTY_BEFORE_DEPOSIT`/`EMPTY_AFTER_DEPOSIT` coverage cannot be
+satisfied by bare presence.** Every other required case is satisfied simply
+by an accepted case carrying that label anywhere in the batch. These two are
+different: two independently-valid packages from unrelated visits/sessions
+carrying these labels used to satisfy "deposit-result coverage" with zero
+causal link between them (a real defect, confirmed by reproduction and fixed
+-- see `tests/test_banking_evidence_intake.py`'s
+`test_validate_release_evidence_case_batch_rejects_unrelated_deposit_pair`).
+Both `_validate_evidence_case_batch` and `validate_release_evidence_case_batch`
+now accept a `deposit_results: tuple[DepositResultEvidenceRecord, ...]`
+parameter; coverage for these two labels is granted only when at least one
+entry's `pre_deposit`/`post_deposit` are themselves members of `cases`.
+Every supplied record is re-validated (`DepositResultEvidenceRecord.__post_init__`)
+before being trusted, so a record forged via `object.__setattr__` after
+construction raises rather than silently granting coverage.
 
 ### Deposit-result verification packaging
 
@@ -366,7 +384,11 @@ full causal chain:
   hash -- `attempt_receipt.preceding_provenance.frame_sha256` must equal
   `pre_deposit.package.raw_sha256`. This is what rejects a wrong or replayed
   receipt: a receipt issued against different evidence, however valid on its
-  own, cannot bind here;
+  own, cannot bind here. The receipt itself carries a retained
+  construction-time snapshot and a canonical `receipt_sha256` digest (which
+  also enforces exact finite non-negative `float` timestamps, rejecting
+  int/NaN/Inf/negative aliases) -- a receipt forged via `object.__setattr__`
+  after construction is caught the next time `receipt_sha256` is read;
 * the receipt is issued at or after the pre-deposit capture and within
   `MAX_ATTEMPT_RECEIPT_AGE_S` of it;
 * `post_deposit_provenance` is bound the same way to the exact `post_deposit`
@@ -374,18 +396,28 @@ full causal chain:
   is captured strictly after the receipt and within that same freshness
   window -- mirroring `workflow._post_attempt_freshness_blocker`'s live rule
   exactly;
+* `pre_deposit` and `post_deposit` must additionally share the exact same
+  `CaptureEnvironmentIdentity` (`source_session_id`, `capture_build_id`,
+  `capture_config_digest`, `environment_id`) -- a shared `cycle_id` alone is
+  a caller-chosen label, not proof of the same capture session/build/config/
+  environment. `CaptureEnvironmentIdentity` is a required field on
+  `FinalizedBankEvidencePackage`, cryptographically bound into its canonical
+  `package_sha256` digest (schema `v2`, deliberately non-colliding with `v1`);
 * `post_deposit` is a reviewer-accepted `EMPTY_AFTER_DEPOSIT` case, sharing
   the pre-deposit package's checkpoint/profile, backed by distinct
   underlying evidence.
 
-Any violation raises at construction. Cross-visit, cross-session, wrong
-receipt, replayed receipt, stale evidence, swapped ordering, duplicate raw
-content, and a missing/wrong-type receipt are all covered by dedicated
-regression tests in `tests/test_banking_deposit_result_evidence.py`. A prior,
-weaker design (checking only case labels, checkpoint/profile, and
-package-level finalized-timestamp ordering, with no binding to any specific
-receipt at all) was proven insufficient by a failing regression before this
-version replaced it -- see that test file's module docstring.
+Any violation raises at construction. Cross-visit, cross-session,
+cross-environment, wrong receipt, replayed receipt, forged receipt, stale
+evidence, swapped ordering, duplicate raw content, int/negative timestamp
+aliases, and a missing/wrong-type receipt are all covered by dedicated
+regression tests in `tests/test_banking_deposit_result_evidence.py`. Two
+prior, weaker designs (first: checking only case labels, checkpoint/profile,
+and package-level finalized-timestamp ordering, with no binding to any
+specific receipt at all; second: adding the receipt binding but with no
+session/build/config/environment identity and no anti-forging on the receipt
+itself) were each proven insufficient by a failing regression before being
+replaced -- see that test file's module docstring and `tests/test_banking_attempts.py`.
 
 ## Closed integration boundary
 

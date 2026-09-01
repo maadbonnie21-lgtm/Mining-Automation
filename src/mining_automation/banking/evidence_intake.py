@@ -586,12 +586,18 @@ class DepositResultEvidenceRecord:
             )
 
 
+_DEPOSIT_RESULT_CASES: Final[frozenset[BankEvidenceCase]] = frozenset(
+    {BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT, BankEvidenceCase.EMPTY_AFTER_DEPOSIT}
+)
+
+
 def _validate_evidence_case_batch(
     cases: tuple[ReviewedBankEvidenceCase, ...],
     *,
     expected_checkpoint: BankCheckpointIdentity,
     expected_profile: BankProfileIdentity,
     evaluated_monotonic_s: object,
+    deposit_results: tuple[DepositResultEvidenceRecord, ...] = (),
     required_cases: frozenset[BankEvidenceCase] = REQUIRED_BANK_EVIDENCE_CASES,
     max_age_s: float = MAX_EVIDENCE_PACKAGE_AGE_S,
 ) -> tuple[BankingBlocker, ...]:
@@ -600,6 +606,15 @@ def _validate_evidence_case_batch(
     An empty result means only that the batch satisfies the selected
     structural policy; this module never inspects pixels. Every applicable
     defect is returned and duplicates are never silently swallowed.
+
+    ``NON_EMPTY_BEFORE_DEPOSIT``/``EMPTY_AFTER_DEPOSIT`` coverage cannot be
+    satisfied merely by the bare presence of an accepted case with that
+    label -- that would let two independently-valid packages from unrelated
+    visits/sessions/attempts satisfy "deposit-result coverage" with no
+    causal link between them at all. When ``required_cases`` includes either
+    label, at least one ``deposit_results`` entry must be present whose
+    ``pre_deposit``/``post_deposit`` are themselves members of ``cases``
+    (see :class:`DepositResultEvidenceRecord` for what that record proves).
     """
     if type(expected_checkpoint) is not BankCheckpointIdentity:
         raise TypeError("expected_checkpoint must be an exact BankCheckpointIdentity")
@@ -611,6 +626,12 @@ def _validate_evidence_case_batch(
         type(case) is not ReviewedBankEvidenceCase for case in cases
     ):
         raise TypeError("cases must be a tuple of exact ReviewedBankEvidenceCase values")
+    if type(deposit_results) is not tuple or any(
+        type(record) is not DepositResultEvidenceRecord for record in deposit_results
+    ):
+        raise TypeError(
+            "deposit_results must be a tuple of exact DepositResultEvidenceRecord values"
+        )
     if type(required_cases) is not frozenset or any(
         type(case) is not BankEvidenceCase for case in required_cases
     ):
@@ -673,8 +694,29 @@ def _validate_evidence_case_batch(
         if case.verdict.accepted:
             accepted_cases.add(case.verdict.reviewed_case)
 
-    if not required_cases.issubset(accepted_cases):
+    # NON_EMPTY_BEFORE_DEPOSIT/EMPTY_AFTER_DEPOSIT are deliberately excluded
+    # from the bare-presence coverage check below -- see the deposit_results
+    # loop further down, which is the only way to satisfy them.
+    independent_required_cases = required_cases - _DEPOSIT_RESULT_CASES
+    if not independent_required_cases.issubset(accepted_cases):
         blockers.append(BankingBlocker.MISSING_REQUIRED_EVIDENCE_CASE)
+
+    deposit_result_required = bool(required_cases & _DEPOSIT_RESULT_CASES)
+    if deposit_result_required:
+        deposit_result_established = False
+        for record in deposit_results:
+            # Re-invoking __post_init__ both defends against object-level
+            # forging after construction and re-proves the full causal chain
+            # (pre_deposit non-empty, exact receipt binding, post_deposit
+            # empty, freshness window) -- see DepositResultEvidenceRecord.
+            DepositResultEvidenceRecord.__post_init__(record)
+            if record.pre_deposit not in cases or record.post_deposit not in cases:
+                if BankingBlocker.DEPOSIT_RESULT_PACKAGE_NOT_IN_BATCH not in blockers:
+                    blockers.append(BankingBlocker.DEPOSIT_RESULT_PACKAGE_NOT_IN_BATCH)
+                continue
+            deposit_result_established = True
+        if not deposit_result_established:
+            blockers.append(BankingBlocker.DEPOSIT_RESULT_COVERAGE_MISSING)
 
     return tuple(blockers)
 
@@ -685,13 +727,17 @@ def validate_release_evidence_case_batch(
     expected_checkpoint: BankCheckpointIdentity,
     expected_profile: BankProfileIdentity,
     evaluated_monotonic_s: object,
+    deposit_results: tuple[DepositResultEvidenceRecord, ...] = (),
 ) -> tuple[BankingBlocker, ...]:
     """Apply fixed coverage/freshness rules to one caller-selected target.
 
     The target checkpoint/profile remain explicit caller inputs until a future
     source-owned deployment policy exists. Complete truth-case coverage and
     the freshness ceiling are private fixed rules: callers cannot request
-    partial coverage or extend package lifetime.
+    partial coverage or extend package lifetime. ``NON_EMPTY_BEFORE_DEPOSIT``/
+    ``EMPTY_AFTER_DEPOSIT`` coverage additionally requires at least one valid,
+    batch-referencing ``DepositResultEvidenceRecord`` in ``deposit_results``
+    -- see :func:`_validate_evidence_case_batch`.
     """
 
     return _validate_evidence_case_batch(
@@ -699,6 +745,7 @@ def validate_release_evidence_case_batch(
         expected_checkpoint=expected_checkpoint,
         expected_profile=expected_profile,
         evaluated_monotonic_s=evaluated_monotonic_s,
+        deposit_results=deposit_results,
         required_cases=_RELEASE_REQUIRED_BANK_EVIDENCE_CASES,
         max_age_s=_RELEASE_MAX_EVIDENCE_PACKAGE_AGE_S,
     )
