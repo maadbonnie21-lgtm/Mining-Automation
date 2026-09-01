@@ -7,6 +7,7 @@ binding rules.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from dataclasses import fields, replace
 from hashlib import sha256
 
@@ -19,6 +20,7 @@ from mining_automation.banking.contracts import (
     BankProfileIdentity,
 )
 from mining_automation.banking.evidence_intake import (
+    MAX_EVIDENCE_PACKAGE_AGE_S,
     REQUIRED_BANK_EVIDENCE_CASES,
     BankEvidenceCase,
     FinalizedBankEvidencePackage,
@@ -278,6 +280,32 @@ def test_finalized_package_digest_is_deterministic_and_domain_separated() -> Non
     assert package.package_sha256 not in {package.raw_sha256, package.manifest_sha256}
 
 
+def test_package_digest_rejects_literal_surrogate_pair_json_alias() -> None:
+    scalar_package = _package(
+        operator_label=replace(_operator_label(), note="\U0001f600"),
+    )
+    assert len(scalar_package.package_sha256) == 64
+
+    with pytest.raises(ValueError, match="Unicode scalar values"):
+        replace(_operator_label(), note="\ud83d\ude00")
+
+
+@pytest.mark.parametrize(
+    "constructor",
+    [
+        lambda: _package(package_id="package-\ud800"),
+        lambda: _package(checkpoint=BankCheckpointIdentity("checkpoint-\ud800", "location")),
+        lambda: _package(profile=replace(SYNTHETIC_BANK_PROFILE, profile_id="profile-\ud800")),
+        lambda: _package(operator_label=replace(_operator_label(), operator_id="operator-\ud800")),
+    ],
+)
+def test_package_digest_bound_strings_reject_surrogate_code_points(
+    constructor: Callable[[], object],
+) -> None:
+    with pytest.raises(ValueError, match="must be a non-empty string"):
+        constructor()
+
+
 def test_reviewer_binding_rejects_raw_digest_without_package_metadata() -> None:
     package = _package()
     verdict = _verdict(bound_package_sha256=package.raw_sha256)
@@ -365,7 +393,7 @@ def test_canonical_digest_known_answer_and_field_schema_are_frozen() -> None:
     assert (
         package.package_sha256 == "b7fd51ae43a9736fc4dbf6a1b870620c1b6b09a9da65f56126538c695f14d6e4"
     )
-    assert {field.name for field in fields(FinalizedBankEvidencePackage)} == {
+    assert {field.name for field in fields(FinalizedBankEvidencePackage) if field.init} == {
         "package_id",
         "checkpoint",
         "profile",
@@ -373,6 +401,9 @@ def test_canonical_digest_known_answer_and_field_schema_are_frozen() -> None:
         "manifest_sha256",
         "operator_label",
         "finalized_monotonic_s",
+    }
+    assert {field.name for field in fields(FinalizedBankEvidencePackage) if not field.init} == {
+        "_finalized_snapshot"
     }
     assert {field.name for field in fields(OperatorIntentLabel)} == {
         "operator_id",
@@ -390,6 +421,16 @@ def test_canonical_digest_known_answer_and_field_schema_are_frozen() -> None:
         "schema_version",
         "frame_width",
         "frame_height",
+    }
+    assert {field.name for field in fields(ReviewerVerdict) if field.init} == {
+        "reviewer_id",
+        "accepted",
+        "reviewed_case",
+        "bound_package_sha256",
+        "reviewed_monotonic_s",
+    }
+    assert {field.name for field in fields(ReviewerVerdict) if not field.init} == {
+        "_verdict_snapshot"
     }
 
 
@@ -457,8 +498,8 @@ def test_reviewed_case_rejects_non_exact_verdict_type() -> None:
         ReviewedBankEvidenceCase(package=_package(), verdict="not-a-verdict")  # type: ignore[arg-type]
 
 
-def test_reviewed_case_is_frozen_no_mutation_path() -> None:
-    """No update/replace path exists -- a correction requires a brand-new case."""
+def test_reviewed_case_is_frozen_against_normal_assignment() -> None:
+    """Normal assignment is forbidden; a correction requires a brand-new value."""
     case = _reviewed_case()
     with pytest.raises(AttributeError):
         case.verdict = _verdict()  # type: ignore[misc]
@@ -468,13 +509,78 @@ def test_batch_revalidates_post_construction_package_forgery() -> None:
     case = _reviewed_case()
     object.__setattr__(case.package, "manifest_sha256", "c" * 64)
 
-    with pytest.raises(ValueError, match=r"does not match package\.package_sha256"):
+    with pytest.raises(ValueError, match="finalized package differs.*snapshot"):
         validate_evidence_case_batch(
             (case,),
             expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
             expected_profile=SYNTHETIC_BANK_PROFILE,
             evaluated_monotonic_s=10.0,
         )
+
+
+def test_finalized_package_rejects_mutation_before_review_binding() -> None:
+    package = _package()
+    original_digest = package.package_sha256
+    object.__setattr__(package, "manifest_sha256", "c" * 64)
+
+    with pytest.raises(ValueError, match="finalized package differs.*snapshot"):
+        _verdict(bound_package_sha256=package.package_sha256)
+
+    assert len(original_digest) == 64
+
+
+def test_reviewer_verdict_rejects_mutation_before_review_wrapper() -> None:
+    package = _package()
+    verdict = _verdict(
+        accepted=False,
+        bound_package_sha256=package.package_sha256,
+    )
+    object.__setattr__(verdict, "accepted", True)
+
+    with pytest.raises(ValueError, match="reviewer verdict differs.*snapshot"):
+        ReviewedBankEvidenceCase(package=package, verdict=verdict)
+
+
+@pytest.mark.parametrize("target", ["package", "verdict"])
+def test_evidence_construction_snapshot_mutation_is_rejected(target: str) -> None:
+    package = _package()
+    verdict = _verdict(bound_package_sha256=package.package_sha256)
+
+    if target == "package":
+        object.__setattr__(package, "_finalized_snapshot", ())
+        with pytest.raises(ValueError, match="finalized package differs.*snapshot"):
+            _ = package.package_sha256
+    else:
+        object.__setattr__(verdict, "_verdict_snapshot", ())
+        with pytest.raises(ValueError, match="reviewer verdict differs.*snapshot"):
+            ReviewedBankEvidenceCase(package=package, verdict=verdict)
+
+
+def test_forged_review_snapshot_cannot_mutate_verdict_during_comparison() -> None:
+    package = _package()
+    verdict = _verdict(
+        accepted=False,
+        bound_package_sha256=package.package_sha256,
+    )
+    case = ReviewedBankEvidenceCase(package=package, verdict=verdict)
+
+    class MutatingSnapshot:
+        def __ne__(self, other: object) -> bool:
+            del other
+            object.__setattr__(verdict, "accepted", True)
+            return False
+
+    object.__setattr__(case, "_review_snapshot", MutatingSnapshot())
+
+    with pytest.raises(ValueError, match="reviewer verdict differs.*snapshot"):
+        validate_release_evidence_case_batch(
+            (case,),
+            expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+            expected_profile=SYNTHETIC_BANK_PROFILE,
+            evaluated_monotonic_s=10.0,
+        )
+
+    assert verdict.accepted is False
 
 
 def test_batch_revalidates_post_construction_nested_identity_forgery() -> None:
@@ -738,7 +844,10 @@ def test_validate_evidence_case_batch_rejects_stale_package() -> None:
     assert BankingBlocker.EVIDENCE_PACKAGE_STALE in blockers
 
 
-@pytest.mark.parametrize("evaluated_monotonic_s", [None, float("nan"), float("inf"), "bad"])
+@pytest.mark.parametrize(
+    "evaluated_monotonic_s",
+    [None, float("nan"), float("inf"), -1.0, 0, 2**53 + 1, "bad"],
+)
 def test_validate_evidence_case_batch_rejects_invalid_evaluation_time(
     evaluated_monotonic_s: object,
 ) -> None:
@@ -750,6 +859,42 @@ def test_validate_evidence_case_batch_rejects_invalid_evaluation_time(
     )
 
     assert BankingBlocker.EVALUATION_TIME_INVALID in blockers
+
+
+def test_release_validator_rejects_integer_time_before_freshness_rounding() -> None:
+    true_now = 2**53 + 1
+    rounded_now = float(true_now)
+    finalized = rounded_now - MAX_EVIDENCE_PACKAGE_AGE_S
+    cases = []
+    for index, case_label in enumerate(BankEvidenceCase):
+        package = _package(
+            package_id=f"large-time-package-{index}",
+            raw_sha256=_digest_for(f"large-time-raw-{index}"),
+            manifest_sha256=_digest_for(f"large-time-manifest-{index}"),
+            operator_label=_operator_label(
+                claimed_case=case_label,
+                labeled_monotonic_s=finalized - 2.0,
+            ),
+            finalized_monotonic_s=finalized,
+        )
+        verdict = _verdict(
+            reviewed_case=case_label,
+            bound_package_sha256=package.package_sha256,
+            reviewed_monotonic_s=finalized + 2.0,
+        )
+        cases.append(ReviewedBankEvidenceCase(package=package, verdict=verdict))
+
+    # Converting true_now to float loses one second and turns a true age of
+    # MAX_EVIDENCE_PACKAGE_AGE_S + 1 into the accepted exact boundary.
+    assert true_now - int(finalized) == int(MAX_EVIDENCE_PACKAGE_AGE_S) + 1
+    blockers = validate_release_evidence_case_batch(
+        tuple(cases),
+        expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+        expected_profile=SYNTHETIC_BANK_PROFILE,
+        evaluated_monotonic_s=true_now,
+    )
+
+    assert blockers == (BankingBlocker.EVALUATION_TIME_INVALID,)
 
 
 @pytest.mark.parametrize(
@@ -790,11 +935,11 @@ def test_validate_evidence_case_batch_rejects_each_future_chronology_stage(
     assert BankingBlocker.EVIDENCE_FROM_FUTURE in blockers
 
 
-@pytest.mark.parametrize("max_age_s", [-1.0, float("nan"), float("inf"), True, "bad"])
+@pytest.mark.parametrize("max_age_s", [-1.0, float("nan"), float("inf"), 1, True, "bad"])
 def test_validate_evidence_case_batch_rejects_invalid_freshness_policy(
     max_age_s: object,
 ) -> None:
-    with pytest.raises(ValueError, match="max_age_s must be a finite non-negative number"):
+    with pytest.raises(ValueError, match="max_age_s must be an exact finite non-negative float"):
         validate_evidence_case_batch(
             (),
             expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
@@ -822,6 +967,61 @@ def test_validate_evidence_case_batch_rejects_wrong_cases_type() -> None:
             expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
             expected_profile=SYNTHETIC_BANK_PROFILE,
             evaluated_monotonic_s=0.0,
+        )
+
+
+@pytest.mark.parametrize("mutation", ["rejected-to-accepted", "classification-swap"])
+def test_batch_rejects_post_review_verdict_mutation(mutation: str) -> None:
+    package = _package()
+    verdict = _verdict(
+        accepted=mutation != "rejected-to-accepted",
+        reviewed_case=BankEvidenceCase.OPEN,
+        bound_package_sha256=package.package_sha256,
+    )
+    case = ReviewedBankEvidenceCase(package=package, verdict=verdict)
+    if mutation == "rejected-to-accepted":
+        object.__setattr__(verdict, "accepted", True)
+    else:
+        object.__setattr__(verdict, "reviewed_case", BankEvidenceCase.CLOSED)
+
+    with pytest.raises(ValueError, match="construction-time snapshot"):
+        validate_release_evidence_case_batch(
+            (case,),
+            expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+            expected_profile=SYNTHETIC_BANK_PROFILE,
+            evaluated_monotonic_s=10.0,
+        )
+
+
+def test_release_validator_rejects_stateful_tuple_subclass_before_iteration() -> None:
+    class MutatingCases(tuple):
+        def __iter__(self) -> Iterator[object]:
+            raise AssertionError("a non-exact container must never be iterated")
+
+    with pytest.raises(TypeError, match="cases must be a tuple of exact"):
+        validate_release_evidence_case_batch(
+            MutatingCases(_full_required_batch()),  # type: ignore[arg-type]
+            expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+            expected_profile=SYNTHETIC_BANK_PROFILE,
+            evaluated_monotonic_s=100.0,
+        )
+
+
+@pytest.mark.parametrize("target", ["checkpoint", "profile"])
+def test_release_validator_revalidates_expected_identity(target: str) -> None:
+    expected_checkpoint = replace(SYNTHETIC_BANK_CHECKPOINT)
+    expected_profile = replace(SYNTHETIC_BANK_PROFILE)
+    if target == "checkpoint":
+        object.__setattr__(expected_checkpoint, "checkpoint_id", "   ")
+    else:
+        object.__setattr__(expected_profile, "profile_id", "   ")
+
+    with pytest.raises(ValueError, match="must be a non-empty string"):
+        validate_release_evidence_case_batch(
+            _full_required_batch(),
+            expected_checkpoint=expected_checkpoint,
+            expected_profile=expected_profile,
+            evaluated_monotonic_s=100.0,
         )
 
 

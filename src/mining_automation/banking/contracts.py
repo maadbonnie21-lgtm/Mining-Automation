@@ -60,7 +60,11 @@ def _validate_confidence(confidence: float) -> None:
 
 
 def _validate_non_empty_string(value: object, field_name: str) -> None:
-    if type(value) is not str or not value.strip():
+    if (
+        type(value) is not str
+        or not value.strip()
+        or any(0xD800 <= ord(character) <= 0xDFFF for character in value)
+    ):
         raise ValueError(f"{field_name} must be a non-empty string")
 
 

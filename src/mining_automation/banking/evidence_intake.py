@@ -21,10 +21,10 @@ Two structural invariants, both enforced by construction:
   only be constructed from a :class:`FinalizedBankEvidencePackage` and a
   :class:`ReviewerVerdict` whose ``bound_package_sha256`` matches the
   package's canonical ``package_sha256`` exactly. That digest covers the raw
-  bytes digest, manifest digest, and every package metadata field. There is
-  no update/replace path: a correction requires a brand-new finalized
-  package and a brand-new verdict, never mutating an existing accepted case
-  in place.
+  bytes digest, manifest digest, and every release-bearing package metadata
+  field. There is no in-place update path: a correction (including
+  :func:`dataclasses.replace`) constructs a brand-new finalized package and a
+  brand-new verdict, never mutating an existing accepted case in place.
 
 :func:`validate_release_evidence_case_batch` is the only public batch check.
 Its required-case and freshness policy cannot be changed by a caller. An
@@ -34,7 +34,7 @@ not exported and cannot be confused with the release-facing API.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from hashlib import sha256
 from json import dumps
@@ -65,16 +65,12 @@ _RELEASE_MAX_EVIDENCE_PACKAGE_AGE_S: Final[float] = 86_400.0
 MAX_EVIDENCE_PACKAGE_AGE_S: Final[float] = _RELEASE_MAX_EVIDENCE_PACKAGE_AGE_S
 
 
-def _finite_float(value: object) -> float | None:
-    if type(value) is int:
-        try:
-            return float(value)
-        except OverflowError:
-            return None
-    if type(value) is float:
-        converted = value
-        return converted if isfinite(converted) else None
-    return None
+def _exact_finite_non_negative_float(value: object) -> float | None:
+    """Reject numeric aliases whose float conversion could change chronology."""
+
+    if type(value) is not float or not isfinite(value) or value < 0.0:
+        return None
+    return 0.0 if value == 0.0 else value
 
 
 def _validate_exact_finite_timestamp(value: object, field_name: str) -> float:
@@ -93,6 +89,21 @@ def _normalized_actor_identity(value: str) -> str:
     """Return the comparison form used to enforce independent review."""
 
     return normalize("NFKC", value.strip()).casefold()
+
+
+def _is_exact_snapshot(
+    value: object,
+    expected_types: tuple[type[object], ...],
+) -> bool:
+    """Validate snapshot shape without invoking attacker-controlled equality."""
+
+    return (
+        type(value) is tuple
+        and len(value) == len(expected_types)
+        and all(
+            type(item) is expected for item, expected in zip(value, expected_types, strict=True)
+        )
+    )
 
 
 class BankEvidenceCase(StrEnum):
@@ -138,6 +149,8 @@ class OperatorIntentLabel:
             raise ValueError("claimed_case must be an exact BankEvidenceCase")
         if type(self.note) is not str:
             raise ValueError("note must be a string")
+        if any(0xD800 <= ord(character) <= 0xDFFF for character in self.note):
+            raise ValueError("note must contain only Unicode scalar values")
         _validate_exact_finite_timestamp(self.labeled_monotonic_s, "labeled_monotonic_s")
 
 
@@ -145,9 +158,10 @@ class OperatorIntentLabel:
 class FinalizedBankEvidencePackage:
     """An immutable, hash-identified bank-evidence package.
 
-    Once constructed, a package cannot be mutated -- there is no setter and
-    no update method. ``operator_label`` is intent only; it does not make
-    this package usable as release evidence on its own (see
+    Normal assignment is forbidden, and recursive use-time validation rejects
+    one-field ``object.__setattr__`` forging against the retained construction
+    snapshot. ``operator_label`` is intent only; it does not make this package
+    usable as release evidence on its own (see
     :class:`ReviewedBankEvidenceCase`).
     """
 
@@ -158,6 +172,30 @@ class FinalizedBankEvidencePackage:
     manifest_sha256: str
     operator_label: OperatorIntentLabel
     finalized_monotonic_s: float
+    _finalized_snapshot: tuple[object, ...] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def _snapshot(self) -> tuple[object, ...]:
+        return (
+            self.package_id,
+            self.checkpoint.checkpoint_id,
+            self.checkpoint.location_id,
+            self.profile.profile_id,
+            self.profile.profile_version,
+            self.profile.schema_version,
+            self.profile.frame_width,
+            self.profile.frame_height,
+            self.raw_sha256,
+            self.manifest_sha256,
+            self.operator_label.operator_id,
+            self.operator_label.claimed_case,
+            self.operator_label.note,
+            self.operator_label.labeled_monotonic_s,
+            self.finalized_monotonic_s,
+        )
 
     def __post_init__(self) -> None:
         _validate_non_empty_string(self.package_id, "package_id")
@@ -181,6 +219,34 @@ class FinalizedBankEvidencePackage:
         )
         if finalized <= labeled:
             raise ValueError("finalized_monotonic_s must follow operator labeling")
+        finalized_snapshot = self._snapshot()
+        if hasattr(self, "_finalized_snapshot"):
+            retained_snapshot = self._finalized_snapshot
+            if (
+                not _is_exact_snapshot(
+                    retained_snapshot,
+                    (
+                        str,
+                        str,
+                        str,
+                        str,
+                        str,
+                        int,
+                        int,
+                        int,
+                        str,
+                        str,
+                        str,
+                        BankEvidenceCase,
+                        str,
+                        float,
+                        float,
+                    ),
+                )
+                or retained_snapshot != finalized_snapshot
+            ):
+                raise ValueError("finalized package differs from its construction-time snapshot")
+        object.__setattr__(self, "_finalized_snapshot", finalized_snapshot)
 
     @property
     def package_sha256(self) -> str:
@@ -188,12 +254,14 @@ class FinalizedBankEvidencePackage:
 
         ``manifest_sha256`` alone cannot bind the surrounding package
         metadata, while ``raw_sha256`` binds only the captured bytes. This
-        domain-separated digest deliberately includes every dataclass field
-        in this package and every field of its nested identities/label. Times
-        use ``float.hex`` so semantically equal accepted numeric inputs have
-        one stable representation.
+        domain-separated digest deliberately includes every release-bearing
+        package field and every field of its nested identities/label. The
+        hidden construction-integrity snapshot is not itself release data.
+        Times use ``float.hex`` so semantically equal accepted numeric inputs
+        have one stable representation.
         """
 
+        FinalizedBankEvidencePackage.__post_init__(self)
         canonical_payload: dict[str, object] = {
             "checkpoint": {
                 "checkpoint_id": self.checkpoint.checkpoint_id,
@@ -244,6 +312,11 @@ class ReviewerVerdict:
     reviewed_case: BankEvidenceCase
     bound_package_sha256: str
     reviewed_monotonic_s: float
+    _verdict_snapshot: tuple[str, bool, BankEvidenceCase, str, float] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         _validate_non_empty_string(self.reviewer_id, "reviewer_id")
@@ -253,6 +326,24 @@ class ReviewerVerdict:
             raise ValueError("reviewed_case must be an exact BankEvidenceCase")
         _validate_sha256_digest(self.bound_package_sha256, "bound_package_sha256")
         _validate_exact_finite_timestamp(self.reviewed_monotonic_s, "reviewed_monotonic_s")
+        verdict_snapshot = (
+            self.reviewer_id,
+            self.accepted,
+            self.reviewed_case,
+            self.bound_package_sha256,
+            self.reviewed_monotonic_s,
+        )
+        if hasattr(self, "_verdict_snapshot"):
+            retained_snapshot = self._verdict_snapshot
+            if (
+                not _is_exact_snapshot(
+                    retained_snapshot,
+                    (str, bool, BankEvidenceCase, str, float),
+                )
+                or retained_snapshot != verdict_snapshot
+            ):
+                raise ValueError("reviewer verdict differs from its construction-time snapshot")
+        object.__setattr__(self, "_verdict_snapshot", verdict_snapshot)
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,6 +358,11 @@ class ReviewedBankEvidenceCase:
 
     package: FinalizedBankEvidencePackage
     verdict: ReviewerVerdict
+    _review_snapshot: tuple[str, bool, BankEvidenceCase, str, float, str] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if type(self.package) is not FinalizedBankEvidencePackage:
@@ -286,6 +382,25 @@ class ReviewedBankEvidenceCase:
                 "verdict.bound_package_sha256 does not match package.package_sha256 -- "
                 "a reviewer verdict must be bound to the exact package it reviewed"
             )
+        review_snapshot = (
+            self.verdict.reviewer_id,
+            self.verdict.accepted,
+            self.verdict.reviewed_case,
+            self.verdict.bound_package_sha256,
+            self.verdict.reviewed_monotonic_s,
+            self.package.package_sha256,
+        )
+        if hasattr(self, "_review_snapshot"):
+            retained_snapshot = self._review_snapshot
+            if (
+                not _is_exact_snapshot(
+                    retained_snapshot,
+                    (str, bool, BankEvidenceCase, str, float, str),
+                )
+                or retained_snapshot != review_snapshot
+            ):
+                raise ValueError("reviewer verdict differs from its construction-time snapshot")
+        object.__setattr__(self, "_review_snapshot", review_snapshot)
 
 
 def _validate_evidence_case_batch(
@@ -307,19 +422,21 @@ def _validate_evidence_case_batch(
         raise TypeError("expected_checkpoint must be an exact BankCheckpointIdentity")
     if type(expected_profile) is not BankProfileIdentity:
         raise TypeError("expected_profile must be an exact BankProfileIdentity")
-    if not isinstance(cases, tuple) or any(
+    BankCheckpointIdentity.__post_init__(expected_checkpoint)
+    BankProfileIdentity.__post_init__(expected_profile)
+    if type(cases) is not tuple or any(
         type(case) is not ReviewedBankEvidenceCase for case in cases
     ):
         raise TypeError("cases must be a tuple of exact ReviewedBankEvidenceCase values")
-    if not isinstance(required_cases, frozenset) or any(
+    if type(required_cases) is not frozenset or any(
         type(case) is not BankEvidenceCase for case in required_cases
     ):
         raise TypeError("required_cases must be a frozenset of exact BankEvidenceCase values")
-    maximum_age = _finite_float(max_age_s)
-    if maximum_age is None or maximum_age < 0.0:
-        raise ValueError("max_age_s must be a finite non-negative number")
+    maximum_age = _exact_finite_non_negative_float(max_age_s)
+    if maximum_age is None:
+        raise ValueError("max_age_s must be an exact finite non-negative float")
 
-    evaluated = _finite_float(evaluated_monotonic_s)
+    evaluated = _exact_finite_non_negative_float(evaluated_monotonic_s)
 
     blockers: list[BankingBlocker] = []
     seen_package_ids: set[str] = set()

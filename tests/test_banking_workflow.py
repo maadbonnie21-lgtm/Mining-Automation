@@ -254,6 +254,149 @@ def test_open_attempt_can_still_be_closed() -> None:
     assert context.blockers == ()
 
 
+def test_fresh_closed_reobservation_revokes_open_authority() -> None:
+    context = _arrive(_initial(), frame_id=1)
+    context = _observe_bank(context, BankInterfaceState.OPEN, frame_id=2)
+
+    context = _observe_bank(context, BankInterfaceState.CLOSED, frame_id=3)
+
+    assert context.state is BankingWorkflowState.BANK_CLOSED_VERIFIED
+    assert context.blockers == ()
+    assert context.last_accepted_provenance is not None
+    assert context.last_accepted_provenance.frame.frame_id == 3
+
+    result = _observe_pre_deposit_inventory(context, 28, frame_id=4)
+    assert result.state is BankingWorkflowState.BANK_CLOSED_VERIFIED
+    assert result.blockers == (BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,)
+    assert deposit_readiness(result, evaluated_monotonic_s=4.0) is DepositReadiness.NOT_READY
+
+
+def test_fresh_closed_reobservation_revokes_deposit_readiness() -> None:
+    context = _to_deposit_ready(_initial())
+    assert deposit_readiness(context, evaluated_monotonic_s=3.0) is DepositReadiness.READY
+
+    context = _observe_bank(context, BankInterfaceState.CLOSED, frame_id=4)
+
+    assert context.state is BankingWorkflowState.BANK_CLOSED_VERIFIED
+    assert context.blockers == ()
+    assert deposit_readiness(context, evaluated_monotonic_s=4.0) is DepositReadiness.NOT_READY
+
+    result = _record_deposit_attempt(context, issued_monotonic_s=4.0)
+    assert result.state is BankingWorkflowState.BANK_CLOSED_VERIFIED
+    assert result.pending_attempt_receipt is None
+    assert result.blockers == (BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,)
+
+
+def test_unknown_reobservation_revokes_open_authority_and_can_recover() -> None:
+    context = _arrive(_initial(), frame_id=1)
+    context = _observe_bank(context, BankInterfaceState.OPEN, frame_id=2)
+
+    context = _observe_bank(context, BankInterfaceState.UNKNOWN, frame_id=3)
+
+    assert context.state is BankingWorkflowState.ARRIVED_AT_BANK_CHECKPOINT
+    assert context.blockers == (BankingBlocker.BANK_STATE_UNKNOWN,)
+    assert deposit_readiness(context, evaluated_monotonic_s=3.0) is DepositReadiness.NOT_READY
+
+    context = _observe_bank(context, BankInterfaceState.OPEN, frame_id=4)
+    context = _observe_pre_deposit_inventory(context, 28, frame_id=5)
+    assert context.state is BankingWorkflowState.DEPOSIT_READY_VERIFIED
+    assert context.blockers == ()
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_blocker"),
+    [
+        ("missing", BankingBlocker.BANK_OBSERVATION_MISSING),
+        ("conflicting", BankingBlocker.DUPLICATE_CONFLICTING_BANK_OBSERVATIONS),
+        ("wrong-profile", BankingBlocker.BANK_PROFILE_MISMATCH),
+        ("ordering-regression", BankingBlocker.EVIDENCE_ORDERING_REGRESSION),
+        ("malformed", BankingBlocker.BANK_EVIDENCE_TYPE_INVALID),
+    ],
+)
+def test_invalid_bank_reobservation_revokes_ready_authority(
+    mode: str,
+    expected_blocker: BankingBlocker,
+) -> None:
+    context = _to_deposit_ready(_initial())
+    provenance = build_provenance(
+        frame_id=3 if mode == "ordering-regression" else 4,
+        captured_monotonic_s=3.0 if mode == "ordering-regression" else 4.0,
+    )
+    reading = build_bank_observation(
+        interface_state=BankInterfaceState.OPEN,
+        provenance=provenance,
+        profile=(
+            replace(SYNTHETIC_BANK_PROFILE, profile_version="wrong")
+            if mode == "wrong-profile"
+            else SYNTHETIC_BANK_PROFILE
+        ),
+    )
+    if mode == "missing":
+        event = BankObservationEvidence(observations=())
+    elif mode == "conflicting":
+        event = BankObservationEvidence(
+            observations=(
+                reading,
+                build_bank_observation(
+                    interface_state=BankInterfaceState.CLOSED,
+                    provenance=provenance,
+                ),
+            )
+        )
+    else:
+        event = BankObservationEvidence(observations=(reading,))
+    if mode == "malformed":
+        object.__setattr__(event, "observations", ("not-an-observation",))
+
+    result = advance_banking_workflow(
+        context,
+        event,
+        evaluated_monotonic_s=4.0,
+    )
+
+    assert result.state is BankingWorkflowState.ARRIVED_AT_BANK_CHECKPOINT
+    assert result.blockers == (expected_blocker,)
+    assert result.pending_attempt_receipt is None
+    assert deposit_readiness(result, evaluated_monotonic_s=4.0) is DepositReadiness.NOT_READY
+
+
+def test_blocked_ready_context_cannot_accept_deposit_attempt() -> None:
+    context = _to_deposit_ready(_initial())
+    context = advance_banking_workflow(
+        context,
+        OpenBankAttempted(),
+        evaluated_monotonic_s=3.0,
+    )
+    assert context.state is BankingWorkflowState.DEPOSIT_READY_VERIFIED
+    assert context.blockers == (BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,)
+    assert deposit_readiness(context, evaluated_monotonic_s=3.0) is DepositReadiness.NOT_READY
+
+    result = _record_deposit_attempt(context, issued_monotonic_s=3.0)
+
+    assert result.state is BankingWorkflowState.DEPOSIT_READY_VERIFIED
+    assert result.pending_attempt_receipt is None
+    assert result.used_attempt_receipt_ids == frozenset()
+    assert result.blockers == (BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,)
+
+
+def test_bank_closure_during_deposit_pending_abandons_pending_authority() -> None:
+    context = _to_deposit_ready(_initial())
+    context = _record_deposit_attempt(context, issued_monotonic_s=3.0)
+    assert context.state is BankingWorkflowState.DEPOSIT_ATTEMPT_PENDING
+    assert context.pending_attempt_receipt is not None
+
+    context = _observe_bank(context, BankInterfaceState.CLOSED, frame_id=4)
+
+    assert context.state is BankingWorkflowState.BANK_CLOSED_VERIFIED
+    assert context.pending_attempt_receipt is None
+    assert context.used_attempt_receipt_ids == frozenset({"synthetic-deposit-workflow-attempt"})
+
+    result = _observe_post_deposit_inventory(context, 0, frame_id=5)
+    assert result.state is BankingWorkflowState.BANK_CLOSED_VERIFIED
+    assert not result.complete
+    assert result.blockers == (BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,)
+
+
 def test_deposit_attempt_can_still_be_full() -> None:
     context = _to_deposit_ready(_initial())
     context = _record_deposit_attempt(context, issued_monotonic_s=3.0)

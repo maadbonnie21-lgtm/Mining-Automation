@@ -60,6 +60,13 @@ Transition summary::
         --PostDepositInventoryObservationEvidence(known non-empty)-->
                                                     (unchanged, blocked)
 
+    BANK_CLOSED_VERIFIED / BANK_OPEN_VERIFIED / DEPOSIT_READY_VERIFIED /
+    DEPOSIT_ATTEMPT_PENDING
+        --fresh BankObservationEvidence(OPEN)-->    BANK_OPEN_VERIFIED
+        --fresh BankObservationEvidence(CLOSED)-->  BANK_CLOSED_VERIFIED
+        --fresh BankObservationEvidence(UNKNOWN)--> ARRIVED_AT_BANK_CHECKPOINT,
+                                                    blocked
+
     BANKING_COMPLETE is terminal; start a new context for the next visit.
 """
 
@@ -306,9 +313,10 @@ class BankingWorkflowContext:
     """Immutable workflow state plus the fixed identity of the current visit.
 
     ``blockers`` explains why the *previous* call to
-    :func:`advance_banking_workflow` did not change ``state`` -- it is always
-    empty immediately after a successful advance and after construction via
-    :func:`initial_banking_workflow_context`.
+    :func:`advance_banking_workflow` could not grant or retain authority. A
+    denial either preserves state or revokes it to a safer boundary; blockers
+    are empty after accepted evidence advances or safely reclassifies state,
+    and after construction via :func:`initial_banking_workflow_context`.
     """
 
     state: BankingWorkflowState
@@ -560,6 +568,72 @@ def _resolve_single(
     return first, None
 
 
+def _invalidate_bank_authority(
+    context: BankingWorkflowContext,
+    blockers: tuple[BankingBlocker, ...],
+    *,
+    provenance: BankEvidenceProvenance | None = None,
+) -> BankingWorkflowContext:
+    """Drop established bank/readiness/deposit-pending authority safely."""
+    retained_provenance = provenance or context.last_accepted_provenance
+    assert retained_provenance is not None
+    invalidated = _advanced(
+        context,
+        BankingWorkflowState.ARRIVED_AT_BANK_CHECKPOINT,
+        provenance=retained_provenance,
+    )
+    return _denied(invalidated, blockers)
+
+
+def _handle_bank_authority_reobservation(
+    context: BankingWorkflowContext,
+    event: BankObservationEvidence,
+    evaluated_monotonic_s: object,
+) -> BankingWorkflowContext:
+    """Consume a newer bank reading without carrying older OPEN authority through it."""
+    try:
+        BankObservationEvidence.__post_init__(event)
+    except ValueError:
+        return _invalidate_bank_authority(context, (BankingBlocker.BANK_EVIDENCE_TYPE_INVALID,))
+
+    observation, resolve_blocker = _resolve_single(
+        event.observations,
+        missing_blocker=BankingBlocker.BANK_OBSERVATION_MISSING,
+        conflict_blocker=BankingBlocker.DUPLICATE_CONFLICTING_BANK_OBSERVATIONS,
+    )
+    if resolve_blocker is not None:
+        return _invalidate_bank_authority(context, (resolve_blocker,))
+    assert type(observation) is BankObservation
+
+    result = evaluate_bank_observation(
+        observation,
+        expected_checkpoint=context.expected_checkpoint,
+        expected_profile=context.expected_profile,
+        expected_detector=context.expected_detector,
+        evaluated_monotonic_s=evaluated_monotonic_s,
+        previous_provenance=context.last_accepted_provenance,
+    )
+    if not result.accepted:
+        return _invalidate_bank_authority(context, result.blockers)
+    if result.interface_state is BankInterfaceState.OPEN:
+        return _advanced(
+            context,
+            BankingWorkflowState.BANK_OPEN_VERIFIED,
+            provenance=observation.provenance,
+        )
+    if result.interface_state is BankInterfaceState.CLOSED:
+        return _advanced(
+            context,
+            BankingWorkflowState.BANK_CLOSED_VERIFIED,
+            provenance=observation.provenance,
+        )
+    return _invalidate_bank_authority(
+        context,
+        (BankingBlocker.BANK_STATE_UNKNOWN,),
+        provenance=observation.provenance,
+    )
+
+
 def advance_banking_workflow(
     context: BankingWorkflowContext,
     event: BankingWorkflowEvent,
@@ -569,9 +643,9 @@ def advance_banking_workflow(
     """Reduce one (context, event) pair to the next context.
 
     Never raises for a domain-level denial -- every fail-closed outcome is
-    returned as an unchanged ``state`` plus a populated ``blockers`` tuple.
-    A :class:`TypeError`/:class:`ValueError` only signals a genuine caller
-    bug (wrong argument types).
+    returned with a populated ``blockers`` tuple and can only preserve or
+    revoke authority, never increase it. A :class:`TypeError`/:class:`ValueError`
+    only signals a genuine caller bug (wrong argument types).
     """
     if type(context) is not BankingWorkflowContext:
         raise TypeError("context must be an exact BankingWorkflowContext")
@@ -701,8 +775,12 @@ def _handle_bank_closed_verified(
     event: BankingWorkflowEvent,
     evaluated_monotonic_s: object,
 ) -> BankingWorkflowContext:
+    if type(event) is BankObservationEvidence:
+        return _handle_bank_authority_reobservation(context, event, evaluated_monotonic_s)
     if type(event) is not OpenBankAttempted:
         return _denied(context, (BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,))
+    if context.blockers:
+        return _denied(context, context.blockers)
     try:
         OpenBankAttempted.__post_init__(event)
     except ValueError:
@@ -736,10 +814,14 @@ def _handle_bank_open_verified(
     event: BankingWorkflowEvent,
     evaluated_monotonic_s: object,
 ) -> BankingWorkflowContext:
+    if type(event) is BankObservationEvidence:
+        return _handle_bank_authority_reobservation(context, event, evaluated_monotonic_s)
     if type(event) is DepositAttempted:
         return _denied(context, (BankingBlocker.DEPOSIT_WITHOUT_INVENTORY_VERIFICATION,))
     if type(event) is not PreDepositInventoryObservationEvidence:
         return _denied(context, (BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,))
+    if context.blockers:
+        return _denied(context, context.blockers)
     try:
         PreDepositInventoryObservationEvidence.__post_init__(event)
     except ValueError:
@@ -780,8 +862,12 @@ def _handle_deposit_ready_verified(
     event: BankingWorkflowEvent,
     evaluated_monotonic_s: object,
 ) -> BankingWorkflowContext:
+    if type(event) is BankObservationEvidence:
+        return _handle_bank_authority_reobservation(context, event, evaluated_monotonic_s)
     if type(event) is not DepositAttempted:
         return _denied(context, (BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,))
+    if context.blockers:
+        return _denied(context, context.blockers)
     try:
         DepositAttempted.__post_init__(event)
     except ValueError:
@@ -815,6 +901,8 @@ def _handle_deposit_attempt_pending(
     event: BankingWorkflowEvent,
     evaluated_monotonic_s: object,
 ) -> BankingWorkflowContext:
+    if type(event) is BankObservationEvidence:
+        return _handle_bank_authority_reobservation(context, event, evaluated_monotonic_s)
     if type(event) is not PostDepositInventoryObservationEvidence:
         return _denied(context, (BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,))
     try:

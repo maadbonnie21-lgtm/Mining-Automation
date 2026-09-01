@@ -277,18 +277,66 @@ PROFILE_CHANGE = WorkflowScenario(
     expected_final_blockers=(BankingBlocker.BANK_PROFILE_MISMATCH,),
 )
 
-BANK_CLOSES_UNEXPECTEDLY_AFTER_OPEN_VERIFIED = WorkflowScenario(
-    scenario_id="bank-closes-unexpectedly-after-open-verified",
+BANK_CLOSES_AFTER_OPEN_VERIFIED = WorkflowScenario(
+    scenario_id="bank-closes-after-open-verified",
     steps=(
         _arrive_step(1),
         _bank_observed_step(BankInterfaceState.OPEN, 2),
-        # A stray re-observation once OPEN is already verified -- e.g. the
-        # bank interface unexpectedly closed mid-visit. The workflow does not
-        # re-verify bank state from BANK_OPEN_VERIFIED; it must deny this,
-        # never silently treat it as a new/different accepted state.
+        # A newer exact CLOSED reading revokes the older OPEN authority.
         _bank_observed_step(BankInterfaceState.CLOSED, 3),
     ),
-    expected_final_state=BankingWorkflowState.BANK_OPEN_VERIFIED,
+    expected_final_state=BankingWorkflowState.BANK_CLOSED_VERIFIED,
+)
+
+BANK_CLOSES_AFTER_DEPOSIT_READY = WorkflowScenario(
+    scenario_id="bank-closes-after-deposit-ready",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.OPEN, 2),
+        _pre_deposit_inventory_step(28, 3),
+        _bank_observed_step(BankInterfaceState.CLOSED, 4),
+        # Inventory alone cannot restore readiness after the newer CLOSED.
+        _pre_deposit_inventory_step(28, 5),
+    ),
+    expected_final_state=BankingWorkflowState.BANK_CLOSED_VERIFIED,
+    expected_final_blockers=(BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,),
+)
+
+BANK_BECOMES_UNKNOWN_AFTER_OPEN_VERIFIED = WorkflowScenario(
+    scenario_id="bank-becomes-unknown-after-open-verified",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.OPEN, 2),
+        _bank_observed_step(BankInterfaceState.UNKNOWN, 3),
+    ),
+    expected_final_state=BankingWorkflowState.ARRIVED_AT_BANK_CHECKPOINT,
+    expected_final_blockers=(BankingBlocker.BANK_STATE_UNKNOWN,),
+)
+
+BANK_CLOSES_DURING_DEPOSIT_PENDING = WorkflowScenario(
+    scenario_id="bank-closes-during-deposit-pending",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.OPEN, 2),
+        _pre_deposit_inventory_step(28, 3),
+        _deposit_attempt_step(3.0),
+        _bank_observed_step(BankInterfaceState.CLOSED, 4),
+    ),
+    expected_final_state=BankingWorkflowState.BANK_CLOSED_VERIFIED,
+)
+
+BLOCKED_DEPOSIT_READY_CANNOT_ACCEPT_ATTEMPT = WorkflowScenario(
+    scenario_id="blocked-deposit-ready-cannot-accept-attempt",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.OPEN, 2),
+        _pre_deposit_inventory_step(28, 3),
+        # The wrong action blocks this otherwise READY snapshot.
+        _open_attempt_step(3.0),
+        # A causally valid deposit receipt cannot erase that denial.
+        _deposit_attempt_step(3.0),
+    ),
+    expected_final_state=BankingWorkflowState.DEPOSIT_READY_VERIFIED,
     expected_final_blockers=(BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,),
 )
 
@@ -459,7 +507,11 @@ ALL_SCENARIOS = (
     FRAME_GEOMETRY_MISMATCH,
     ORDERING_ERROR,
     PROFILE_CHANGE,
-    BANK_CLOSES_UNEXPECTEDLY_AFTER_OPEN_VERIFIED,
+    BANK_CLOSES_AFTER_OPEN_VERIFIED,
+    BANK_CLOSES_AFTER_DEPOSIT_READY,
+    BANK_BECOMES_UNKNOWN_AFTER_OPEN_VERIFIED,
+    BANK_CLOSES_DURING_DEPOSIT_PENDING,
+    BLOCKED_DEPOSIT_READY_CANNOT_ACCEPT_ATTEMPT,
     INTERRUPTED_TRANSACTION_STRAY_ARRIVAL_DURING_DEPOSIT_PENDING,
     DUPLICATE_RECEIPT_AFTER_FAULT,
     PRE_ATTEMPT_OPEN_OBSERVATION_DELIVERED_AFTER_RECEIPT,

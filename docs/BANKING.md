@@ -63,6 +63,13 @@ DEPOSIT_ATTEMPT_PENDING
     --PostDepositInventoryObservationEvidence(known non-empty)-->
                                                (unchanged, blocked)
 
+BANK_CLOSED_VERIFIED / BANK_OPEN_VERIFIED / DEPOSIT_READY_VERIFIED /
+DEPOSIT_ATTEMPT_PENDING
+    --fresh BankObservationEvidence(OPEN)-->   BANK_OPEN_VERIFIED
+    --fresh BankObservationEvidence(CLOSED)--> BANK_CLOSED_VERIFIED
+    --fresh BankObservationEvidence(UNKNOWN)--> ARRIVED_AT_BANK_CHECKPOINT,
+                                                blocked
+
 BANKING_COMPLETE is terminal; start a new context for the next visit.
 ```
 
@@ -76,6 +83,20 @@ captured strictly after the receipt time and no more than
 bank-open evidence must also remain within `MAX_BANKING_EVIDENCE_AGE_S` when
 it is composed with a later bank or inventory observation; a shared
 `cycle_id` never makes old evidence durable.
+Any newer bank-interface reading in an established OPEN, readiness, or
+deposit-pending state revokes that older authority before it is interpreted:
+CLOSED transitions to
+`BANK_CLOSED_VERIFIED`, UNKNOWN returns to the arrival boundary with
+`BANK_STATE_UNKNOWN`, and an invalid or conflicting re-observation likewise
+returns to that boundary with its exact blocker. Re-observation while a
+deposit attempt is pending abandons that receipt, while keeping its ID spent.
+`BANK_OPEN_ATTEMPT_PENDING` is different: its next bank observation is the
+required post-attempt outcome evidence, so UNKNOWN/invalid evidence retains
+the open-attempt boundary and remains pending.
+Once an authority-bearing state has blockers, action/inventory evidence cannot
+erase that denial. A fresh accepted bank re-observation must first clear the
+fault (and OPEN must then receive fresh non-empty inventory evidence again)
+before an attempt can be authorized.
 `CheckpointArrivalEvidence` can only ever produce
 `ARRIVED_AT_BANK_CHECKPOINT` -- it is structurally incapable of producing a
 bank-open or inventory result.
@@ -173,8 +194,14 @@ not advance and `blockers` is non-empty).
   blocker before any receipt-boundary field is dereferenced
 - detector output whose claimed frame digest does not equal the SHA-256 of the
   exact input payload, or a detector that mutates that payload during a run
-- bank closes unexpectedly after `BANK_OPEN_VERIFIED` (a stray re-observation
-  is an unexpected event for that state, not a re-verification)
+- a newer CLOSED bank reading after OPEN, deposit readiness, or a pending
+  deposit revokes the older authority; inventory evidence alone cannot restore
+  it, and any pending receipt is abandoned but remains spent
+- a newer UNKNOWN, invalid, missing, or conflicting bank re-observation after
+  OPEN, readiness, or deposit-pending returns to the arrival boundary with a
+  blocker; old OPEN authority cannot survive the uncertainty
+- a denied `DEPOSIT_READY_VERIFIED` context is `NOT_READY` and cannot consume
+  a later deposit receipt until fresh bank and inventory evidence restore it
 - interrupted transaction: a stray/replayed event (e.g. an old arrival) while
   a deposit is `DEPOSIT_ATTEMPT_PENDING` is denied, never mistaken for a
   fresh post-deposit reading or a restart
@@ -196,7 +223,11 @@ and blockers, and that replaying the same scenario twice is byte-identical:
 - frame geometry mismatch
 - evidence ordering regression (observation replays the arrival frame)
 - profile-version change
-- bank closes unexpectedly after OPEN was already verified (fault/recovery)
+- bank closes after OPEN, after deposit readiness, or while deposit is pending;
+  each replay proves that older authority is revoked (fault/recovery)
+- bank becomes UNKNOWN after OPEN; replay returns to the arrival boundary
+- a blocked deposit-ready snapshot cannot consume a later otherwise-valid
+  deposit receipt; fresh bank and inventory re-verification is required
 - interrupted transaction: a stray arrival event replays mid-deposit (fault/recovery)
 - a retried open-bank attempt after a fault reuses a receipt id and is
   rejected as a duplicate, even though its provenance is otherwise valid
@@ -274,6 +305,17 @@ Two invariants, both enforced by construction:
   operator labeling -> package finalization -> review order is strict
   (equality at either boundary is rejected). Canonical timestamps are exact,
   finite, non-negative floats, with signed zero normalized before hashing.
+  Digest-bound strings must contain Unicode scalar values (literal surrogate
+  code points are rejected), preventing distinct Python strings from sharing
+  one escaped canonical JSON representation. Finalized-package fields and
+  reviewer-decision fields establish their own flattened construction-time
+  snapshots; the wrapper separately snapshots the verdict/package binding.
+  All three are recursively revalidated before digesting, wrapping, or release
+  use, so neither a finalized package nor a rejected verdict can be changed
+  after construction and then rebound as if it were a new review. Retained
+  snapshots must be exact built-in tuples of exact primitive/enum members;
+  malformed snapshot objects are rejected before equality, preventing a
+  comparison callback from changing reviewer truth during validation.
 
 `validate_release_evidence_case_batch` is the fixed-policy release check over
 a proposed batch, covering every case
@@ -285,6 +327,15 @@ policy engine is underscore-private and absent from both module and package
 `__all__`; it is not a supported release-facing API. The expected
 checkpoint/profile are still explicit caller inputs until a source-owned
 deployment policy exists:
+
+The batch boundary accepts only exact built-in `tuple` and `frozenset`
+containers, recursively revalidates the expected checkpoint/profile and every
+reviewed package, and rejects container subclasses before iteration. This
+prevents a stateful container or post-construction nested mutation from
+changing what was checked into a different release decision. Evaluation time
+and even the private diagnostic freshness parameter must be exact finite
+non-negative floats; integers are rejected before conversion so large values
+cannot round across the release freshness boundary.
 
 | Defect | Blocker |
 | --- | --- |
