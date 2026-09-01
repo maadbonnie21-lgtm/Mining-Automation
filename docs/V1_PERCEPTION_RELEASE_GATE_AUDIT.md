@@ -1,6 +1,7 @@
 # Constrained-v1 perception release-gate audit
 
-Status: **not release eligible; offline audit complete, fresh evidence still required**
+Status: **not release eligible; detector/trust/replay audit complete, but the
+release-evidence boundary and C1/C2 gates remain open**
 
 This ledger supersedes the historical blocker lists in PRs #10 and #12. It
 audits the newest accepted lineages without merging or modifying the frozen
@@ -33,12 +34,23 @@ arbitrary reacquisition are retired from the v1 critical path. A scene the
 production detector cannot validate remains UNCERTAIN, exposes zero targets,
 and requires STOP. Diagnostic registration never changes that verdict.
 
+Reported DPI `96` is the required **candidate** value for the constrained
+resource envelope, pending fresh source-owned capture and final review. It is
+not packaged-profile identity and is not already proven by the stored replay
+fixtures. Missing or non-96 DPI evidence may be retained as a failure, but it
+cannot satisfy the supported-envelope gates.
+
 `ProductionResourceTrustResult.accepted` means that a complete ensemble passed
 the resource identity and shape checks. It is not scene or action authority.
 An identity-valid all-UNCERTAIN ensemble retains four explicit unknown states
 but has zero actionable targets. The frozen PR #38 reference additionally
 demonstrates that any resource uncertainty denies downstream authority; it is
 not activated by this audit.
+
+The machine-readable resource record sets `release_eligible=false`. The open B
+resource release-evidence boundary is separate from C1 fresh empirical evidence
+and C2 evidence-contingent source/review gates. Closing every C1 capture/result
+does not close C2 and cannot self-promote either perception lineage.
 
 ## PR #10 inventory ledger
 
@@ -63,22 +75,31 @@ authorization, production export, or pixel.
 PR #37 must retain ordinary history. Squash, rebase, or cherry-pick changes the
 P/L Git identities and invalidates the current protocol lock.
 
-### C. Fresh-evidence-only blockers
+### C1. Fresh empirical evidence required
 
-1. A separately reviewed source-owned live authorization is still absent. No
+1. A separately reviewed source-owned live authorization is a prerequisite. No
    inventory campaign may run before it exists.
 2. One irrevocable passive seven-case campaign is required in source order:
    `empty`, `early-partial`, `mid-partial`, `near-full`, `full`, `wrong-tab`,
    `row-obstruction`. Every owned capture remains in the campaign.
-3. Reviewer truth must be written after finalization by a reviewer distinct
-   from the operator. A later approver must be distinct from both.
-4. The frozen V3 candidate must agree exactly with every reviewed case. A miss
-   is a validation failure, not permission to tune V3 against the campaign.
-5. A source-owned approval-registry entry must bind the exact package,
+3. Reviewer truth must be written after package finalization by a reviewer
+   distinct from the operator.
+4. The frozen V3 candidate must agree exactly with every independently
+   reviewed case under the locked evaluator. A miss is a validation failure,
+   not permission to tune V3 against the campaign.
+
+### C2. Evidence-contingent source/review gates
+
+1. A source-owned approval-registry entry must bind the exact package,
    campaign, session, completion seal, reviewer truth, and report hashes.
-6. After a nonactivating independent PASS, a separate reviewed production
+   Its approver must be distinct from both operator and reviewer.
+2. After a nonactivating independent PASS, a separate reviewed production
    change must bind the approved detector/profile/configuration/reference path.
    The frozen candidate is deliberately not a production export today.
+
+The inventory release gate stays open until every C1 authorization, campaign,
+reviewer-truth, and conformance requirement and every C2 approval and
+production-binding gate closes.
 
 ## Exact inventory post-campaign decision
 
@@ -131,7 +152,9 @@ provenance is the deciding evidence.
 | RES-A6 | Gzip replay materialization verifies reviewed payload hashes, uses one immutable manifest snapshot, writes the manifest last, and preserves a winning concurrent writer. | Accepted resource head `225ea752...` |
 | RES-A7 | The complete real drift corpus is fail closed: 36/36 UNCERTAIN and zero false definitive targets. | Report SHA-256 `50cadb524bd4e54dd2bcbfe80fd9f4a9b7bb27cb5b041433ca0a151828c1b788` |
 
-### B. Offline blockers closed by this audit
+### B. Offline blockers
+
+#### B1. Closed by this audit
 
 1. The structured resource record incorrectly named detector `1.0.0`; it now
    binds `2.1.0`, profile schema v3, exact geometry/pixel format, candidate
@@ -145,11 +168,24 @@ provenance is the deciding evidence.
    four UNKNOWN resource states, exposes zero actionable targets, and performs
    no retry or camera fallback.
 
-No further production detector, trust, provenance, or replay-integrity defect
-is proven by committed evidence. Thresholds, 5/6 quorum, three-zone policy,
-candidate policy, and scene authority remain unchanged.
+No further defect is proven inside the accepted resource-base production
+detector, runtime trust, or reviewed-fixture replay-materialization path. This
+statement does **not** close the release-evidence boundary or the subsequent
+C1/C2 gates below. Thresholds, 5/6 quorum, three-zone policy, candidate policy,
+and scene authority remain unchanged.
 
-### C. Fresh-evidence-only blockers
+#### B2. Release-evidence boundary still open
+
+The generic development capture/annotation path cannot make future real
+captures count as release evidence. A separate passive, source-owned boundary
+must bind the exact repository and capture build, detector/profile/schema/
+location, geometry and DPI requirement, capture configuration and fixed case
+vocabulary; finalize immutable raw/report/package hashes before independent
+review; and reject caller labels, replacement, duplicates, foreign/stale/
+partial evidence, and concurrent collisions. Until that boundary is reviewed,
+resource C1 evidence collection is not authorized.
+
+### C1. Fresh empirical evidence required
 
 1. One reviewed real available/depleted/respawn sequence for each unproven
    node: north-west, center, and north-east. The south-west cycle cannot prove
@@ -162,10 +198,22 @@ candidate policy, and scene authority remain unchanged.
 4. Reviewed real negatives for a neighboring copper rock, a neighboring tin
    rock, and terrain clutter, each proving no false iron target.
 5. One fresh current-client positive startup capture already in the exact
-   reviewed `1005x1078` BGRA supported view.
-6. Final lead review of the exact client/DPI/renderer/profile operating
-   envelope and promotion of every retained failure to a privacy-safe replay
-   regression.
+   reviewed `1005x1078` BGRA supported view, reporting candidate DPI `96`.
+
+### C2. Evidence-contingent source/review gates
+
+1. Final lead review must approve the exact client, candidate DPI `96`,
+   renderer, profile, and supported-view operating envelope. A C1 image that
+   merely reports `96` does not perform this review.
+2. Every retained failure must be promoted through the privacy-safe permanent
+   replay-regression path before its associated release gate can close.
+3. A resulting source-owned constrained-v1 resource release/promotion record
+   must bind the exact reviewed package, reviewer truth, production results,
+   permanent replay promotions, and approved envelope. It remains separate
+   from C1 detector results.
+
+Even a complete C1 campaign leaves `release_eligible=false` until every C2
+source, review, promotion, and approval gate is explicitly closed.
 
 Any detector/profile-changing head must also rerun the complete 36-frame drift
 set and preserve 36/36 UNCERTAIN with zero false definitive targets. None of

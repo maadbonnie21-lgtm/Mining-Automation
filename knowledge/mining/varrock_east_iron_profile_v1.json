@@ -43,7 +43,11 @@
     "frame_height": 1078,
     "frame_width": 1005,
     "pixel_format": "bgra8888",
-    "reported_dpi": 96,
+    "reported_dpi_requirement": {
+      "candidate_value": 96,
+      "evidence_role": "required_release_envelope_constraint_not_packaged_profile_identity",
+      "status": "pending_fresh_supported_envelope_review"
+    },
     "unsupported_or_uncertain_view_policy": "zero_targets_and_stop"
   },
   "detector_version": "2.1.0",
@@ -72,17 +76,37 @@
     "mixed_state_validated": true,
     "privacy_sanitized": true
   },
+  "release_evidence_boundary": {
+    "reason": "generic_development_capture_and_annotation_are_not_release_authority",
+    "required_capability": "source_owned_immutable_passive_campaign_and_independent_review",
+    "status": "OPEN"
+  },
+  "release_eligible": false,
+  "release_gate_categories": {
+    "c1_fresh_empirical_evidence": {
+      "gates": [
+        "real north-west depletion and respawn",
+        "real center depletion and respawn",
+        "real north-east depletion and respawn",
+        "real unsupported-location fixture",
+        "real neighboring copper/tin/terrain negative fixtures",
+        "real sample-patch obstruction fixture",
+        "fresh current-client positive capture in the exact reviewed supported view",
+        "independent reviewer truth for every empirical case"
+      ],
+      "status": "OPEN"
+    },
+    "c2_evidence_contingent_source_review": {
+      "gates": [
+        "reported DPI 96 and exact client/renderer/profile envelope independently reviewed",
+        "every retained failure promoted to a privacy-safe replay regression",
+        "source-owned constrained-v1 resource release and promotion record"
+      ],
+      "status": "OPEN"
+    }
+  },
   "release_ready": false,
-  "remaining_release_gates": [
-    "real north-west depletion and respawn",
-    "real center depletion and respawn",
-    "real north-east depletion and respawn",
-    "real unsupported-location fixture",
-    "real neighboring copper/tin/terrain negative fixtures",
-    "real sample-patch obstruction fixture",
-    "fresh current-client positive capture in the exact reviewed supported view",
-    "final constrained-v1 supported-envelope review"
-  ],
-  "schema_version": 1,
+  "release_status": "pending_b_boundary_c1_empirical_and_c2_source_review_gates",
+  "schema_version": 2,
   "support_status": "calibrated_partial_validation"
 }
