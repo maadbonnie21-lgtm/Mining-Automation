@@ -258,6 +258,36 @@ approve the envelope, close B or C2, create a release record, promote a
 fixture, activate perception, or grant input authority. Renderer identity
 remains explicitly unobserved and requires external review.
 
+Prepare deterministic fixture/evaluator **proposals** for exact source-owned
+replay candidates by supplying both independently retained roots:
+
+```powershell
+python tools/resource_release_campaign.py prepare-replay-proposals --followup <followup-inputs.json> --expected-followup-sha256 <retained-followup-sha256> --package <review-package-directory> --expected-package-manifest-sha256 <retained-package-manifest-sha256> --output <new-proposal-directory>
+```
+
+The command cross-binds the frozen follow-up selection to the original review
+package, copies only the already privacy-masked canonical gzip replay bytes,
+embeds the exact canonical privacy-safe follow-up input for standalone selection
+reconstruction, and writes a manifest last. Metadata-only and injected/test
+failures remain unpreparable. It has no candidate selector, relabeling option,
+dataset override, or apply/adopt mode. The output is review input only: it is
+not a fixture manifest, is not permanent evidence, and grants no approval,
+promotion, release, activation, or input authority.
+
+Retain the returned proposal-manifest SHA-256 outside the proposal directory,
+then verify the exact proposal snapshot before source review:
+
+```powershell
+python tools/resource_release_campaign.py verify-replay-proposals --proposal <proposal-directory> --expected-manifest-sha256 <retained-proposal-manifest-sha256>
+```
+
+Verification rechecks the complete file and directory inventory, reconstructs
+candidate/metadata/non-release selection from the embedded externally rooted
+follow-up, verifies canonical compressed bytes and fixed-UI opacity, replays the
+unchanged production detector, and checks reviewer truth plus every deny-only
+policy field. A later reviewed source commit must still decide how to encode the
+regression and bind its final fixture/evaluator Git hashes.
+
 ## Fail-closed invariants
 
 - Production perception is the sole scene and resource authority.

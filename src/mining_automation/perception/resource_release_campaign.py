@@ -452,6 +452,10 @@ class _VerifiedCaseSnapshot:
     case_id: str
     case_review_sha256: str
     case_review_json: bytes
+    sanitized_raw_gzip_path: str | None
+    sanitized_raw_gzip_sha256: str | None
+    sanitized_raw_gzip_bytes: bytes | None
+    sanitized_decompressed_sha256: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,6 +468,16 @@ class _VerifiedReviewPackageSnapshot:
     manifest_json: bytes
     release_summary_json: bytes
     cases: tuple[_VerifiedCaseSnapshot, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedFollowupSnapshot:
+    """Validated follow-up bytes consumed without reopening mutable inputs."""
+
+    path: Path
+    sha256: str
+    inputs_json: bytes
+    inputs: dict[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -5109,6 +5123,10 @@ def _load_verified_review_package_snapshot(
             raise CampaignIntegrityError(
                 "public PASS contains mixed prior capture origins"
             )
+        sanitized_raw_gzip_path: str | None = None
+        sanitized_raw_gzip_sha256: str | None = None
+        sanitized_raw_gzip_bytes: bytes | None = None
+        sanitized_decompressed_sha256: str | None = None
         artifacts = decision_artifacts
         expected_files.update({case_review_rel, f"{case_review_rel}.sha256"})
         mode = artifacts.get("mode")
@@ -5175,6 +5193,12 @@ def _load_verified_review_package_snapshot(
                 )
             if raw_meta.get("decompressed_sha256") != _sha256(pixels):
                 raise CampaignIntegrityError("public decompressed hash changed")
+            sanitized_raw_gzip_path = raw_rel
+            sanitized_raw_gzip_sha256 = raw_sha
+            sanitized_raw_gzip_bytes = compressed
+            sanitized_decompressed_sha256 = cast(
+                str, raw_meta["decompressed_sha256"]
+            )
             frame = _public_frame(frame_meta, pixels)
             _verify_opaque_fixed_ui(frame)
             preview_payload, _ = _verify_hashed_artifact(
@@ -5282,6 +5306,10 @@ def _load_verified_review_package_snapshot(
                 case_id=case.case_id,
                 case_review_sha256=case_sha,
                 case_review_json=case_payload,
+                sanitized_raw_gzip_path=sanitized_raw_gzip_path,
+                sanitized_raw_gzip_sha256=sanitized_raw_gzip_sha256,
+                sanitized_raw_gzip_bytes=sanitized_raw_gzip_bytes,
+                sanitized_decompressed_sha256=sanitized_decompressed_sha256,
             )
         )
     actual_files: set[str] = set()
@@ -5390,6 +5418,16 @@ def _followup_inputs_from_verified_snapshot(
         frame = cast(dict[str, object], public_case["frame"])
         artifacts = cast(dict[str, object], public_case["sanitized_artifacts"])
         release_result = cast(dict[str, object], public_case["release_result"])
+        if artifacts.get("mode") == "pixels-withheld-unsupported-geometry":
+            # The public package deliberately replaces private production with
+            # one canonical fail-closed authority projection.  Its follow-up
+            # must not carry a scene verdict or state vector that cannot be
+            # replayed from public pixels.
+            release_result = {
+                **release_result,
+                "production_scene_validated": False,
+                "production_state_vector": None,
+            }
         evidence_origin = policy["evidence_origin"]
         reported_dpi = environment["reported_dpi"]
         frame_width = cast(int, frame["width"])
@@ -6722,11 +6760,12 @@ def _validate_release_followup_inputs(value: Mapping[str, object]) -> None:
         raise CampaignIntegrityError("follow-up C2 envelope projection changed")
 
 
-def verify_release_followup_inputs(
+def _load_verified_followup_snapshot(
     path: Path, *, expected_sha256: str
-) -> dict[str, object]:
-    """Verify immutable follow-up inputs against an independently retained root."""
+) -> _VerifiedFollowupSnapshot:
+    """Verify and snapshot follow-up inputs against an independent root."""
 
+    path = Path(path)
     if not isinstance(expected_sha256, str) or not _SHA256_PATTERN.fullmatch(
         expected_sha256
     ):
@@ -6734,18 +6773,33 @@ def verify_release_followup_inputs(
             "expected follow-up SHA-256 must be 64 lowercase hexadecimal characters"
         )
     payload, digest = _verify_hashed_artifact(
-        Path(path),
+        path,
         expected=expected_sha256,
         maximum_bytes=_MAX_FOLLOWUP_JSON_BYTES,
     )
     inputs = _strict_json_bytes(payload, label="resource release follow-up inputs")
     _validate_release_followup_inputs(inputs)
+    return _VerifiedFollowupSnapshot(
+        path=path,
+        sha256=digest,
+        inputs_json=payload,
+        inputs=inputs,
+    )
+
+
+def verify_release_followup_inputs(
+    path: Path, *, expected_sha256: str
+) -> dict[str, object]:
+    """Verify immutable follow-up inputs against an independently retained root."""
+
+    snapshot = _load_verified_followup_snapshot(path, expected_sha256=expected_sha256)
+    inputs = snapshot.inputs
     candidates = cast(
         dict[str, object], inputs["failure_promotion_inputs"]
     )["candidate_count"]
     return {
-        "inputs": str(Path(path)),
-        "sha256": digest,
+        "inputs": str(snapshot.path),
+        "sha256": snapshot.sha256,
         "source_manifest_sha256": cast(
             dict[str, object], inputs["source_snapshot"]
         )["manifest_sha256"],

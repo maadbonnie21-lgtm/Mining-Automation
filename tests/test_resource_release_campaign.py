@@ -25,6 +25,7 @@ from mining_automation.capture import (
 from mining_automation.capture.testing import FakeCaptureBackend, ManualClock
 from mining_automation.perception import resource_release_campaign as campaign
 from mining_automation.perception import resource_release_campaign_cli as campaign_cli
+from mining_automation.perception import resource_replay_promotion as replay_promotion
 from mining_automation.perception.resource import ResourceVisualState
 
 _HEAD_SHA = "a" * 40
@@ -129,7 +130,17 @@ def _enable_tiny_verifier_profile(monkeypatch: pytest.MonkeyPatch) -> None:
     values["frame_height"] = 104
     tiny_profile = SimpleNamespace(**values)
     monkeypatch.setattr(campaign, "load_varrock_east_iron_profile", lambda: tiny_profile)
+    monkeypatch.setattr(
+        replay_promotion,
+        "load_varrock_east_iron_profile",
+        lambda: tiny_profile,
+    )
     monkeypatch.setattr(campaign, "_profile_identity", lambda: identity)
+    monkeypatch.setattr(
+        replay_promotion,
+        "load_varrock_east_iron_profile",
+        lambda: tiny_profile,
+    )
 
 
 def _canonical_json_bytes(value: Mapping[str, object]) -> bytes:
@@ -2916,6 +2927,789 @@ def test_prepare_followup_preserves_dpi_window_facts_without_approving_envelope(
     assert envelope["retained_failure_case_ids"] == [
         case.case_id for case in campaign.CAMPAIGN_PLAN[:3]
     ]
+
+
+def _replay_promotion_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    source_owned: bool = True,
+    pixels_withheld: bool = False,
+) -> tuple[Path, Path, str, str]:
+    if pixels_withheld:
+        package = _export_withheld_public_package(
+            monkeypatch,
+            tmp_path / "package-source",
+            source_owned=source_owned,
+        )
+    else:
+        first = campaign.CAMPAIGN_PLAN[0]
+        wrong = _decision_for(
+            first,
+            meaning=campaign.ReviewMeaning.UNSUPPORTED_LOCATION,
+            states=(ResourceVisualState.UNCERTAIN,) * 4,
+        )
+        package = _export_compact_public_package(
+            monkeypatch,
+            tmp_path / "package-source",
+            source_owned=source_owned,
+            review_override={first.case_id: wrong},
+        )
+    package_sha = _current_manifest_sha256(package)
+    followup = tmp_path / "followup.json"
+    result = campaign.prepare_release_followup_inputs(
+        package,
+        followup,
+        expected_manifest_sha256=package_sha,
+    )
+    return package, followup, package_sha, cast(str, result["sha256"])
+
+
+def test_replay_promotion_prepares_exact_source_owned_retained_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package, followup, package_sha, followup_sha = _replay_promotion_inputs(
+        monkeypatch, tmp_path
+    )
+    output = tmp_path / "proposals"
+    result = replay_promotion.prepare_replay_promotion_proposals(
+        followup,
+        package,
+        output,
+        expected_followup_sha256=followup_sha,
+        expected_package_manifest_sha256=package_sha,
+    )
+
+    assert result["proposal_count"] == 1
+    assert result["metadata_only_count"] == 0
+    assert result["adopted"] is False
+    assert result["promotion_allowed"] is False
+    assert result["activation_allowed"] is False
+    manifest = json.loads((output / "proposal-manifest.json").read_text("utf-8"))
+    assert manifest["preparation_id"] == (
+        "resource-release-replay-promotion-preparation-v1"
+    )
+    assert manifest["source"]["followup_sha256"] == followup_sha
+    assert manifest["source"]["package_manifest_sha256"] == package_sha
+    assert manifest["selection"]["caller_selected_case_ids"] == []
+    assert manifest["selection"]["preparable_case_ids"] == [
+        campaign.CAMPAIGN_PLAN[0].case_id
+    ]
+    assert manifest["authority"] == {
+        "proposal_only": True,
+        "adopted": False,
+        "permanent_regression": False,
+        "approval_authority": False,
+        "promotion_allowed": False,
+        "release_eligible": False,
+        "activation_allowed": False,
+        "input_authority": False,
+    }
+    entry = manifest["proposals"][0]
+    copied = output / entry["gzip_path"]
+    package_manifest = json.loads((package / "manifest.json").read_text("utf-8"))
+    source_case = package / package_manifest["cases"][0]["case_review_path"]
+    source_gzip = source_case.parent / "sanitized-frame.raw.gz"
+    assert copied.read_bytes() == source_gzip.read_bytes()
+    assert hashlib.sha256(copied.read_bytes()).hexdigest() == entry["gzip_sha256"]
+    assert all(
+        b"private-title" not in path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    )
+    verified = replay_promotion.verify_replay_promotion_proposals(
+        output,
+        expected_manifest_sha256=cast(str, result["manifest_sha256"]),
+    )
+    assert verified["verified"] is True
+    assert verified["proposal_count"] == 1
+    assert verified["adopted"] is False
+
+
+def test_replay_promotion_all_pass_creates_no_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package = _export_compact_public_package(
+        monkeypatch,
+        tmp_path / "package-source",
+        source_owned=True,
+    )
+    package_sha = _current_manifest_sha256(package)
+    followup = tmp_path / "followup.json"
+    followup_result = campaign.prepare_release_followup_inputs(
+        package,
+        followup,
+        expected_manifest_sha256=package_sha,
+    )
+    output = tmp_path / "must-not-exist"
+
+    with pytest.raises(campaign.CampaignError, match="retained failure"):
+        replay_promotion.prepare_replay_promotion_proposals(
+            followup,
+            package,
+            output,
+            expected_followup_sha256=cast(str, followup_result["sha256"]),
+            expected_package_manifest_sha256=package_sha,
+        )
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("pixels_withheld", (False, True))
+def test_replay_promotion_excludes_injected_and_metadata_only_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    pixels_withheld: bool,
+) -> None:
+    package, followup, package_sha, followup_sha = _replay_promotion_inputs(
+        monkeypatch,
+        tmp_path,
+        source_owned=pixels_withheld,
+        pixels_withheld=pixels_withheld,
+    )
+    output = tmp_path / "proposals"
+    result = replay_promotion.prepare_replay_promotion_proposals(
+        followup,
+        package,
+        output,
+        expected_followup_sha256=followup_sha,
+        expected_package_manifest_sha256=package_sha,
+    )
+    assert result["proposal_count"] == 0
+    assert result["metadata_only_count"] == (
+        len(campaign.CAMPAIGN_PLAN) if pixels_withheld else 0
+    )
+    manifest = json.loads((output / "proposal-manifest.json").read_text("utf-8"))
+    assert manifest["proposals"] == []
+    assert manifest["selection"]["preparable_case_ids"] == []
+    assert manifest["authority"]["promotion_allowed"] is False
+
+
+def test_replay_promotion_requires_both_independently_retained_roots(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package, followup, package_sha, followup_sha = _replay_promotion_inputs(
+        monkeypatch, tmp_path
+    )
+    for name, expected_followup, expected_package in (
+        ("followup", "f" * 64, package_sha),
+        ("package", followup_sha, "e" * 64),
+    ):
+        output = tmp_path / f"reject-{name}"
+        with pytest.raises(campaign.CampaignIntegrityError):
+            replay_promotion.prepare_replay_promotion_proposals(
+                followup,
+                package,
+                output,
+                expected_followup_sha256=expected_followup,
+                expected_package_manifest_sha256=expected_package,
+            )
+        assert not output.exists()
+
+
+def test_replay_promotion_output_must_not_overlap_either_rooted_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package, followup, package_sha, followup_sha = _replay_promotion_inputs(
+        monkeypatch, tmp_path
+    )
+    for output in (package / "proposals", followup.parent):
+        with pytest.raises(campaign.CampaignError, match="separate"):
+            replay_promotion.prepare_replay_promotion_proposals(
+                followup,
+                package,
+                output,
+                expected_followup_sha256=followup_sha,
+                expected_package_manifest_sha256=package_sha,
+            )
+
+
+@pytest.mark.parametrize("tamper", ("authority", "candidate"))
+def test_rehashed_replay_proposal_cannot_gain_authority_or_replace_truth(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    package, followup, package_sha, followup_sha = _replay_promotion_inputs(
+        monkeypatch, tmp_path
+    )
+    output = tmp_path / "proposals"
+    replay_promotion.prepare_replay_promotion_proposals(
+        followup,
+        package,
+        output,
+        expected_followup_sha256=followup_sha,
+        expected_package_manifest_sha256=package_sha,
+    )
+    manifest_path = output / "proposal-manifest.json"
+    manifest = json.loads(manifest_path.read_text("utf-8"))
+    proposal_path = output / manifest["proposals"][0]["proposal_path"]
+
+    def mutate(payload: dict[str, object]) -> None:
+        if tamper == "authority":
+            authority = cast(dict[str, object], payload["authority"])
+            authority["promotion_allowed"] = True
+        else:
+            evaluator = cast(dict[str, object], payload["evaluator_input"])
+            evaluator["reviewer_meaning"] = "supported-startup"
+
+    proposal_sha = _rewrite_hashed_json(proposal_path, mutate)
+
+    def rebind_manifest(payload: dict[str, object]) -> None:
+        proposals = cast(list[dict[str, object]], payload["proposals"])
+        proposals[0]["proposal_sha256"] = proposal_sha
+
+    manifest_sha = _rewrite_hashed_json(manifest_path, rebind_manifest)
+    expected = "identity/authority" if tamper == "authority" else "source binding"
+    with pytest.raises(campaign.CampaignIntegrityError, match=expected):
+        replay_promotion.verify_replay_promotion_proposals(
+            output,
+            expected_manifest_sha256=manifest_sha,
+        )
+
+
+def test_concurrent_replay_promotion_writers_preserve_exact_winner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package, followup, package_sha, followup_sha = _replay_promotion_inputs(
+        monkeypatch, tmp_path
+    )
+    output = tmp_path / "proposals"
+    barrier = threading.Barrier(3)
+    successes: list[dict[str, object]] = []
+    failures: list[BaseException] = []
+
+    def writer() -> None:
+        barrier.wait()
+        try:
+            successes.append(
+                replay_promotion.prepare_replay_promotion_proposals(
+                    followup,
+                    package,
+                    output,
+                    expected_followup_sha256=followup_sha,
+                    expected_package_manifest_sha256=package_sha,
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001 - adversarial writer result
+            failures.append(exc)
+
+    threads = [threading.Thread(target=writer) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert isinstance(failures[0], FileExistsError)
+    replay_promotion.verify_replay_promotion_proposals(
+        output,
+        expected_manifest_sha256=cast(str, successes[0]["manifest_sha256"]),
+    )
+
+
+def _prepared_replay_proposals(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> tuple[Path, Path, Path, dict[str, object]]:
+    package, followup, package_sha, followup_sha = _replay_promotion_inputs(
+        monkeypatch, tmp_path
+    )
+    output = tmp_path / "proposals"
+    result = replay_promotion.prepare_replay_promotion_proposals(
+        followup,
+        package,
+        output,
+        expected_followup_sha256=followup_sha,
+        expected_package_manifest_sha256=package_sha,
+    )
+    return package, followup, output, result
+
+
+def test_replay_promotion_uses_verified_snapshots_after_both_sources_change(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package, followup, package_sha, followup_sha = _replay_promotion_inputs(
+        monkeypatch, tmp_path
+    )
+    package_manifest = json.loads((package / "manifest.json").read_text("utf-8"))
+    source_case = package / package_manifest["cases"][0]["case_review_path"]
+    source_gzip = source_case.parent / "sanitized-frame.raw.gz"
+    rooted_gzip = source_gzip.read_bytes()
+    real_loader = replay_promotion._load_snapshots
+
+    def load_then_mutate_sources(
+        followup_path: Path,
+        package_dir: Path,
+        *,
+        expected_followup_sha256: str,
+        expected_package_manifest_sha256: str,
+    ) -> object:
+        snapshots = real_loader(
+            followup_path,
+            package_dir,
+            expected_followup_sha256=expected_followup_sha256,
+            expected_package_manifest_sha256=expected_package_manifest_sha256,
+        )
+        followup.write_text("changed after verified snapshot\n", encoding="utf-8")
+        source_gzip.write_bytes(b"changed after verified snapshot")
+        return snapshots
+
+    monkeypatch.setattr(replay_promotion, "_load_snapshots", load_then_mutate_sources)
+    output = tmp_path / "proposals"
+    result = replay_promotion.prepare_replay_promotion_proposals(
+        followup,
+        package,
+        output,
+        expected_followup_sha256=followup_sha,
+        expected_package_manifest_sha256=package_sha,
+    )
+    manifest = json.loads((output / "proposal-manifest.json").read_text("utf-8"))
+    copied = output / manifest["proposals"][0]["gzip_path"]
+    assert copied.read_bytes() == rooted_gzip
+    replay_promotion.verify_replay_promotion_proposals(
+        output,
+        expected_manifest_sha256=cast(str, result["manifest_sha256"]),
+    )
+
+
+@pytest.mark.parametrize("mutation", ("noncanonical", "corrupt", "oversized"))
+def test_replay_proposal_rejects_noncanonical_corrupt_or_oversized_gzip(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    _, _, output, _ = _prepared_replay_proposals(monkeypatch, tmp_path)
+    manifest_path = output / "proposal-manifest.json"
+    manifest = json.loads(manifest_path.read_text("utf-8"))
+    entry = manifest["proposals"][0]
+    gzip_path = output / entry["gzip_path"]
+    if mutation == "noncanonical":
+        pixels = gzip.decompress(gzip_path.read_bytes())
+        replacement = gzip.compress(pixels, compresslevel=1, mtime=1)
+    elif mutation == "corrupt":
+        replacement = b"not-a-gzip-stream"
+    else:
+        replacement = b"x" * ((1005 * 1078 * 4) + 4097)
+    gzip_path.write_bytes(replacement)
+    gzip_sha = hashlib.sha256(replacement).hexdigest()
+    gzip_path.with_name(f"{gzip_path.name}.sha256").write_text(
+        f"{gzip_sha}\n", encoding="ascii"
+    )
+    proposal_path = output / entry["proposal_path"]
+
+    def rebind_proposal(payload: dict[str, object]) -> None:
+        fixture = cast(dict[str, object], payload["fixture_input"])
+        frame = cast(dict[str, object], fixture["frame"])
+        frame["gzip_sha256"] = gzip_sha
+
+    proposal_sha = _rewrite_hashed_json(proposal_path, rebind_proposal)
+
+    def rebind_manifest(payload: dict[str, object]) -> None:
+        proposal = cast(list[dict[str, object]], payload["proposals"])[0]
+        proposal["gzip_sha256"] = gzip_sha
+        proposal["proposal_sha256"] = proposal_sha
+
+    manifest_sha = _rewrite_hashed_json(manifest_path, rebind_manifest)
+    with pytest.raises(campaign.CampaignIntegrityError):
+        replay_promotion.verify_replay_promotion_proposals(
+            output, expected_manifest_sha256=manifest_sha
+        )
+
+
+@pytest.mark.parametrize("mutation", ("duplicate", "omitted"))
+def test_replay_proposal_manifest_rejects_duplicate_or_omitted_entry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    _, _, output, _ = _prepared_replay_proposals(monkeypatch, tmp_path)
+    manifest_path = output / "proposal-manifest.json"
+
+    def mutate(payload: dict[str, object]) -> None:
+        proposals = cast(list[dict[str, object]], payload["proposals"])
+        if mutation == "duplicate":
+            proposals.append(dict(proposals[0]))
+        else:
+            proposals.clear()
+
+    manifest_sha = _rewrite_hashed_json(manifest_path, mutate)
+    with pytest.raises(campaign.CampaignIntegrityError):
+        replay_promotion.verify_replay_promotion_proposals(
+            output, expected_manifest_sha256=manifest_sha
+        )
+
+
+def test_replay_proposal_manifest_rejects_reordered_entries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cases = campaign.CAMPAIGN_PLAN[:2]
+    overrides = {
+        case.case_id: replace(
+            _decision_for(
+                case,
+                meaning=campaign.ReviewMeaning.UNSUPPORTED_LOCATION,
+                states=(ResourceVisualState.UNCERTAIN,) * 4,
+            ),
+            focal_resource_id=None,
+            node_phase=None,
+        )
+        for case in cases
+    }
+    package = _export_compact_public_package(
+        monkeypatch,
+        tmp_path / "package-source",
+        source_owned=True,
+        review_override=overrides,
+    )
+    package_sha = _current_manifest_sha256(package)
+    followup = tmp_path / "followup.json"
+    followup_result = campaign.prepare_release_followup_inputs(
+        package, followup, expected_manifest_sha256=package_sha
+    )
+    output = tmp_path / "proposals"
+    replay_promotion.prepare_replay_promotion_proposals(
+        followup,
+        package,
+        output,
+        expected_followup_sha256=cast(str, followup_result["sha256"]),
+        expected_package_manifest_sha256=package_sha,
+    )
+    manifest_path = output / "proposal-manifest.json"
+
+    def reverse(payload: dict[str, object]) -> None:
+        proposals = cast(list[dict[str, object]], payload["proposals"])
+        proposals.reverse()
+
+    manifest_sha = _rewrite_hashed_json(manifest_path, reverse)
+    with pytest.raises(campaign.CampaignIntegrityError):
+        replay_promotion.verify_replay_promotion_proposals(
+            output, expected_manifest_sha256=manifest_sha
+        )
+
+
+@pytest.mark.parametrize("foreign_kind", ("file", "symlink", "sidecar"))
+def test_replay_proposal_rejects_foreign_symlink_or_mutated_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    foreign_kind: str,
+) -> None:
+    _, _, output, result = _prepared_replay_proposals(monkeypatch, tmp_path)
+    if foreign_kind == "file":
+        (output / "foreign.txt").write_text("foreign\n", encoding="utf-8")
+    elif foreign_kind == "symlink":
+        link = output / "foreign-link"
+        link.write_text("simulated-link\n", encoding="utf-8")
+        real_is_symlink = Path.is_symlink
+        monkeypatch.setattr(
+            Path,
+            "is_symlink",
+            lambda path: path == link or real_is_symlink(path),
+        )
+    else:
+        (output / "proposal-manifest.json.sha256").write_text(
+            f"{'0' * 64}\n", encoding="ascii"
+        )
+    with pytest.raises(campaign.CampaignIntegrityError):
+        replay_promotion.verify_replay_promotion_proposals(
+            output,
+            expected_manifest_sha256=cast(str, result["manifest_sha256"]),
+        )
+
+
+@pytest.mark.parametrize("mutation", ("raw-hash", "reason", "review-hash"))
+def test_rehashed_replay_proposal_rejects_candidate_binding_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    _, _, output, _ = _prepared_replay_proposals(monkeypatch, tmp_path)
+    manifest_path = output / "proposal-manifest.json"
+    manifest = json.loads(manifest_path.read_text("utf-8"))
+    entry = manifest["proposals"][0]
+    proposal_path = output / entry["proposal_path"]
+
+    def mutate(payload: dict[str, object]) -> None:
+        if mutation == "reason":
+            evaluator = cast(dict[str, object], payload["evaluator_input"])
+            evaluator["current_release_reasons"] = ["replacement"]
+            return
+        bindings = cast(dict[str, object], payload["source_bindings"])
+        if mutation == "review-hash":
+            bindings["followup_case_review_sha256"] = "d" * 64
+        else:
+            hashes = cast(dict[str, object], bindings["case_hashes"])
+            hashes["sanitized_raw_gzip_sha256"] = "d" * 64
+
+    proposal_sha = _rewrite_hashed_json(proposal_path, mutate)
+
+    def rebind(payload: dict[str, object]) -> None:
+        proposal = cast(list[dict[str, object]], payload["proposals"])[0]
+        proposal["proposal_sha256"] = proposal_sha
+
+    manifest_sha = _rewrite_hashed_json(manifest_path, rebind)
+    with pytest.raises(campaign.CampaignIntegrityError, match="source binding"):
+        replay_promotion.verify_replay_promotion_proposals(
+            output, expected_manifest_sha256=manifest_sha
+        )
+
+
+def test_replay_proposal_cli_has_no_selection_adoption_or_policy_overrides() -> None:
+    parser = campaign_cli.build_parser()
+    forbidden = {
+        "--case-id",
+        "--select",
+        "--adopt",
+        "--approve",
+        "--promotion-allowed",
+        "--threshold",
+        "--quorum",
+        "--zones",
+        "--detector",
+        "--profile",
+    }
+    actions = next(
+        action for action in parser._actions if action.dest == "command"
+    ).choices["prepare-replay-proposals"]._actions
+    option_strings = {option for action in actions for option in action.option_strings}
+    assert forbidden.isdisjoint(option_strings)
+
+
+@pytest.mark.parametrize(
+    "projection",
+    ("repository", "reviewer-timestamp", "gzip-hash-chain"),
+)
+def test_valid_followup_root_must_still_match_full_rooted_package_projection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    projection: str,
+) -> None:
+    package, followup, package_sha, _ = _replay_promotion_inputs(
+        monkeypatch, tmp_path
+    )
+
+    def forge(payload: dict[str, object]) -> None:
+        source = cast(dict[str, object], payload["source_snapshot"])
+        bindings = cast(list[dict[str, object]], payload["case_bindings"])
+        promotion = cast(dict[str, object], payload["failure_promotion_inputs"])
+        candidates = cast(list[dict[str, object]], promotion["candidates"])
+        if projection == "repository":
+            repository = cast(dict[str, object], source["repository"])
+            repository["branch"] = "forged-but-valid-branch"
+        elif projection == "reviewer-timestamp":
+            truth = cast(dict[str, object], bindings[0]["reviewer_truth"])
+            candidate_truth = cast(dict[str, object], candidates[0]["reviewer_truth"])
+            truth["reviewed_at_utc"] = "2026-08-31T12:02:02Z"
+            candidate_truth["reviewed_at_utc"] = "2026-08-31T12:02:02Z"
+        else:
+            hashes = cast(dict[str, object], bindings[0]["hashes"])
+            artifacts = cast(dict[str, object], bindings[0]["sanitized_artifacts"])
+            raw = cast(dict[str, object], artifacts["raw_gzip"])
+            release = cast(dict[str, object], bindings[0]["release_result"])
+            replay_candidate = cast(
+                dict[str, object], release["replay_regression_candidate"]
+            )
+            candidate_raw = cast(dict[str, object], candidates[0]["sanitized_raw_gzip"])
+            hashes["sanitized_raw_gzip_sha256"] = "d" * 64
+            raw["sha256"] = "d" * 64
+            replay_candidate["sha256"] = "d" * 64
+            candidate_raw["sha256"] = "d" * 64
+
+    forged_followup_sha = _rewrite_hashed_json(followup, forge)
+    output = tmp_path / "must-not-exist"
+    with pytest.raises(campaign.CampaignIntegrityError, match="exact projection"):
+        replay_promotion.prepare_replay_promotion_proposals(
+            followup,
+            package,
+            output,
+            expected_followup_sha256=forged_followup_sha,
+            expected_package_manifest_sha256=package_sha,
+        )
+    assert not output.exists()
+
+
+def test_rehashed_embedded_followup_rejects_nested_foreign_release_authority(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _, _, output, _ = _prepared_replay_proposals(monkeypatch, tmp_path)
+    manifest_path = output / "proposal-manifest.json"
+    manifest = json.loads(manifest_path.read_text("utf-8"))
+    embedded = output / manifest["source"]["followup_path"]
+
+    def add_authority(payload: dict[str, object]) -> None:
+        bindings = cast(list[dict[str, object]], payload["case_bindings"])
+        result = cast(dict[str, object], bindings[0]["release_result"])
+        result["input_authority"] = True
+
+    embedded_sha = _rewrite_hashed_json(embedded, add_authority)
+
+    def rebind_manifest(payload: dict[str, object]) -> None:
+        source = cast(dict[str, object], payload["source"])
+        source["followup_sha256"] = embedded_sha
+
+    manifest_sha = _rewrite_hashed_json(manifest_path, rebind_manifest)
+    with pytest.raises(campaign.CampaignIntegrityError):
+        replay_promotion.verify_replay_promotion_proposals(
+            output, expected_manifest_sha256=manifest_sha
+        )
+
+
+def test_rehashed_selection_cannot_relabel_passing_case_as_preparable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _, _, output, _ = _prepared_replay_proposals(monkeypatch, tmp_path)
+    manifest_path = output / "proposal-manifest.json"
+
+    def relabel(payload: dict[str, object]) -> None:
+        selection = cast(dict[str, object], payload["selection"])
+        passing_case = campaign.CAMPAIGN_PLAN[1].case_id
+        preparable = cast(list[str], selection["preparable_case_ids"])
+        preparable.append(passing_case)
+
+    manifest_sha = _rewrite_hashed_json(manifest_path, relabel)
+    with pytest.raises(campaign.CampaignIntegrityError, match="selection"):
+        replay_promotion.verify_replay_promotion_proposals(
+            output, expected_manifest_sha256=manifest_sha
+        )
+
+
+def test_replay_verifier_requires_fixed_ui_opacity_check(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _, _, output, result = _prepared_replay_proposals(monkeypatch, tmp_path)
+    calls = 0
+
+    def reject_nonopaque(_frame: Frame) -> None:
+        nonlocal calls
+        calls += 1
+        raise campaign.CampaignIntegrityError("fixed UI pixels are not opaque")
+
+    monkeypatch.setattr(campaign, "_verify_opaque_fixed_ui", reject_nonopaque)
+    with pytest.raises(campaign.CampaignIntegrityError, match="fixed UI pixels"):
+        replay_promotion.verify_replay_promotion_proposals(
+            output,
+            expected_manifest_sha256=cast(str, result["manifest_sha256"]),
+        )
+    assert calls == 1
+
+
+def test_replay_verifier_rejects_proposal_root_symlink(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _, _, output, result = _prepared_replay_proposals(monkeypatch, tmp_path)
+    real_is_symlink = Path.is_symlink
+    monkeypatch.setattr(
+        Path,
+        "is_symlink",
+        lambda path: path == output or real_is_symlink(path),
+    )
+    with pytest.raises(campaign.CampaignIntegrityError, match="real directory"):
+        replay_promotion.verify_replay_promotion_proposals(
+            output,
+            expected_manifest_sha256=cast(str, result["manifest_sha256"]),
+        )
+
+
+def test_rehashed_proposal_rejects_boolean_schema_version(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _, _, output, _ = _prepared_replay_proposals(monkeypatch, tmp_path)
+    manifest_path = output / "proposal-manifest.json"
+    manifest_sha = _rewrite_hashed_json(
+        manifest_path,
+        lambda payload: payload.__setitem__("schema_version", True),
+    )
+    with pytest.raises(campaign.CampaignIntegrityError, match="identity"):
+        replay_promotion.verify_replay_promotion_proposals(
+            output, expected_manifest_sha256=manifest_sha
+        )
+
+
+def test_replay_proposal_outputs_are_byte_identical_and_do_not_mutate_dataset(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package, followup, package_sha, followup_sha = _replay_promotion_inputs(
+        monkeypatch, tmp_path
+    )
+    dataset = tmp_path / "varrock-east-iron-release-regressions-v1"
+    dataset.mkdir()
+    sentinel = dataset / "owned-existing-fixture"
+    sentinel.write_bytes(b"must remain exact")
+    outputs = (tmp_path / "proposals-a", tmp_path / "proposals-b")
+    results = [
+        replay_promotion.prepare_replay_promotion_proposals(
+            followup,
+            package,
+            output,
+            expected_followup_sha256=followup_sha,
+            expected_package_manifest_sha256=package_sha,
+        )
+        for output in outputs
+    ]
+    first_files = {
+        path.relative_to(outputs[0]).as_posix(): path.read_bytes()
+        for path in outputs[0].rglob("*")
+        if path.is_file()
+    }
+    second_files = {
+        path.relative_to(outputs[1]).as_posix(): path.read_bytes()
+        for path in outputs[1].rglob("*")
+        if path.is_file()
+    }
+    assert first_files == second_files
+    assert results[0]["manifest_sha256"] == results[1]["manifest_sha256"]
+    assert sentinel.read_bytes() == b"must remain exact"
+    assert list(dataset.iterdir()) == [sentinel]
+
+
+def test_rehashed_embedded_followup_cannot_rebind_decompressed_pixel_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _, _, output, _ = _prepared_replay_proposals(monkeypatch, tmp_path)
+    manifest_path = output / "proposal-manifest.json"
+    manifest = json.loads(manifest_path.read_text("utf-8"))
+    embedded = output / manifest["source"]["followup_path"]
+
+    def replace_decompressed_hash(payload: dict[str, object]) -> None:
+        bindings = cast(list[dict[str, object]], payload["case_bindings"])
+        artifacts = cast(dict[str, object], bindings[0]["sanitized_artifacts"])
+        binding_raw = cast(dict[str, object], artifacts["raw_gzip"])
+        promotion = cast(dict[str, object], payload["failure_promotion_inputs"])
+        candidates = cast(list[dict[str, object]], promotion["candidates"])
+        candidate_raw = cast(dict[str, object], candidates[0]["sanitized_raw_gzip"])
+        binding_raw["decompressed_sha256"] = "d" * 64
+        candidate_raw["decompressed_sha256"] = "d" * 64
+
+    embedded_sha = _rewrite_hashed_json(embedded, replace_decompressed_hash)
+
+    def rebind_manifest(payload: dict[str, object]) -> None:
+        source = cast(dict[str, object], payload["source"])
+        source["followup_sha256"] = embedded_sha
+
+    manifest_sha = _rewrite_hashed_json(manifest_path, rebind_manifest)
+    with pytest.raises(
+        campaign.CampaignIntegrityError,
+        match="compressed/decompressed|pixel chain|source binding",
+    ):
+        replay_promotion.verify_replay_promotion_proposals(
+            output,
+            expected_manifest_sha256=manifest_sha,
+        )
 
 
 def test_prepare_followup_requires_retained_root_and_uses_verified_snapshot_only(
