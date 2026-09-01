@@ -74,10 +74,10 @@ __all__ = [
 ]
 
 RESOURCE_RELEASE_CAMPAIGN_SCHEMA_VERSION: Final[int] = 1
-RESOURCE_RELEASE_CAMPAIGN_VERSION: Final[str] = "1.0.0"
+RESOURCE_RELEASE_CAMPAIGN_VERSION: Final[str] = "1.1.0"
 RESOURCE_RELEASE_CAMPAIGN_ID: Final[str] = "varrock-east-iron-release-v1"
 RESOURCE_RELEASE_CONFIGURATION_ID: Final[str] = (
-    "resource-release-campaign:varrock-east-iron-v1@1.0.0"
+    "resource-release-campaign:varrock-east-iron-v1@1.1.0"
 )
 RESOURCE_RELEASE_PRIVACY_MASK_ID: Final[str] = (
     "varrock-east-fixed-ui-opaque-v1"
@@ -86,6 +86,7 @@ _LIVE_CAPTURE_BACKEND_NAME: Final[str] = "windows-runelite"
 _LIVE_CAPTURE_TITLE_MATCH: Final[str] = "RuneLite"
 _SOURCE_OWNED_EVIDENCE_ORIGIN: Final[str] = "source-owned-windows-runelite"
 _INJECTED_EVIDENCE_ORIGIN: Final[str] = "test-injected-non-release"
+_REQUIRED_REPORTED_DPI: Final[int] = 96
 _SOURCE_OWNED_CAPTURE_CAPABILITY: Final[object] = object()
 _INJECTED_CAPTURE_CAPABILITY: Final[object] = object()
 
@@ -350,7 +351,18 @@ _FINAL_REVIEW_BLOCKER_ID: Final[str] = (
     "final-constrained-v1-operating-envelope-review"
 )
 _FINAL_REVIEW_REASON: Final[str] = (
-    "final lead operating-envelope review and promotion cannot be self-approved by this harness"
+    "final envelope review, failure replay promotion, and source release record "
+    "cannot be self-approved by this harness"
+)
+_C2_GATE_ORDER: Final[tuple[str, ...]] = (
+    "retained-failure-permanent-replay-promotion",
+    _FINAL_REVIEW_BLOCKER_ID,
+    "source-owned-constrained-v1-resource-release-promotion-record",
+)
+_C2_GATE_REASONS: Final[tuple[str, ...]] = (
+    "each retained failure requires separate permanent replay promotion",
+    "candidate DPI and exact client/renderer/profile envelope require lead review",
+    "the source-owned release/promotion record requires separate approval",
 )
 
 
@@ -669,6 +681,8 @@ def _capture_configuration(
         "input_allowed": False,
         "one_capture_per_observation": True,
         "required_evidence_origin": _SOURCE_OWNED_EVIDENCE_ORIGIN,
+        "required_reported_dpi": _REQUIRED_REPORTED_DPI,
+        "reported_dpi_requirement_status": "required-candidate-pending-fresh-review",
         # The default is frozen when this module is imported. Unit tests may
         # open the runtime gate around an injected source without forging the
         # source-owned build configuration bound into immutable evidence.
@@ -684,6 +698,10 @@ def _validate_capture_configuration(value: object) -> None:
         value.get("capture_backend") != _LIVE_CAPTURE_BACKEND_NAME
         or value.get("title_match") != _LIVE_CAPTURE_TITLE_MATCH
         or value.get("required_evidence_origin") != _SOURCE_OWNED_EVIDENCE_ORIGIN
+        or not _is_strict_int(value.get("required_reported_dpi"))
+        or value.get("required_reported_dpi") != _REQUIRED_REPORTED_DPI
+        or value.get("reported_dpi_requirement_status")
+        != "required-candidate-pending-fresh-review"
         or not _is_strict_int(value.get("retry_attempts"))
         or value.get("retry_attempts") != 0
     ):
@@ -3542,6 +3560,16 @@ def _case_release_result(
         for item in prior_failure_provenance
     ):
         reasons.append("mixed_or_malformed_prior_capture_origin")
+    environment = record.get("capture_environment")
+    if not isinstance(environment, dict):
+        raise CampaignIntegrityError(
+            f"capture {case.case_id} environment provenance is malformed"
+        )
+    reported_dpi = environment.get("reported_dpi")
+    if reported_dpi is None:
+        reasons.append("required_release_envelope_reported_dpi_missing")
+    elif reported_dpi != _REQUIRED_REPORTED_DPI:
+        reasons.append("required_release_envelope_reported_dpi_not_96")
     review = truth.get("review")
     if not isinstance(review, dict):
         raise CampaignIntegrityError(f"review {case.case_id} is malformed")
@@ -3729,9 +3757,59 @@ def _case_release_result(
             if production_states is None
             else [state.value for state in production_states]
         ),
+        "reported_dpi": reported_dpi,
+        "required_reported_dpi": _REQUIRED_REPORTED_DPI,
         "replay_regression_candidate": replay_candidate,
         "permanent_evidence_required": not passed,
         "policy_change_allowed_from_failure": False,
+    }
+
+
+def _release_gate_categories(
+    blockers: Sequence[Mapping[str, object]],
+    case_results: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    c1 = [
+        item
+        for item in blockers
+        if item.get("blocker_id") in _RESOURCE_BLOCKER_ORDER
+    ]
+    c1_closed = len(c1) == len(_RESOURCE_BLOCKER_ORDER) and all(
+        item.get("status") == "CLOSED" for item in c1
+    )
+    retained_failure_case_ids = [
+        cast(str, item["case_id"])
+        for item in case_results
+        if item.get("passed") is False and "evidence_origin" in item
+    ]
+    return {
+        "c1_fresh_empirical_evidence": {
+            "status": "CLOSED" if c1_closed else "OPEN",
+            "blocker_ids": list(_RESOURCE_BLOCKER_ORDER),
+        },
+        "c2_evidence_contingent_source_review": {
+            "status": "OPEN",
+            "gates": [
+                {
+                    "gate_id": gate_id,
+                    "status": (
+                        "OPEN"
+                        if gate_id != _C2_GATE_ORDER[0]
+                        or retained_failure_case_ids
+                        else "CLOSED"
+                    ),
+                    "reason": reason,
+                    "case_ids": (
+                        retained_failure_case_ids
+                        if gate_id == _C2_GATE_ORDER[0]
+                        else []
+                    ),
+                }
+                for gate_id, reason in zip(
+                    _C2_GATE_ORDER, _C2_GATE_REASONS, strict=True
+                )
+            ],
+        },
     }
 
 
@@ -3841,7 +3919,8 @@ def evaluate_release(
         "blockers": blockers,
         "closed_blockers": closed_ids,
         "still_open_blockers": still_open_ids,
-        "release_eligible": not still_open_ids,
+        "release_gate_categories": _release_gate_categories(blockers, case_results),
+        "release_eligible": False,
         "activation_allowed": False,
         "promotion_allowed": False,
         "input_authority": False,
@@ -3871,6 +3950,7 @@ def _validate_release_report(report: Mapping[str, object]) -> None:
         "blockers",
         "closed_blockers",
         "still_open_blockers",
+        "release_gate_categories",
         "release_eligible",
         "activation_allowed",
         "promotion_allowed",
@@ -3937,6 +4017,8 @@ def _validate_release_report(report: Mapping[str, object]) -> None:
         "production_scene_validated",
         "reviewed_state_vector",
         "production_state_vector",
+        "reported_dpi",
+        "required_reported_dpi",
         "replay_regression_candidate",
         "permanent_evidence_required",
         "policy_change_allowed_from_failure",
@@ -3993,6 +4075,33 @@ def _validate_release_report(report: Mapping[str, object]) -> None:
             passed or "non_source_owned_capture_evidence" not in reasons
         ):
             raise CampaignError("injected evidence was promoted as real")
+        reported_dpi = result_raw.get("reported_dpi")
+        required_reported_dpi = result_raw.get("required_reported_dpi")
+        if (
+            (reported_dpi is not None and (
+                not _is_strict_int(reported_dpi) or cast(int, reported_dpi) <= 0
+            ))
+            or required_reported_dpi != _REQUIRED_REPORTED_DPI
+            or not _is_strict_int(required_reported_dpi)
+        ):
+            raise CampaignError("resource campaign DPI evidence is malformed")
+        missing_reason = "required_release_envelope_reported_dpi_missing"
+        mismatch_reason = "required_release_envelope_reported_dpi_not_96"
+        expected_dpi_reason = (
+            missing_reason
+            if reported_dpi is None
+            else mismatch_reason
+            if reported_dpi != _REQUIRED_REPORTED_DPI
+            else None
+        )
+        if (
+            (expected_dpi_reason is not None and expected_dpi_reason not in reasons)
+            or (expected_dpi_reason is None and (
+                missing_reason in reasons or mismatch_reason in reasons
+            ))
+            or (expected_dpi_reason is not None and passed)
+        ):
+            raise CampaignError("resource campaign DPI eligibility is inconsistent")
         if not isinstance(result_raw.get("production_scene_validated"), bool):
             raise CampaignError("resource campaign scene verdict is malformed")
         reviewed_states = result_raw.get("reviewed_state_vector")
@@ -4079,6 +4188,9 @@ def _validate_release_report(report: Mapping[str, object]) -> None:
     )
     if blockers != expected_blockers:
         raise CampaignError("resource campaign blocker ledger was not derived from cases")
+    expected_categories = _release_gate_categories(
+        expected_blockers, cast(list[dict[str, object]], case_results)
+    )
     closed_ids_derived = [
         item["blocker_id"] for item in expected_blockers if item["status"] == "CLOSED"
     ]
@@ -4090,6 +4202,7 @@ def _validate_release_report(report: Mapping[str, object]) -> None:
     if (
         report.get("closed_blockers") != closed_ids_derived
         or report.get("still_open_blockers") != still_open
+        or report.get("release_gate_categories") != expected_categories
         or _FINAL_REVIEW_BLOCKER_ID not in still_open
         or report.get("release_eligible") is not False
         or not isinstance(report.get("live_resource_campaign_authorized"), bool)
@@ -4554,10 +4667,19 @@ def _verify_public_pass_claim(
                 )
 
 
-def verify_review_package(package_dir: Path) -> dict[str, object]:
-    """Rehash and replay a public review package without private source pixels."""
+def verify_review_package(
+    package_dir: Path, *, expected_manifest_sha256: str
+) -> dict[str, object]:
+    """Verify a package against an independently retained manifest root hash."""
 
     package_dir = Path(package_dir)
+    if (
+        not isinstance(expected_manifest_sha256, str)
+        or not _SHA256_PATTERN.fullmatch(expected_manifest_sha256)
+    ):
+        raise CampaignIntegrityError(
+            "expected manifest SHA-256 must be 64 lowercase hexadecimal characters"
+        )
     if not package_dir.is_dir() or package_dir.is_symlink():
         raise CampaignIntegrityError("review package must be a real directory")
     profile = load_varrock_east_iron_profile()
@@ -4565,6 +4687,10 @@ def verify_review_package(package_dir: Path) -> dict[str, object]:
     manifest_payload, manifest_sha = _verify_hashed_artifact(
         package_dir / "manifest.json", maximum_bytes=_MAX_PUBLIC_JSON_BYTES
     )
+    if manifest_sha != expected_manifest_sha256:
+        raise CampaignIntegrityError(
+            "review package manifest does not match independently retained SHA-256"
+        )
     manifest = _strict_json_bytes(manifest_payload, label="review package manifest")
     required_manifest = {
         "schema_version",
@@ -4934,6 +5060,13 @@ def verify_review_package(package_dir: Path) -> dict[str, object]:
             != policy.get("evidence_origin")
         ):
             raise CampaignIntegrityError("public case evidence origins disagree")
+        if (
+            release_result_value.get("reported_dpi")
+            != environment.get("reported_dpi")
+            or release_result_value.get("required_reported_dpi")
+            != _REQUIRED_REPORTED_DPI
+        ):
+            raise CampaignIntegrityError("public case DPI evidence was rebound")
         if release_result_value.get("passed") is True and any(
             not isinstance(item, dict)
             or item.get("evidence_origin") != _SOURCE_OWNED_EVIDENCE_ORIGIN

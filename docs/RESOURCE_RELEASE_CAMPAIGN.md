@@ -166,11 +166,30 @@ trusting stored labels or reports:
 python tools/resource_release_campaign.py release --session <private-session> --output <release-summary.json>
 ```
 
-The report lists each case and every PR #39 blocker as `CLOSED` or
-`STILL_OPEN`. Missing truth, wrong meaning, state mismatch, replay mismatch,
-changed sanitization, false target, or tampering keeps the corresponding
-blocker open. Final constrained-v1 operating-envelope approval always remains
-open for lead review; this harness cannot self-promote or grant input authority.
+The report lists each case, every C1 empirical blocker, and an aggregate flat
+C2 blocker as `CLOSED` or `STILL_OPEN`. Its separate category matrix is the
+authoritative per-gate C1/C2 view.
+Missing truth, wrong meaning, state mismatch, replay mismatch, changed
+sanitization, false target, or tampering keeps the corresponding blocker open.
+Even when every C1 blocker closes, the aggregate C2 category, final-envelope
+review, and source-owned release-record gates remain open; this harness cannot
+self-promote or grant input authority. The failure-promotion C2 subgate is
+closed only when no retained case failed; any retained failure reopens it and
+lists the exact case IDs requiring promotion.
+Acceptance of this passive boundary is an external B decision and is never
+self-closed by a campaign report.
+
+Reported DPI `96` is source-owned as the required/candidate constrained-v1
+envelope value pending fresh review. Capture preserves missing or other positive
+DPI values as evidence, but every affected case fails release eligibility and
+keeps its C1 blocker open. A recorded `96` is necessary, never sufficient, and
+cannot close C2 review or approval.
+
+| Captured `reported_dpi` | Evidence disposition | C1 eligibility |
+| --- | --- | --- |
+| `96` | retained and evaluated normally | eligible only if every other case check passes |
+| missing | retained with explicit missing-DPI reason | blocker remains open |
+| another positive value | retained with explicit non-96 reason | blocker remains open |
 
 After all cases have explicit privacy review, export the shareable package:
 
@@ -192,8 +211,13 @@ Verify every hash, redaction boundary, replay, fixed-order case binding, and
 release ledger in one command:
 
 ```powershell
-python tools/resource_release_campaign.py verify-export --package <review-package-directory>
+python tools/resource_release_campaign.py verify-export --package <review-package-directory> --expected-manifest-sha256 <manifest-sha256-returned-by-export>
 ```
+
+The expected manifest SHA-256 must be retained outside the package at export
+time. A package and its sidecars can otherwise be rewritten together; internal
+hash consistency alone cannot prove that the reviewer received the originally
+published immutable snapshot.
 
 ## Fail-closed invariants
 

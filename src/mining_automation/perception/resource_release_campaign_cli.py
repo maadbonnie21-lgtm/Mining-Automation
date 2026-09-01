@@ -102,6 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
         "verify-export", help="rehash/replay a privacy-safe review package"
     )
     verify.add_argument("--package", type=Path, required=True)
+    verify.add_argument("--expected-manifest-sha256", required=True)
     return parser
 
 
@@ -289,6 +290,7 @@ def main(argv: list[str] | None = None, *, repository_root: Path | None = None) 
                     "sha256": digest,
                     "closed_blockers": report["closed_blockers"],
                     "still_open_blockers": report["still_open_blockers"],
+                    "release_gate_categories": report["release_gate_categories"],
                     "release_eligible": report["release_eligible"],
                     "activation_allowed": False,
                 }
@@ -304,7 +306,12 @@ def main(argv: list[str] | None = None, *, repository_root: Path | None = None) 
                 )
             )
         elif arguments.command == "verify-export":
-            _print_json(verify_review_package(arguments.package))
+            _print_json(
+                verify_review_package(
+                    arguments.package,
+                    expected_manifest_sha256=arguments.expected_manifest_sha256,
+                )
+            )
         else:  # pragma: no cover - argparse enforces the command set
             raise AssertionError(f"unhandled command {arguments.command!r}")
     except (CampaignError, CaptureError, OSError, ValueError) as exc:

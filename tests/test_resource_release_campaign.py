@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import inspect
 import json
+import re
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import fields, replace
@@ -150,6 +151,19 @@ def _rewrite_hashed_json(
         encoding="ascii",
     )
     return digest
+
+
+def _current_manifest_sha256(package: Path) -> str:
+    digest = (package / "manifest.json.sha256").read_text(encoding="ascii").strip()
+    assert re.fullmatch(r"[0-9a-f]{64}", digest)
+    return digest
+
+
+def _verify_review_package(package: Path) -> dict[str, object]:
+    return campaign.verify_review_package(
+        package,
+        expected_manifest_sha256=_current_manifest_sha256(package),
+    )
 
 
 def _case_dir(session: Path, ordinal: int, case_id: str) -> Path:
@@ -463,6 +477,26 @@ def test_each_node_cycle_freezes_initial_depleted_respawn_and_focal_truth() -> N
         "environment_provider",
         "captured_at_utc",
     )
+
+
+def test_capture_configuration_source_owns_pending_dpi_requirement(
+    tmp_path: Path,
+) -> None:
+    session = _session(tmp_path)
+    payload = json.loads((session / "session.json").read_text(encoding="utf-8"))
+
+    assert campaign.RESOURCE_RELEASE_CAMPAIGN_VERSION == "1.1.0"
+    assert campaign.RESOURCE_RELEASE_CONFIGURATION_ID == (
+        "resource-release-campaign:varrock-east-iron-v1@1.1.0"
+    )
+    assert payload["campaign_version"] == "1.1.0"
+    assert payload["configuration_id"] == campaign.RESOURCE_RELEASE_CONFIGURATION_ID
+    configuration = payload["capture_configuration"]
+    assert configuration["required_reported_dpi"] == 96
+    assert configuration["reported_dpi_requirement_status"] == (
+        "required-candidate-pending-fresh-review"
+    )
+    assert configuration["live_source_authorized"] is False
 
 
 def test_campaign_directory_is_exclusively_owned_and_collision_preserves_winner(
@@ -1031,7 +1065,11 @@ def test_reviewer_meaning_is_never_inferred_from_operator_stage(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    session = _capture_and_seal_small_campaign(monkeypatch, tmp_path)
+    session = _capture_and_seal_small_campaign(
+        monkeypatch,
+        tmp_path,
+        source_owned=True,
+    )
     first = campaign.CAMPAIGN_PLAN[0]
     wrong = _decision_for(
         first,
@@ -1049,6 +1087,18 @@ def test_reviewer_meaning_is_never_inferred_from_operator_stage(
     assert first_result["passed"] is False
     assert "reviewer_did_not_confirm_requested_case_meaning" in first_result["reasons"]
     assert "fresh-supported-startup" in report["still_open_blockers"]
+    assert report["release_gate_categories"]["c1_fresh_empirical_evidence"][
+        "status"
+    ] == "OPEN"
+    assert report["release_gate_categories"]["c2_evidence_contingent_source_review"][
+        "status"
+    ] == "OPEN"
+    failure_promotion = report["release_gate_categories"][
+        "c2_evidence_contingent_source_review"
+    ]["gates"][0]
+    assert failure_promotion["status"] == "OPEN"
+    assert failure_promotion["case_ids"] == [first.case_id]
+    assert report["release_eligible"] is False
 
 
 def test_rebound_review_artifact_is_rejected_against_owned_frame(
@@ -1064,6 +1114,7 @@ def test_rebound_review_artifact_is_rejected_against_owned_frame(
         session,
         _decision_for(first, review_artifact_sha256=artifact_sha),
         repository=_repository(),
+        recorded_at_utc=_CREATED + timedelta(minutes=2, seconds=1),
     )
     review_dir = session / "review" / f"001-{first.case_id}"
     artifact = review_dir / "sanitized-frame.raw.gz"
@@ -1095,7 +1146,20 @@ def test_operator_label_promotion_in_reviewer_truth_is_detected_after_rebinding(
         session,
         _decision_for(first, review_artifact_sha256=artifact_sha),
         repository=_repository(),
+        recorded_at_utc=_CREATED + timedelta(minutes=2, seconds=1),
     )
+    pre_tamper = campaign.evaluate_release(
+        session,
+        repository=_repository(),
+        evaluated_at_utc=_CREATED + timedelta(minutes=3),
+    )
+    assert pre_tamper["release_gate_categories"]["c1_fresh_empirical_evidence"][
+        "status"
+    ] == "OPEN"
+    assert pre_tamper["release_gate_categories"][
+        "c2_evidence_contingent_source_review"
+    ]["status"] == "OPEN"
+    assert pre_tamper["release_eligible"] is False
     truth = session / "review" / f"001-{first.case_id}" / "reviewer-truth.json"
     _rewrite_hashed_json(
         truth,
@@ -1179,7 +1243,7 @@ def test_complete_correct_injected_campaign_can_never_close_real_blockers(
     )
 
 
-def test_exact_source_owned_fixture_closes_only_evidence_blockers(
+def test_exact_source_owned_dpi_96_campaign_closes_c1_but_keeps_c2_open(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1209,7 +1273,160 @@ def test_exact_source_owned_fixture_closes_only_evidence_blockers(
     assert report["still_open_blockers"] == [
         "final-constrained-v1-operating-envelope-review"
     ]
+    categories = report["release_gate_categories"]
+    assert categories["c1_fresh_empirical_evidence"] == {
+        "status": "CLOSED",
+        "blocker_ids": list(campaign._RESOURCE_BLOCKER_ORDER),
+    }
+    c2 = categories["c2_evidence_contingent_source_review"]
+    assert c2["status"] == "OPEN"
+    assert [gate["gate_id"] for gate in c2["gates"]] == list(
+        campaign._C2_GATE_ORDER
+    )
+    assert [gate["status"] for gate in c2["gates"]] == [
+        "CLOSED",
+        "OPEN",
+        "OPEN",
+    ]
+    assert [gate["reason"] for gate in c2["gates"]] == list(
+        campaign._C2_GATE_REASONS
+    )
     assert report["release_eligible"] is False
+
+
+@pytest.mark.parametrize(
+    ("first_dpi", "expected_reason"),
+    (
+        (None, "required_release_envelope_reported_dpi_missing"),
+        (120, "required_release_envelope_reported_dpi_not_96"),
+        (144, "required_release_envelope_reported_dpi_not_96"),
+    ),
+    ids=("missing", "120", "144"),
+)
+def test_first_case_dpi_failure_is_preserved_and_keeps_affected_c1_blocker_open(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    first_dpi: int | None,
+    expected_reason: str,
+) -> None:
+    environment_calls = 0
+
+    def staged_environment() -> campaign.CaptureEnvironment:
+        nonlocal environment_calls
+        dpi = first_dpi if environment_calls == 0 else 96
+        environment_calls += 1
+        return replace(_compact_environment(), reported_dpi=dpi)
+
+    session = _capture_and_seal_small_campaign(
+        monkeypatch,
+        tmp_path / "source",
+        source_owned=True,
+        raw_factory=_compact_raw,
+        environment_provider=staged_environment,
+    )
+    monkeypatch.setattr(campaign, "VARROCK_EAST_IRON_FIXED_UI_REGIONS", ())
+    _review_all(monkeypatch, session)
+    report = campaign.evaluate_release(
+        session,
+        repository=_repository(),
+        evaluated_at_utc=_CREATED + timedelta(minutes=3),
+    )
+    results = cast(list[dict[str, object]], report["case_results"])
+    assert results[0]["reported_dpi"] == first_dpi
+    assert results[0]["required_reported_dpi"] == 96
+    assert results[0]["reasons"] == [expected_reason]
+    assert all(item["passed"] is True for item in results[1:])
+    assert report["still_open_blockers"] == [
+        "fresh-supported-startup",
+        "final-constrained-v1-operating-envelope-review",
+    ]
+    assert report["release_gate_categories"]["c1_fresh_empirical_evidence"][
+        "status"
+    ] == "OPEN"
+    assert report["release_gate_categories"]["c2_evidence_contingent_source_review"][
+        "status"
+    ] == "OPEN"
+    assert [
+        gate["status"]
+        for gate in report["release_gate_categories"][
+            "c2_evidence_contingent_source_review"
+        ]["gates"]
+    ] == ["OPEN", "OPEN", "OPEN"]
+    assert report["release_eligible"] is False
+
+    destination = tmp_path / "dpi-package"
+    campaign.export_review_package(
+        session,
+        destination,
+        repository=_repository(),
+        exported_at_utc=_CREATED + timedelta(minutes=4),
+    )
+    manifest_path = destination / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    first_case_path = destination / manifest["cases"][0]["case_review_path"]
+    public_case = json.loads(first_case_path.read_text(encoding="utf-8"))
+    public_release = json.loads(
+        (destination / "release-summary.json").read_text(encoding="utf-8")
+    )
+    assert public_case["capture_environment"]["reported_dpi"] == first_dpi
+    assert public_case["release_result"]["reported_dpi"] == first_dpi
+    assert public_case["release_result"]["reasons"] == [expected_reason]
+    assert public_release["case_results"][0]["reported_dpi"] == first_dpi
+    _enable_tiny_verifier_profile(monkeypatch)
+    assert _verify_review_package(destination)["verified"] is True
+
+    if first_dpi == 120:
+        original_manifest_sha = _current_manifest_sha256(destination)
+
+        def coordinate_case_rebind(payload: dict[str, object]) -> None:
+            environment = cast(dict[str, object], payload["capture_environment"])
+            environment["reported_dpi"] = 144
+            release_result = cast(dict[str, object], payload["release_result"])
+            release_result["reported_dpi"] = 144
+
+        coordinated_case_sha = _rewrite_hashed_json(
+            first_case_path, coordinate_case_rebind
+        )
+
+        release_path = destination / "release-summary.json"
+
+        def coordinate_release_rebind(payload: dict[str, object]) -> None:
+            case_results = cast(list[dict[str, object]], payload["case_results"])
+            case_results[0]["reported_dpi"] = 144
+
+        coordinated_release_sha = _rewrite_hashed_json(
+            release_path, coordinate_release_rebind
+        )
+
+        def coordinate_manifest_rebind(payload: dict[str, object]) -> None:
+            cases = cast(list[dict[str, object]], payload["cases"])
+            cases[0]["case_review_sha256"] = coordinated_case_sha
+            release_summary = cast(dict[str, object], payload["release_summary"])
+            release_summary["sha256"] = coordinated_release_sha
+
+        _rewrite_hashed_json(manifest_path, coordinate_manifest_rebind)
+        with pytest.raises(
+            campaign.CampaignIntegrityError,
+            match="independently retained SHA-256",
+        ):
+            campaign.verify_review_package(
+                destination,
+                expected_manifest_sha256=original_manifest_sha,
+            )
+
+    def rebind_dpi(payload: dict[str, object]) -> None:
+        environment = cast(dict[str, object], payload["capture_environment"])
+        environment["reported_dpi"] = 96
+
+    rebound_case_sha = _rewrite_hashed_json(first_case_path, rebind_dpi)
+
+    def rebind_manifest(payload: dict[str, object]) -> None:
+        cases = cast(list[dict[str, object]], payload["cases"])
+        cases[0]["case_review_sha256"] = rebound_case_sha
+
+    _rewrite_hashed_json(manifest_path, rebind_manifest)
+    with pytest.raises(campaign.CampaignIntegrityError, match="DPI evidence was rebound"):
+        _verify_review_package(destination)
 
 
 def test_source_owned_origin_rejects_foreign_backend_before_grab(
@@ -1260,7 +1477,7 @@ def test_injected_failure_then_source_owned_success_stays_open_and_exports_origi
                 source,
                 repository=_repository(),
                 environment_provider=_environment,
-                    provenance_capability=campaign._SOURCE_OWNED_CAPTURE_CAPABILITY,
+                provenance_capability=campaign._SOURCE_OWNED_CAPTURE_CAPABILITY,
                 expected_case_id=case.case_id,
                 captured_at_utc=_CREATED + timedelta(seconds=index + 1),
             )
@@ -1281,6 +1498,13 @@ def test_injected_failure_then_source_owned_success_stays_open_and_exports_origi
     assert first["passed"] is False
     assert "mixed_or_malformed_prior_capture_origin" in first["reasons"]
     assert "fresh-supported-startup" in report["still_open_blockers"]
+    assert report["release_gate_categories"]["c1_fresh_empirical_evidence"][
+        "status"
+    ] == "OPEN"
+    assert report["release_gate_categories"]["c2_evidence_contingent_source_review"][
+        "status"
+    ] == "OPEN"
+    assert report["release_eligible"] is False
 
     destination = tmp_path / "mixed-origin-package"
     campaign.export_review_package(
@@ -1368,7 +1592,7 @@ def test_metadata_only_wrong_geometry_review_exports_but_keeps_blockers_open(
         and item["sanitized_preview_sha256"] is None
         for item in manifest["cases"]
     )
-    assert campaign.verify_review_package(destination)["verified"] is True
+    assert _verify_review_package(destination)["verified"] is True
 
     first_case = destination / manifest["cases"][0]["case_review_path"]
 
@@ -1388,7 +1612,7 @@ def test_metadata_only_wrong_geometry_review_exports_but_keeps_blockers_open(
 
     _rewrite_hashed_json(destination / "manifest.json", rebind_manifest)
     with pytest.raises(campaign.CampaignIntegrityError, match="withheld"):
-        campaign.verify_review_package(destination)
+        _verify_review_package(destination)
 
 
 def test_landmark_obstruction_truth_does_not_pass_when_landmark_still_matches(
@@ -1614,7 +1838,7 @@ def test_review_export_is_manifest_last_redacted_hashed_and_exclusive(
     assert all(b"private-title" not in path.read_bytes() for path in destination.rglob("*") if path.is_file())
 
     _enable_tiny_verifier_profile(monkeypatch)
-    verified = campaign.verify_review_package(destination)
+    verified = _verify_review_package(destination)
     assert verified["verified"] is True
     assert verified["manifest_sha256"] == result["manifest_sha256"]
     assert verified["activation_allowed"] is False
@@ -1644,7 +1868,7 @@ def test_review_export_is_manifest_last_redacted_hashed_and_exclusive(
 
     _rewrite_hashed_json(destination / "manifest.json", rebind_manifest)
     with pytest.raises(campaign.CampaignIntegrityError, match="exact public replay"):
-        campaign.verify_review_package(destination)
+        _verify_review_package(destination)
 
     for path, payload in before.items():
         path.write_bytes(payload)
@@ -1681,7 +1905,7 @@ def test_review_export_is_manifest_last_redacted_hashed_and_exclusive(
         rebind_oversized_manifest,
     )
     with pytest.raises(campaign.CampaignIntegrityError, match="decompressed size"):
-        campaign.verify_review_package(destination)
+        _verify_review_package(destination)
 
 
 def test_failed_reviewed_case_remains_packaged_as_nonactivating_regression(
@@ -1770,7 +1994,7 @@ def test_detector_error_remains_reviewable_packaged_and_privately_redacted(
         if path.is_file()
     )
     _enable_tiny_verifier_profile(monkeypatch)
-    assert campaign.verify_review_package(destination)["verified"] is True
+    assert _verify_review_package(destination)["verified"] is True
 
 
 def test_review_template_is_blank_and_never_copies_operator_meaning_or_truth(
@@ -1948,6 +2172,23 @@ def test_capture_cli_requires_explicit_staged_case_acknowledgment() -> None:
         )
 
 
+def test_verify_export_cli_requires_independently_retained_manifest_hash() -> None:
+    parser = campaign_cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["verify-export", "--package", "review-package"])
+
+    parsed = parser.parse_args(
+        [
+            "verify-export",
+            "--package",
+            "review-package",
+            "--expected-manifest-sha256",
+            "a" * 64,
+        ]
+    )
+    assert parsed.expected_manifest_sha256 == "a" * 64
+
+
 def test_cli_capture_gate_fails_before_windows_backend_construction(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2026,7 +2267,7 @@ def _export_compact_public_package(
         exported_at_utc=_CREATED + timedelta(minutes=4),
     )
     _enable_tiny_verifier_profile(monkeypatch)
-    assert campaign.verify_review_package(destination)["verified"] is True
+    assert _verify_review_package(destination)["verified"] is True
     return destination
 
 
@@ -2068,7 +2309,7 @@ def _export_withheld_public_package(
         repository=_repository(),
         exported_at_utc=_CREATED + timedelta(minutes=4),
     )
-    assert campaign.verify_review_package(destination)["verified"] is True
+    assert _verify_review_package(destination)["verified"] is True
     return destination
 
 
@@ -2104,7 +2345,7 @@ def test_public_withheld_authority_tampering_rejects_after_full_hash_rebind(
     _rebind_first_public_case(destination, rebound_case_sha)
 
     with pytest.raises(campaign.CampaignIntegrityError, match="withheld-pixel"):
-        campaign.verify_review_package(destination)
+        _verify_review_package(destination)
 
 
 @pytest.mark.parametrize(
@@ -2135,7 +2376,7 @@ def test_public_environment_rejects_boolean_dimensions_and_blank_class(
         campaign.CampaignIntegrityError,
         match="public environment provenance",
     ):
-        campaign.verify_review_package(destination)
+        _verify_review_package(destination)
 
 
 def test_public_review_preparation_source_binding_rebind_is_rejected(
@@ -2153,7 +2394,7 @@ def test_public_review_preparation_source_binding_rebind_is_rejected(
     _rebind_first_public_case(destination, rebound_case_sha)
 
     with pytest.raises(campaign.CampaignIntegrityError, match="source bindings"):
-        campaign.verify_review_package(destination)
+        _verify_review_package(destination)
 
 
 @pytest.mark.parametrize("oversized_part", ("artifact", "sidecar"))
@@ -2180,7 +2421,7 @@ def test_oversized_public_artifact_and_sidecar_are_bounded_and_rejected(
         expected = "SHA-256 sidecar"
 
     with pytest.raises(campaign.CampaignIntegrityError, match=expected):
-        campaign.verify_review_package(destination)
+        _verify_review_package(destination)
 
 
 def test_invalid_generic_provenance_capability_rejects_before_capture(
