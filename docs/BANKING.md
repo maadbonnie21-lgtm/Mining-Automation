@@ -350,6 +350,43 @@ An empty result means the batch is structurally acceptable for the supplied
 target, never that any pixel or opaque manifest digest is real or correct --
 this function never loads a manifest or inspects pixels.
 
+### Deposit-result verification packaging
+
+A batch merely containing *some* reviewed `NON_EMPTY_BEFORE_DEPOSIT` case and
+*some* reviewed `EMPTY_AFTER_DEPOSIT` case is a materially weaker claim than
+"this exact deposit attempt went from non-empty to empty": the two samples
+could come from unrelated visits, or a genuinely valid receipt from a
+*different* attempt could be substituted in without anything noticing.
+`DepositResultEvidenceRecord` (`evidence_intake.py`) makes and validates the
+full causal chain:
+
+* `pre_deposit` is a reviewer-accepted `NON_EMPTY_BEFORE_DEPOSIT` case;
+* `attempt_receipt` (a `DepositAttemptReceipt`, see "Attempt-receipt
+  causality" above) is bound to that *exact* pre-deposit package by content
+  hash -- `attempt_receipt.preceding_provenance.frame_sha256` must equal
+  `pre_deposit.package.raw_sha256`. This is what rejects a wrong or replayed
+  receipt: a receipt issued against different evidence, however valid on its
+  own, cannot bind here;
+* the receipt is issued at or after the pre-deposit capture and within
+  `MAX_ATTEMPT_RECEIPT_AGE_S` of it;
+* `post_deposit_provenance` is bound the same way to the exact `post_deposit`
+  package, shares the receipt's `cycle_id` (the same bank visit/session), and
+  is captured strictly after the receipt and within that same freshness
+  window -- mirroring `workflow._post_attempt_freshness_blocker`'s live rule
+  exactly;
+* `post_deposit` is a reviewer-accepted `EMPTY_AFTER_DEPOSIT` case, sharing
+  the pre-deposit package's checkpoint/profile, backed by distinct
+  underlying evidence.
+
+Any violation raises at construction. Cross-visit, cross-session, wrong
+receipt, replayed receipt, stale evidence, swapped ordering, duplicate raw
+content, and a missing/wrong-type receipt are all covered by dedicated
+regression tests in `tests/test_banking_deposit_result_evidence.py`. A prior,
+weaker design (checking only case labels, checkpoint/profile, and
+package-level finalized-timestamp ordering, with no binding to any specific
+receipt at all) was proven insufficient by a failing regression before this
+version replaced it -- see that test file's module docstring.
+
 ## Closed integration boundary
 
 `mining_automation.banking.integration_boundary` deliberately exports no

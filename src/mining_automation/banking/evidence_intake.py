@@ -42,8 +42,10 @@ from math import isfinite
 from typing import Final
 from unicodedata import normalize
 
+from .attempts import MAX_ATTEMPT_RECEIPT_AGE_S, DepositAttemptReceipt
 from .contracts import (
     BankCheckpointIdentity,
+    BankEvidenceProvenance,
     BankingBlocker,
     BankProfileIdentity,
     _validate_non_empty_string,
@@ -54,6 +56,7 @@ __all__ = [
     "MAX_EVIDENCE_PACKAGE_AGE_S",
     "REQUIRED_BANK_EVIDENCE_CASES",
     "BankEvidenceCase",
+    "DepositResultEvidenceRecord",
     "FinalizedBankEvidencePackage",
     "OperatorIntentLabel",
     "ReviewedBankEvidenceCase",
@@ -401,6 +404,116 @@ class ReviewedBankEvidenceCase:
             ):
                 raise ValueError("reviewer verdict differs from its construction-time snapshot")
         object.__setattr__(self, "_review_snapshot", review_snapshot)
+
+
+@dataclass(frozen=True, slots=True)
+class DepositResultEvidenceRecord:
+    """Binds a pre-deposit case, one exact attempt receipt, and a post-deposit
+    case into a single causally-ordered deposit result.
+
+    A batch merely containing *some* reviewed ``NON_EMPTY_BEFORE_DEPOSIT``
+    case and *some* reviewed ``EMPTY_AFTER_DEPOSIT`` case is a materially
+    weaker claim than "this exact deposit attempt went from non-empty to
+    empty": the two samples could come from unrelated visits, or a real,
+    validly-constructed receipt from a *different* attempt could be
+    substituted in without anything noticing. This type makes -- and
+    construction itself enforces -- the full causal chain a deposit result
+    must prove:
+
+    * ``pre_deposit`` is a reviewer-accepted ``NON_EMPTY_BEFORE_DEPOSIT`` case;
+    * ``attempt_receipt`` is bound, by content hash
+      (``preceding_provenance.frame_sha256 == pre_deposit.package.raw_sha256``),
+      to this *exact* pre-deposit package -- not merely some receipt that
+      happens to look plausible. This is what rejects a wrong or replayed
+      receipt: a receipt issued against different evidence, however valid on
+      its own, cannot bind here.
+    * ``attempt_receipt.issued_monotonic_s`` is at or after the pre-deposit
+      capture and within the same causal freshness window
+      (:data:`~mining_automation.banking.attempts.MAX_ATTEMPT_RECEIPT_AGE_S`)
+      used for a live attempt's own causality check.
+    * ``post_deposit_provenance`` is bound, the same way, to the exact
+      ``post_deposit`` package, shares the receipt's ``cycle_id`` (the same
+      bank visit/session), and is captured strictly after the receipt and
+      within that same freshness window -- mirroring
+      :func:`~mining_automation.banking.workflow._post_attempt_freshness_blocker`'s
+      live-workflow rule exactly.
+    * ``post_deposit`` is a reviewer-accepted ``EMPTY_AFTER_DEPOSIT`` case,
+      sharing the pre-deposit package's checkpoint/profile, and backed by
+      distinct underlying evidence (the same frame cannot serve as both).
+
+    Any violation raises at construction -- there is no way to hold a value
+    of this type that does not satisfy the full chain.
+    """
+
+    pre_deposit: ReviewedBankEvidenceCase
+    attempt_receipt: DepositAttemptReceipt
+    post_deposit: ReviewedBankEvidenceCase
+    post_deposit_provenance: BankEvidenceProvenance
+
+    def __post_init__(self) -> None:
+        if type(self.pre_deposit) is not ReviewedBankEvidenceCase:
+            raise ValueError("pre_deposit must be an exact ReviewedBankEvidenceCase")
+        if type(self.attempt_receipt) is not DepositAttemptReceipt:
+            raise ValueError("attempt_receipt must be an exact DepositAttemptReceipt")
+        if type(self.post_deposit) is not ReviewedBankEvidenceCase:
+            raise ValueError("post_deposit must be an exact ReviewedBankEvidenceCase")
+        if type(self.post_deposit_provenance) is not BankEvidenceProvenance:
+            raise ValueError("post_deposit_provenance must be an exact BankEvidenceProvenance")
+        ReviewedBankEvidenceCase.__post_init__(self.pre_deposit)
+        DepositAttemptReceipt.__post_init__(self.attempt_receipt)
+        ReviewedBankEvidenceCase.__post_init__(self.post_deposit)
+        BankEvidenceProvenance.__post_init__(self.post_deposit_provenance)
+
+        if not self.pre_deposit.verdict.accepted:
+            raise ValueError("pre_deposit verdict must be accepted")
+        if not self.post_deposit.verdict.accepted:
+            raise ValueError("post_deposit verdict must be accepted")
+        if self.pre_deposit.verdict.reviewed_case is not BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT:
+            raise ValueError("pre_deposit case must be reviewed as NON_EMPTY_BEFORE_DEPOSIT")
+        if self.post_deposit.verdict.reviewed_case is not BankEvidenceCase.EMPTY_AFTER_DEPOSIT:
+            raise ValueError("post_deposit case must be reviewed as EMPTY_AFTER_DEPOSIT")
+        if self.pre_deposit.package.checkpoint != self.post_deposit.package.checkpoint:
+            raise ValueError("pre_deposit and post_deposit must share the same checkpoint")
+        if self.pre_deposit.package.profile != self.post_deposit.package.profile:
+            raise ValueError("pre_deposit and post_deposit must share the same profile")
+        if self.pre_deposit.package.raw_sha256 == self.post_deposit.package.raw_sha256:
+            raise ValueError(
+                "pre_deposit and post_deposit must not be backed by the same underlying evidence"
+            )
+
+        preceding = self.attempt_receipt.preceding_provenance
+        if preceding.frame_sha256 != self.pre_deposit.package.raw_sha256:
+            raise ValueError(
+                "attempt_receipt.preceding_provenance does not match the exact pre_deposit "
+                "package -- the receipt must be issued against this specific pre-deposit evidence"
+            )
+        if self.post_deposit_provenance.frame_sha256 != self.post_deposit.package.raw_sha256:
+            raise ValueError(
+                "post_deposit_provenance does not match the exact post_deposit package"
+            )
+        if self.post_deposit_provenance.cycle_id != preceding.cycle_id:
+            raise ValueError(
+                "post_deposit_provenance must belong to the same visit/cycle as the attempt receipt"
+            )
+
+        issued = self.attempt_receipt.issued_monotonic_s
+        preceding_captured = preceding.frame.captured_monotonic_s
+        if issued < preceding_captured:
+            raise ValueError("attempt_receipt must be issued at or after the pre_deposit evidence")
+        if issued - preceding_captured > MAX_ATTEMPT_RECEIPT_AGE_S:
+            raise ValueError(
+                "attempt_receipt issued too long after the pre_deposit evidence to be causally bound"
+            )
+
+        post_captured = self.post_deposit_provenance.frame.captured_monotonic_s
+        if post_captured <= issued:
+            raise ValueError(
+                "post_deposit_provenance must be captured strictly after the attempt receipt"
+            )
+        if post_captured - issued > MAX_ATTEMPT_RECEIPT_AGE_S:
+            raise ValueError(
+                "post_deposit_provenance exceeds the causal freshness window after the attempt receipt"
+            )
 
 
 def _validate_evidence_case_batch(
