@@ -31,6 +31,8 @@ transitions when a receipt is supplied.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from hashlib import sha256
+from json import dumps
 from math import isfinite
 from typing import Final
 
@@ -71,6 +73,37 @@ def _validate_receipt_fields(
     BankEvidenceProvenance.__post_init__(preceding_provenance)
 
 
+def _is_exact_snapshot(value: object, expected_types: tuple[type[object], ...]) -> bool:
+    """Validate snapshot shape without invoking attacker-controlled equality."""
+
+    return (
+        type(value) is tuple
+        and len(value) == len(expected_types)
+        and all(
+            type(item) is expected for item, expected in zip(value, expected_types, strict=True)
+        )
+    )
+
+
+def _validate_exact_finite_timestamp(value: object, field_name: str) -> float:
+    """Return a canonical finite timestamp or reject representation aliases.
+
+    Deliberately stricter than :func:`_finite_float`: an ``int`` (however
+    small) or a ``float`` that is negative/NaN/infinite is rejected outright
+    rather than coerced, so a release-bearing digest cannot alias two
+    numerically-equal-but-differently-typed inputs (or lose precision on a
+    huge integer) across the fixed causal freshness boundary.
+    """
+
+    if type(value) is not float or not isfinite(value) or value < 0.0:
+        raise ValueError(f"{field_name} must be an exact finite non-negative float")
+    return 0.0 if value == 0.0 else value
+
+
+def _canonical_float_hex(value: float, field_name: str) -> str:
+    return _validate_exact_finite_timestamp(value, field_name).hex()
+
+
 @dataclass(frozen=True, slots=True)
 class OpenBankAttemptReceipt:
     """A causal record that an open-bank interaction was issued.
@@ -98,16 +131,94 @@ class DepositAttemptReceipt:
 
     Not evidence of the interaction's outcome. See
     :class:`OpenBankAttemptReceipt` for what ``preceding_provenance`` means.
+
+    Retains an exact construction-time snapshot and rejects a later
+    ``object.__setattr__`` mutation of any field (a frozen dataclass alone
+    does not prevent this) -- re-invoking :meth:`__post_init__`, as a
+    release-facing consumer such as
+    :class:`~mining_automation.banking.evidence_intake.DepositResultEvidenceRecord`
+    does, raises if the object no longer matches what was originally
+    constructed. :attr:`receipt_sha256` is this receipt's canonical,
+    domain-separated identity digest -- computing it also enforces that
+    every timestamp involved is an exact finite non-negative ``float``,
+    never an ``int``/NaN/Inf/negative alias.
     """
 
     attempt_id: str
     issued_monotonic_s: float
     preceding_provenance: BankEvidenceProvenance
+    _receipt_snapshot: tuple[object, ...] = field(init=False, repr=False, compare=False)
+
+    def _snapshot(self) -> tuple[object, ...]:
+        provenance = self.preceding_provenance
+        return (
+            self.attempt_id,
+            self.issued_monotonic_s,
+            provenance.frame.frame_id,
+            provenance.frame.captured_monotonic_s,
+            provenance.frame.width,
+            provenance.frame.height,
+            provenance.cycle_id,
+            provenance.frame_sha256,
+        )
 
     def __post_init__(self) -> None:
         _validate_receipt_fields(
             self.attempt_id, self.issued_monotonic_s, self.preceding_provenance
         )
+        snapshot = self._snapshot()
+        if hasattr(self, "_receipt_snapshot"):
+            retained_snapshot = self._receipt_snapshot
+            if (
+                not _is_exact_snapshot(
+                    retained_snapshot,
+                    (str, float, int, float, int, int, str, str),
+                )
+                or retained_snapshot != snapshot
+            ):
+                raise ValueError(
+                    "deposit attempt receipt differs from its construction-time snapshot"
+                )
+        object.__setattr__(self, "_receipt_snapshot", snapshot)
+
+    @property
+    def receipt_sha256(self) -> str:
+        """Canonical digest binding this exact attempt identity and evidence.
+
+        Requires every timestamp involved to be an exact finite
+        non-negative ``float`` -- an ``int``/NaN/Inf/negative alias raises
+        immediately, before any anti-forging check runs, so the failure
+        reason is unambiguous. Recomputing this after a forged
+        ``object.__setattr__`` mutation raises via the anti-forging
+        re-validation in :meth:`__post_init__`.
+        """
+        provenance = self.preceding_provenance
+        issued_hex = _canonical_float_hex(self.issued_monotonic_s, "issued_monotonic_s")
+        captured_hex = _canonical_float_hex(
+            provenance.frame.captured_monotonic_s, "preceding_provenance.captured_monotonic_s"
+        )
+        DepositAttemptReceipt.__post_init__(self)
+        canonical_payload: dict[str, object] = {
+            "schema": "mining-automation.deposit-attempt-receipt.v1",
+            "attempt_id": self.attempt_id,
+            "issued_monotonic_s": issued_hex,
+            "preceding_provenance": {
+                "frame_id": provenance.frame.frame_id,
+                "captured_monotonic_s": captured_hex,
+                "width": provenance.frame.width,
+                "height": provenance.frame.height,
+                "cycle_id": provenance.cycle_id,
+                "frame_sha256": provenance.frame_sha256,
+            },
+        }
+        encoded = dumps(
+            canonical_payload,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return sha256(encoded).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,6 +14,7 @@ from hashlib import sha256
 import pytest
 
 from mining_automation.banking import evidence_intake as evidence_intake_module
+from mining_automation.banking.attempts import DepositAttemptReceipt
 from mining_automation.banking.contracts import (
     BankCheckpointIdentity,
     BankingBlocker,
@@ -23,16 +24,29 @@ from mining_automation.banking.evidence_intake import (
     MAX_EVIDENCE_PACKAGE_AGE_S,
     REQUIRED_BANK_EVIDENCE_CASES,
     BankEvidenceCase,
+    CaptureEnvironmentIdentity,
+    DepositResultEvidenceRecord,
     FinalizedBankEvidencePackage,
     OperatorIntentLabel,
     ReviewedBankEvidenceCase,
     ReviewerVerdict,
     validate_release_evidence_case_batch,
 )
-from mining_automation.banking.testing import SYNTHETIC_BANK_CHECKPOINT, SYNTHETIC_BANK_PROFILE
+from mining_automation.banking.testing import (
+    SYNTHETIC_BANK_CHECKPOINT,
+    SYNTHETIC_BANK_PROFILE,
+    build_provenance,
+)
 
 _RAW_HASH = "a" * 64
 _MANIFEST_HASH = "b" * 64
+_CONFIG_DIGEST = "c" * 64
+_SYNTHETIC_CAPTURE_ENVIRONMENT = CaptureEnvironmentIdentity(
+    source_session_id="session-1",
+    capture_build_id="build-1",
+    capture_config_digest=_CONFIG_DIGEST,
+    environment_id="env-1",
+)
 
 # The configurable engine is private so no caller can confuse a weakened
 # policy result with the release-facing validator. Tests exercise it directly
@@ -60,6 +74,7 @@ def _package(
     package_id: str = "pkg-1",
     checkpoint: BankCheckpointIdentity = SYNTHETIC_BANK_CHECKPOINT,
     profile: BankProfileIdentity = SYNTHETIC_BANK_PROFILE,
+    capture_environment: CaptureEnvironmentIdentity = _SYNTHETIC_CAPTURE_ENVIRONMENT,
     raw_sha256: str = _RAW_HASH,
     manifest_sha256: str = _MANIFEST_HASH,
     operator_label: OperatorIntentLabel | None = None,
@@ -69,6 +84,7 @@ def _package(
         package_id=package_id,
         checkpoint=checkpoint,
         profile=profile,
+        capture_environment=capture_environment,
         raw_sha256=raw_sha256,
         manifest_sha256=manifest_sha256,
         operator_label=operator_label if operator_label is not None else _operator_label(),
@@ -181,6 +197,7 @@ def test_finalized_package_rejects_invalid_fields(
         "package_id": "pkg-1",
         "checkpoint": SYNTHETIC_BANK_CHECKPOINT,
         "profile": SYNTHETIC_BANK_PROFILE,
+        "capture_environment": _SYNTHETIC_CAPTURE_ENVIRONMENT,
         "raw_sha256": _RAW_HASH,
         "manifest_sha256": _MANIFEST_HASH,
         "operator_label": _operator_label(),
@@ -204,6 +221,42 @@ def test_finalized_package_rejects_non_exact_checkpoint() -> None:
 def test_finalized_package_rejects_non_exact_profile() -> None:
     with pytest.raises(ValueError, match="profile must be an exact BankProfileIdentity"):
         _package(profile="not-a-profile")  # type: ignore[arg-type]
+
+
+def test_finalized_package_rejects_non_exact_capture_environment() -> None:
+    with pytest.raises(
+        ValueError, match="capture_environment must be an exact CaptureEnvironmentIdentity"
+    ):
+        _package(capture_environment="not-an-environment")  # type: ignore[arg-type]
+
+
+def test_capture_environment_identity_accepts_valid_values() -> None:
+    assert _SYNTHETIC_CAPTURE_ENVIRONMENT.source_session_id == "session-1"
+
+
+@pytest.mark.parametrize("field_name", ["source_session_id", "capture_build_id", "environment_id"])
+def test_capture_environment_identity_rejects_blank_string_fields(field_name: str) -> None:
+    kwargs: dict[str, object] = {
+        "source_session_id": "s",
+        "capture_build_id": "b",
+        "capture_config_digest": _CONFIG_DIGEST,
+        "environment_id": "e",
+    }
+    kwargs[field_name] = "   "
+    with pytest.raises(ValueError, match=f"{field_name} must be a non-empty string"):
+        CaptureEnvironmentIdentity(**kwargs)  # type: ignore[arg-type]
+
+
+def test_capture_environment_identity_rejects_invalid_config_digest() -> None:
+    with pytest.raises(
+        ValueError, match="capture_config_digest must be a 64-character lowercase hex digest"
+    ):
+        CaptureEnvironmentIdentity(
+            source_session_id="s",
+            capture_build_id="b",
+            capture_config_digest="not-hex",
+            environment_id="e",
+        )
 
 
 @pytest.mark.parametrize("finalized_monotonic_s", [float("nan"), float("inf"), "not-a-number"])
@@ -274,7 +327,7 @@ def test_finalized_package_digest_is_deterministic_and_domain_separated() -> Non
 
     assert package.package_sha256 == equivalent.package_sha256
     assert (
-        package.package_sha256 == "b7fd51ae43a9736fc4dbf6a1b870620c1b6b09a9da65f56126538c695f14d6e4"
+        package.package_sha256 == "a5e2ffb342c39942a4b53a9e7e777bf2d812e3ad14f9159fdf408841b4339057"
     )
     assert len(package.package_sha256) == 64
     assert package.package_sha256 not in {package.raw_sha256, package.manifest_sha256}
@@ -391,12 +444,13 @@ def test_canonical_digest_known_answer_and_field_schema_are_frozen() -> None:
         finalized_monotonic_s=2.0,
     )
     assert (
-        package.package_sha256 == "b7fd51ae43a9736fc4dbf6a1b870620c1b6b09a9da65f56126538c695f14d6e4"
+        package.package_sha256 == "a5e2ffb342c39942a4b53a9e7e777bf2d812e3ad14f9159fdf408841b4339057"
     )
     assert {field.name for field in fields(FinalizedBankEvidencePackage) if field.init} == {
         "package_id",
         "checkpoint",
         "profile",
+        "capture_environment",
         "raw_sha256",
         "manifest_sha256",
         "operator_label",
@@ -624,6 +678,48 @@ def _full_required_batch() -> tuple[ReviewedBankEvidenceCase, ...]:
     return tuple(cases)
 
 
+def _deposit_result_for(
+    batch: tuple[ReviewedBankEvidenceCase, ...],
+) -> DepositResultEvidenceRecord:
+    """Build a valid DepositResultEvidenceRecord binding the batch's own
+    NON_EMPTY_BEFORE_DEPOSIT and EMPTY_AFTER_DEPOSIT cases (found by label,
+    not by a hardcoded index, so this stays correct regardless of
+    BankEvidenceCase's declaration order)."""
+    pre_deposit = next(
+        case
+        for case in batch
+        if case.verdict.reviewed_case is BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT
+    )
+    post_deposit = next(
+        case
+        for case in batch
+        if case.verdict.reviewed_case is BankEvidenceCase.EMPTY_AFTER_DEPOSIT
+    )
+    preceding_provenance = build_provenance(
+        frame_id=1000,
+        captured_monotonic_s=0.0,
+        cycle_id="deposit-result-cycle",
+        frame_sha256=pre_deposit.package.raw_sha256,
+    )
+    post_deposit_provenance = build_provenance(
+        frame_id=1001,
+        captured_monotonic_s=0.5,
+        cycle_id="deposit-result-cycle",
+        frame_sha256=post_deposit.package.raw_sha256,
+    )
+    receipt = DepositAttemptReceipt(
+        attempt_id="deposit-result-attempt",
+        issued_monotonic_s=0.0,
+        preceding_provenance=preceding_provenance,
+    )
+    return DepositResultEvidenceRecord(
+        pre_deposit=pre_deposit,
+        attempt_receipt=receipt,
+        post_deposit=post_deposit,
+        post_deposit_provenance=post_deposit_provenance,
+    )
+
+
 def test_finalized_package_rejects_equal_label_and_finalization_time() -> None:
     with pytest.raises(ValueError, match="must follow operator labeling"):
         _package(
@@ -633,11 +729,13 @@ def test_finalized_package_rejects_equal_label_and_finalization_time() -> None:
 
 
 def test_validate_evidence_case_batch_accepts_full_coverage() -> None:
+    batch = _full_required_batch()
     blockers = validate_evidence_case_batch(
-        _full_required_batch(),
+        batch,
         expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
         expected_profile=SYNTHETIC_BANK_PROFILE,
         evaluated_monotonic_s=100.0,
+        deposit_results=(_deposit_result_for(batch),),
     )
     assert blockers == ()
 
@@ -651,6 +749,208 @@ def test_validate_evidence_case_batch_rejects_missing_required_case() -> None:
         evaluated_monotonic_s=100.0,
     )
     assert BankingBlocker.MISSING_REQUIRED_EVIDENCE_CASE in blockers
+
+
+# ---------------------------------------------------------------------------
+# P0-1: the release-facing validator must require a causal deposit-result
+# record for NON_EMPTY_BEFORE_DEPOSIT/EMPTY_AFTER_DEPOSIT coverage, not just
+# the bare presence of independently-valid cases with those labels.
+#
+# Failing-regression-first: before this fix, the exact scenario in
+# test_validate_release_evidence_case_batch_rejects_unrelated_deposit_pair
+# below returned () (accepted) from validate_release_evidence_case_batch --
+# reproduced directly against the unfixed code before writing the fix.
+# ---------------------------------------------------------------------------
+
+
+def test_validate_release_evidence_case_batch_rejects_unrelated_deposit_pair() -> None:
+    """Two independently-valid, category-complete packages from unrelated
+    sessions must NOT satisfy deposit-result coverage with no causal record."""
+    non_empty_visit_a_package = _package(
+        package_id="pkg-visit-a",
+        raw_sha256=_digest_for("visit-a-raw"),
+        manifest_sha256=_digest_for("visit-a-manifest"),
+        operator_label=_operator_label(
+            claimed_case=BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT, labeled_monotonic_s=0.0
+        ),
+        capture_environment=CaptureEnvironmentIdentity(
+            source_session_id="session-A",
+            capture_build_id="build-A",
+            capture_config_digest=_CONFIG_DIGEST,
+            environment_id="env-A",
+        ),
+        finalized_monotonic_s=1.0,
+    )
+    non_empty_visit_a = ReviewedBankEvidenceCase(
+        package=non_empty_visit_a_package,
+        verdict=_verdict(
+            reviewed_case=BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT,
+            bound_package_sha256=non_empty_visit_a_package.package_sha256,
+            reviewed_monotonic_s=2.0,
+        ),
+    )
+    empty_visit_b_package = _package(
+        package_id="pkg-visit-b",
+        raw_sha256=_digest_for("visit-b-raw"),
+        manifest_sha256=_digest_for("visit-b-manifest"),
+        operator_label=_operator_label(
+            claimed_case=BankEvidenceCase.EMPTY_AFTER_DEPOSIT, labeled_monotonic_s=10.0
+        ),
+        capture_environment=CaptureEnvironmentIdentity(
+            source_session_id="session-B",
+            capture_build_id="build-B",
+            capture_config_digest=_CONFIG_DIGEST,
+            environment_id="env-B",
+        ),
+        finalized_monotonic_s=11.0,
+    )
+    empty_visit_b = ReviewedBankEvidenceCase(
+        package=empty_visit_b_package,
+        verdict=_verdict(
+            reviewed_case=BankEvidenceCase.EMPTY_AFTER_DEPOSIT,
+            bound_package_sha256=empty_visit_b_package.package_sha256,
+            reviewed_monotonic_s=12.0,
+        ),
+    )
+    other_required_cases = tuple(
+        ReviewedBankEvidenceCase(
+            package=(
+                other_package := _package(
+                    package_id=f"pkg-{case_label.value}",
+                    raw_sha256=_digest_for(f"other-{case_label.value}"),
+                    manifest_sha256=_digest_for(f"other-manifest-{case_label.value}"),
+                    operator_label=_operator_label(claimed_case=case_label, labeled_monotonic_s=0.0),
+                    finalized_monotonic_s=1.0,
+                )
+            ),
+            verdict=_verdict(
+                reviewed_case=case_label,
+                bound_package_sha256=other_package.package_sha256,
+                reviewed_monotonic_s=2.0,
+            ),
+        )
+        for case_label in REQUIRED_BANK_EVIDENCE_CASES
+        if case_label not in (BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT, BankEvidenceCase.EMPTY_AFTER_DEPOSIT)
+    )
+
+    batch = (non_empty_visit_a, empty_visit_b) + other_required_cases
+    blockers = validate_release_evidence_case_batch(
+        batch,
+        expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+        expected_profile=SYNTHETIC_BANK_PROFILE,
+        evaluated_monotonic_s=1000.0,
+    )
+    assert BankingBlocker.DEPOSIT_RESULT_COVERAGE_MISSING in blockers
+    # Confirm every OTHER coverage requirement really was satisfied -- this
+    # is specifically the deposit-pairing gap, not a generic missing-case defect.
+    assert BankingBlocker.MISSING_REQUIRED_EVIDENCE_CASE not in blockers
+
+
+def test_validate_release_evidence_case_batch_accepts_valid_causal_deposit_result() -> None:
+    batch = _full_required_batch()
+    blockers = validate_release_evidence_case_batch(
+        batch,
+        expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+        expected_profile=SYNTHETIC_BANK_PROFILE,
+        evaluated_monotonic_s=100.0,
+        deposit_results=(_deposit_result_for(batch),),
+    )
+    assert blockers == ()
+
+
+def test_validate_release_evidence_case_batch_rejects_deposit_result_outside_batch() -> None:
+    """A structurally-valid DepositResultEvidenceRecord whose pre/post cases
+    are not actually present in this batch must not establish coverage."""
+    batch = _full_required_batch()
+    foreign_pre_package = _package(
+        package_id="foreign-pre",
+        raw_sha256=_digest_for("foreign-pre-raw"),
+        manifest_sha256=_digest_for("foreign-pre-manifest"),
+        operator_label=_operator_label(
+            claimed_case=BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT, labeled_monotonic_s=0.0
+        ),
+        finalized_monotonic_s=1.0,
+    )
+    foreign_pre = ReviewedBankEvidenceCase(
+        package=foreign_pre_package,
+        verdict=_verdict(
+            reviewed_case=BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT,
+            bound_package_sha256=foreign_pre_package.package_sha256,
+            reviewed_monotonic_s=2.0,
+        ),
+    )
+    foreign_post_package = _package(
+        package_id="foreign-post",
+        raw_sha256=_digest_for("foreign-post-raw"),
+        manifest_sha256=_digest_for("foreign-post-manifest"),
+        operator_label=_operator_label(
+            claimed_case=BankEvidenceCase.EMPTY_AFTER_DEPOSIT, labeled_monotonic_s=3.0
+        ),
+        finalized_monotonic_s=4.0,
+    )
+    foreign_post = ReviewedBankEvidenceCase(
+        package=foreign_post_package,
+        verdict=_verdict(
+            reviewed_case=BankEvidenceCase.EMPTY_AFTER_DEPOSIT,
+            bound_package_sha256=foreign_post_package.package_sha256,
+            reviewed_monotonic_s=5.0,
+        ),
+    )
+    foreign_record = _deposit_result_for((foreign_pre, foreign_post))
+
+    blockers = validate_release_evidence_case_batch(
+        batch,
+        expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+        expected_profile=SYNTHETIC_BANK_PROFILE,
+        evaluated_monotonic_s=100.0,
+        deposit_results=(foreign_record,),
+    )
+    assert BankingBlocker.DEPOSIT_RESULT_PACKAGE_NOT_IN_BATCH in blockers
+    assert BankingBlocker.DEPOSIT_RESULT_COVERAGE_MISSING in blockers
+
+
+def test_validate_release_evidence_case_batch_rejects_forged_deposit_result() -> None:
+    batch = _full_required_batch()
+    record = _deposit_result_for(batch)
+    object.__setattr__(record.post_deposit.verdict, "accepted", False)
+
+    with pytest.raises(ValueError, match="construction-time snapshot"):
+        validate_release_evidence_case_batch(
+            batch,
+            expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+            expected_profile=SYNTHETIC_BANK_PROFILE,
+            evaluated_monotonic_s=100.0,
+            deposit_results=(record,),
+        )
+
+
+def test_validate_evidence_case_batch_ignores_deposit_results_when_not_required() -> None:
+    """When a caller's required_cases doesn't include either deposit label,
+    the deposit-pairing requirement never fires -- confirms this fix does
+    not change behavior for callers uninterested in deposit coverage."""
+    case = _reviewed_case()
+    blockers = validate_evidence_case_batch(
+        (case,),
+        expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+        expected_profile=SYNTHETIC_BANK_PROFILE,
+        evaluated_monotonic_s=100.0,
+        required_cases=frozenset({BankEvidenceCase.OPEN}),
+    )
+    assert blockers == ()
+    assert BankingBlocker.DEPOSIT_RESULT_COVERAGE_MISSING not in blockers
+
+
+def test_validate_evidence_case_batch_rejects_wrong_deposit_results_type() -> None:
+    with pytest.raises(
+        TypeError, match="deposit_results must be a tuple of exact DepositResultEvidenceRecord"
+    ):
+        validate_evidence_case_batch(
+            (),
+            expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+            expected_profile=SYNTHETIC_BANK_PROFILE,
+            evaluated_monotonic_s=100.0,
+            deposit_results=["not-a-record"],  # type: ignore[arg-type]
+        )
 
 
 def test_validate_evidence_case_batch_rejects_duplicate_package_id() -> None:
@@ -887,11 +1187,13 @@ def test_release_validator_rejects_integer_time_before_freshness_rounding() -> N
     # Converting true_now to float loses one second and turns a true age of
     # MAX_EVIDENCE_PACKAGE_AGE_S + 1 into the accepted exact boundary.
     assert true_now - int(finalized) == int(MAX_EVIDENCE_PACKAGE_AGE_S) + 1
+    batch = tuple(cases)
     blockers = validate_release_evidence_case_batch(
-        tuple(cases),
+        batch,
         expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
         expected_profile=SYNTHETIC_BANK_PROFILE,
         evaluated_monotonic_s=true_now,
+        deposit_results=(_deposit_result_for(batch),),
     )
 
     assert blockers == (BankingBlocker.EVALUATION_TIME_INVALID,)
@@ -1055,12 +1357,14 @@ def test_required_bank_evidence_cases_covers_every_enum_member() -> None:
 
 
 def test_validate_release_evidence_case_batch_accepts_full_fresh_coverage() -> None:
+    batch = _full_required_batch()
     assert (
         validate_release_evidence_case_batch(
-            _full_required_batch(),
+            batch,
             expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
             expected_profile=SYNTHETIC_BANK_PROFILE,
             evaluated_monotonic_s=100.0,
+            deposit_results=(_deposit_result_for(batch),),
         )
         == ()
     )

@@ -303,6 +303,8 @@ class BankingBlocker(StrEnum):
     REJECTED_EVIDENCE_PACKAGE_INCLUDED = "rejected_evidence_package_included"
     MISSING_REQUIRED_EVIDENCE_CASE = "missing_required_evidence_case"
     EVIDENCE_PACKAGE_STALE = "evidence_package_stale"
+    DEPOSIT_RESULT_COVERAGE_MISSING = "deposit_result_coverage_missing"
+    DEPOSIT_RESULT_PACKAGE_NOT_IN_BATCH = "deposit_result_package_not_in_batch"
 
     INVENTORY_EVIDENCE_MISSING = "inventory_evidence_missing"
     INVENTORY_EVIDENCE_TYPE_INVALID = "inventory_evidence_type_invalid"

@@ -377,3 +377,103 @@ def test_evaluate_attempt_receipt_causality_rejects_invalid_max_age(
             evaluated_monotonic_s=0.0,
             max_age_s=max_age_s,  # type: ignore[arg-type]
         )
+
+
+# ---------------------------------------------------------------------------
+# DepositAttemptReceipt canonical digest / anti-forging snapshot
+# ---------------------------------------------------------------------------
+
+
+def test_deposit_attempt_receipt_digest_is_deterministic() -> None:
+    provenance = build_provenance()
+    first = DepositAttemptReceipt(
+        attempt_id="a", issued_monotonic_s=10.0, preceding_provenance=provenance
+    )
+    second = DepositAttemptReceipt(
+        attempt_id="a", issued_monotonic_s=10.0, preceding_provenance=provenance
+    )
+    assert first.receipt_sha256 == second.receipt_sha256
+    assert len(first.receipt_sha256) == 64
+
+
+def test_deposit_attempt_receipt_digest_differs_for_different_attempt_id() -> None:
+    provenance = build_provenance()
+    a = DepositAttemptReceipt(
+        attempt_id="a", issued_monotonic_s=10.0, preceding_provenance=provenance
+    )
+    b = DepositAttemptReceipt(
+        attempt_id="b", issued_monotonic_s=10.0, preceding_provenance=provenance
+    )
+    assert a.receipt_sha256 != b.receipt_sha256
+
+
+def test_deposit_attempt_receipt_digest_rejects_integer_issued_time() -> None:
+    """Construction accepts an int (matching OpenBankAttemptReceipt's leniency,
+    unchanged for the live workflow); the release-facing digest does not."""
+    receipt = build_deposit_attempt_receipt(issued_monotonic_s=10)  # type: ignore[arg-type]
+    assert type(receipt.issued_monotonic_s) is int
+    with pytest.raises(
+        ValueError, match="issued_monotonic_s must be an exact finite non-negative float"
+    ):
+        _ = receipt.receipt_sha256
+
+
+@pytest.mark.parametrize("issued_monotonic_s", [float("nan"), float("inf"), True])
+def test_deposit_attempt_receipt_construction_already_rejects_nan_inf_bool(
+    issued_monotonic_s: object,
+) -> None:
+    """These are already rejected at construction time (_finite_float), before
+    the digest's stricter exact-float check would even run."""
+    with pytest.raises(ValueError, match="issued_monotonic_s must be a finite number"):
+        build_deposit_attempt_receipt(issued_monotonic_s=issued_monotonic_s)  # type: ignore[arg-type]
+
+
+def test_deposit_attempt_receipt_digest_rejects_negative_issued_time() -> None:
+    """Construction's _finite_float only checks finiteness, not sign -- a
+    negative timestamp slips through construction and must be caught by the
+    stricter release-facing digest instead."""
+    receipt = build_deposit_attempt_receipt(issued_monotonic_s=-1.0)
+    with pytest.raises(
+        ValueError, match="issued_monotonic_s must be an exact finite non-negative float"
+    ):
+        _ = receipt.receipt_sha256
+
+
+def test_deposit_attempt_receipt_digest_rejects_negative_zero_alias_consistently() -> None:
+    """-0.0 and 0.0 must canonicalize to the same digest input."""
+    provenance = build_provenance(captured_monotonic_s=0.0)
+    positive_zero = DepositAttemptReceipt(
+        attempt_id="a", issued_monotonic_s=0.0, preceding_provenance=provenance
+    )
+    negative_zero = DepositAttemptReceipt(
+        attempt_id="a", issued_monotonic_s=-0.0, preceding_provenance=provenance
+    )
+    assert positive_zero.receipt_sha256 == negative_zero.receipt_sha256
+
+
+def test_deposit_attempt_receipt_rejects_mutation_after_construction() -> None:
+    receipt = build_deposit_attempt_receipt()
+    object.__setattr__(receipt, "attempt_id", "mutated-after-construction")
+    with pytest.raises(
+        ValueError, match="deposit attempt receipt differs from its construction-time snapshot"
+    ):
+        DepositAttemptReceipt.__post_init__(receipt)
+
+
+def test_deposit_attempt_receipt_digest_detects_mutation() -> None:
+    receipt = build_deposit_attempt_receipt()
+    _ = receipt.receipt_sha256  # establish a valid baseline read
+    object.__setattr__(receipt, "attempt_id", "mutated-after-construction")
+    with pytest.raises(
+        ValueError, match="deposit attempt receipt differs from its construction-time snapshot"
+    ):
+        _ = receipt.receipt_sha256
+
+
+def test_deposit_attempt_receipt_rejects_mutated_preceding_provenance() -> None:
+    receipt = build_deposit_attempt_receipt()
+    object.__setattr__(receipt, "preceding_provenance", build_provenance(frame_id=999))
+    with pytest.raises(
+        ValueError, match="deposit attempt receipt differs from its construction-time snapshot"
+    ):
+        DepositAttemptReceipt.__post_init__(receipt)

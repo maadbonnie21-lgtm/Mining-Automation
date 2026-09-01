@@ -42,8 +42,10 @@ from math import isfinite
 from typing import Final
 from unicodedata import normalize
 
+from .attempts import MAX_ATTEMPT_RECEIPT_AGE_S, DepositAttemptReceipt
 from .contracts import (
     BankCheckpointIdentity,
+    BankEvidenceProvenance,
     BankingBlocker,
     BankProfileIdentity,
     _validate_non_empty_string,
@@ -54,6 +56,8 @@ __all__ = [
     "MAX_EVIDENCE_PACKAGE_AGE_S",
     "REQUIRED_BANK_EVIDENCE_CASES",
     "BankEvidenceCase",
+    "CaptureEnvironmentIdentity",
+    "DepositResultEvidenceRecord",
     "FinalizedBankEvidencePackage",
     "OperatorIntentLabel",
     "ReviewedBankEvidenceCase",
@@ -155,6 +159,31 @@ class OperatorIntentLabel:
 
 
 @dataclass(frozen=True, slots=True)
+class CaptureEnvironmentIdentity:
+    """Identity of the exact source session, capture build, config, and environment.
+
+    A shared ``cycle_id`` on live evidence (see
+    :class:`~mining_automation.banking.contracts.BankEvidenceProvenance`) is a
+    caller-chosen label -- it does not prove two archival packages came from
+    the same actual capture session, build, configuration, or environment.
+    This is the smallest additional identity a :class:`FinalizedBankEvidencePackage`
+    binds into its own canonical digest so that claim can be checked, not
+    merely asserted by an unbound caller-supplied string.
+    """
+
+    source_session_id: str
+    capture_build_id: str
+    capture_config_digest: str
+    environment_id: str
+
+    def __post_init__(self) -> None:
+        _validate_non_empty_string(self.source_session_id, "source_session_id")
+        _validate_non_empty_string(self.capture_build_id, "capture_build_id")
+        _validate_sha256_digest(self.capture_config_digest, "capture_config_digest")
+        _validate_non_empty_string(self.environment_id, "environment_id")
+
+
+@dataclass(frozen=True, slots=True)
 class FinalizedBankEvidencePackage:
     """An immutable, hash-identified bank-evidence package.
 
@@ -162,12 +191,15 @@ class FinalizedBankEvidencePackage:
     one-field ``object.__setattr__`` forging against the retained construction
     snapshot. ``operator_label`` is intent only; it does not make this package
     usable as release evidence on its own (see
-    :class:`ReviewedBankEvidenceCase`).
+    :class:`ReviewedBankEvidenceCase`). ``capture_environment`` binds the
+    exact source session/build/config/environment identity into this
+    package's own canonical digest -- see :class:`CaptureEnvironmentIdentity`.
     """
 
     package_id: str
     checkpoint: BankCheckpointIdentity
     profile: BankProfileIdentity
+    capture_environment: CaptureEnvironmentIdentity
     raw_sha256: str
     manifest_sha256: str
     operator_label: OperatorIntentLabel
@@ -188,6 +220,10 @@ class FinalizedBankEvidencePackage:
             self.profile.schema_version,
             self.profile.frame_width,
             self.profile.frame_height,
+            self.capture_environment.source_session_id,
+            self.capture_environment.capture_build_id,
+            self.capture_environment.capture_config_digest,
+            self.capture_environment.environment_id,
             self.raw_sha256,
             self.manifest_sha256,
             self.operator_label.operator_id,
@@ -203,8 +239,11 @@ class FinalizedBankEvidencePackage:
             raise ValueError("checkpoint must be an exact BankCheckpointIdentity")
         if type(self.profile) is not BankProfileIdentity:
             raise ValueError("profile must be an exact BankProfileIdentity")
+        if type(self.capture_environment) is not CaptureEnvironmentIdentity:
+            raise ValueError("capture_environment must be an exact CaptureEnvironmentIdentity")
         BankCheckpointIdentity.__post_init__(self.checkpoint)
         BankProfileIdentity.__post_init__(self.profile)
+        CaptureEnvironmentIdentity.__post_init__(self.capture_environment)
         _validate_sha256_digest(self.raw_sha256, "raw_sha256")
         _validate_sha256_digest(self.manifest_sha256, "manifest_sha256")
         if type(self.operator_label) is not OperatorIntentLabel:
@@ -237,6 +276,10 @@ class FinalizedBankEvidencePackage:
                         str,
                         str,
                         str,
+                        str,
+                        str,
+                        str,
+                        str,
                         BankEvidenceCase,
                         str,
                         float,
@@ -250,19 +293,28 @@ class FinalizedBankEvidencePackage:
 
     @property
     def package_sha256(self) -> str:
-        """Digest the exact finalized package using a canonical v1 encoding.
+        """Digest the exact finalized package using a canonical v2 encoding.
 
         ``manifest_sha256`` alone cannot bind the surrounding package
         metadata, while ``raw_sha256`` binds only the captured bytes. This
         domain-separated digest deliberately includes every release-bearing
-        package field and every field of its nested identities/label. The
-        hidden construction-integrity snapshot is not itself release data.
-        Times use ``float.hex`` so semantically equal accepted numeric inputs
-        have one stable representation.
+        package field, every field of its nested identities/label, and the
+        exact source session/build/config/environment identity. The hidden
+        construction-integrity snapshot is not itself release data. Times use
+        ``float.hex`` so semantically equal accepted numeric inputs have one
+        stable representation. ``v2`` adds ``capture_environment``; it is
+        deliberately distinct from any ``v1`` digest so the two schemas can
+        never collide.
         """
 
         FinalizedBankEvidencePackage.__post_init__(self)
         canonical_payload: dict[str, object] = {
+            "capture_environment": {
+                "capture_build_id": self.capture_environment.capture_build_id,
+                "capture_config_digest": self.capture_environment.capture_config_digest,
+                "environment_id": self.capture_environment.environment_id,
+                "source_session_id": self.capture_environment.source_session_id,
+            },
             "checkpoint": {
                 "checkpoint_id": self.checkpoint.checkpoint_id,
                 "location_id": self.checkpoint.location_id,
@@ -286,7 +338,7 @@ class FinalizedBankEvidencePackage:
                 "schema_version": self.profile.schema_version,
             },
             "raw_sha256": self.raw_sha256,
-            "schema": "mining-automation.bank-evidence-package.v1",
+            "schema": "mining-automation.bank-evidence-package.v2",
         }
         encoded = dumps(
             canonical_payload,
@@ -403,12 +455,149 @@ class ReviewedBankEvidenceCase:
         object.__setattr__(self, "_review_snapshot", review_snapshot)
 
 
+@dataclass(frozen=True, slots=True)
+class DepositResultEvidenceRecord:
+    """Binds a pre-deposit case, one exact attempt receipt, and a post-deposit
+    case into a single causally-ordered deposit result.
+
+    A batch merely containing *some* reviewed ``NON_EMPTY_BEFORE_DEPOSIT``
+    case and *some* reviewed ``EMPTY_AFTER_DEPOSIT`` case is a materially
+    weaker claim than "this exact deposit attempt went from non-empty to
+    empty": the two samples could come from unrelated visits, or a real,
+    validly-constructed receipt from a *different* attempt could be
+    substituted in without anything noticing. This type makes -- and
+    construction itself enforces -- the full causal chain a deposit result
+    must prove:
+
+    * ``pre_deposit`` is a reviewer-accepted ``NON_EMPTY_BEFORE_DEPOSIT`` case;
+    * ``attempt_receipt`` is bound, by content hash
+      (``preceding_provenance.frame_sha256 == pre_deposit.package.raw_sha256``),
+      to this *exact* pre-deposit package -- not merely some receipt that
+      happens to look plausible. This is what rejects a wrong or replayed
+      receipt: a receipt issued against different evidence, however valid on
+      its own, cannot bind here.
+    * ``attempt_receipt.issued_monotonic_s`` is at or after the pre-deposit
+      capture and within the same causal freshness window
+      (:data:`~mining_automation.banking.attempts.MAX_ATTEMPT_RECEIPT_AGE_S`)
+      used for a live attempt's own causality check.
+    * ``post_deposit_provenance`` is bound, the same way, to the exact
+      ``post_deposit`` package, shares the receipt's ``cycle_id`` (the same
+      bank visit/session), and is captured strictly after the receipt and
+      within that same freshness window -- mirroring
+      :func:`~mining_automation.banking.workflow._post_attempt_freshness_blocker`'s
+      live-workflow rule exactly.
+    * ``post_deposit`` is a reviewer-accepted ``EMPTY_AFTER_DEPOSIT`` case,
+      sharing the pre-deposit package's checkpoint/profile, and backed by
+      distinct underlying evidence (the same frame cannot serve as both).
+
+    Any violation raises at construction -- there is no way to hold a value
+    of this type that does not satisfy the full chain.
+    """
+
+    pre_deposit: ReviewedBankEvidenceCase
+    attempt_receipt: DepositAttemptReceipt
+    post_deposit: ReviewedBankEvidenceCase
+    post_deposit_provenance: BankEvidenceProvenance
+
+    def __post_init__(self) -> None:
+        if type(self.pre_deposit) is not ReviewedBankEvidenceCase:
+            raise ValueError("pre_deposit must be an exact ReviewedBankEvidenceCase")
+        if type(self.attempt_receipt) is not DepositAttemptReceipt:
+            raise ValueError("attempt_receipt must be an exact DepositAttemptReceipt")
+        if type(self.post_deposit) is not ReviewedBankEvidenceCase:
+            raise ValueError("post_deposit must be an exact ReviewedBankEvidenceCase")
+        if type(self.post_deposit_provenance) is not BankEvidenceProvenance:
+            raise ValueError("post_deposit_provenance must be an exact BankEvidenceProvenance")
+        ReviewedBankEvidenceCase.__post_init__(self.pre_deposit)
+        ReviewedBankEvidenceCase.__post_init__(self.post_deposit)
+        BankEvidenceProvenance.__post_init__(self.post_deposit_provenance)
+        # Recomputing the receipt's canonical digest -- rather than merely
+        # re-running its __post_init__ -- also enforces that every timestamp
+        # on the receipt side is an exact finite non-negative float (no
+        # int/NaN/Inf/negative alias) and detects any post-construction
+        # object.__setattr__ forgery of the receipt's fields.
+        _ = self.attempt_receipt.receipt_sha256
+
+        if not self.pre_deposit.verdict.accepted:
+            raise ValueError("pre_deposit verdict must be accepted")
+        if not self.post_deposit.verdict.accepted:
+            raise ValueError("post_deposit verdict must be accepted")
+        if self.pre_deposit.verdict.reviewed_case is not BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT:
+            raise ValueError("pre_deposit case must be reviewed as NON_EMPTY_BEFORE_DEPOSIT")
+        if self.post_deposit.verdict.reviewed_case is not BankEvidenceCase.EMPTY_AFTER_DEPOSIT:
+            raise ValueError("post_deposit case must be reviewed as EMPTY_AFTER_DEPOSIT")
+        if self.pre_deposit.package.checkpoint != self.post_deposit.package.checkpoint:
+            raise ValueError("pre_deposit and post_deposit must share the same checkpoint")
+        if self.pre_deposit.package.profile != self.post_deposit.package.profile:
+            raise ValueError("pre_deposit and post_deposit must share the same profile")
+        if (
+            self.pre_deposit.package.capture_environment
+            != self.post_deposit.package.capture_environment
+        ):
+            raise ValueError(
+                "pre_deposit and post_deposit must share the same exact source session, "
+                "capture build, capture config, and environment identity -- a shared cycle_id "
+                "alone does not prove the same capture session/build/config/environment"
+            )
+        if self.pre_deposit.package.raw_sha256 == self.post_deposit.package.raw_sha256:
+            raise ValueError(
+                "pre_deposit and post_deposit must not be backed by the same underlying evidence"
+            )
+
+        preceding = self.attempt_receipt.preceding_provenance
+        if preceding.frame_sha256 != self.pre_deposit.package.raw_sha256:
+            raise ValueError(
+                "attempt_receipt.preceding_provenance does not match the exact pre_deposit "
+                "package -- the receipt must be issued against this specific pre-deposit evidence"
+            )
+        if self.post_deposit_provenance.frame_sha256 != self.post_deposit.package.raw_sha256:
+            raise ValueError(
+                "post_deposit_provenance does not match the exact post_deposit package"
+            )
+        if self.post_deposit_provenance.cycle_id != preceding.cycle_id:
+            raise ValueError(
+                "post_deposit_provenance must belong to the same visit/cycle as the attempt receipt"
+            )
+
+        issued = _validate_exact_finite_timestamp(
+            self.attempt_receipt.issued_monotonic_s, "attempt_receipt.issued_monotonic_s"
+        )
+        preceding_captured = _validate_exact_finite_timestamp(
+            preceding.frame.captured_monotonic_s, "attempt_receipt.preceding_provenance timestamp"
+        )
+        if issued < preceding_captured:
+            raise ValueError("attempt_receipt must be issued at or after the pre_deposit evidence")
+        if issued - preceding_captured > MAX_ATTEMPT_RECEIPT_AGE_S:
+            raise ValueError(
+                "attempt_receipt issued too long after the pre_deposit evidence to be causally bound"
+            )
+
+        post_captured = _validate_exact_finite_timestamp(
+            self.post_deposit_provenance.frame.captured_monotonic_s,
+            "post_deposit_provenance timestamp",
+        )
+        if post_captured <= issued:
+            raise ValueError(
+                "post_deposit_provenance must be captured strictly after the attempt receipt"
+            )
+        if post_captured - issued > MAX_ATTEMPT_RECEIPT_AGE_S:
+            raise ValueError(
+                "post_deposit_provenance exceeds the causal freshness window after the attempt receipt"
+            )
+
+
+_DEPOSIT_RESULT_CASES: Final[frozenset[BankEvidenceCase]] = frozenset(
+    {BankEvidenceCase.NON_EMPTY_BEFORE_DEPOSIT, BankEvidenceCase.EMPTY_AFTER_DEPOSIT}
+)
+
+
 def _validate_evidence_case_batch(
     cases: tuple[ReviewedBankEvidenceCase, ...],
     *,
     expected_checkpoint: BankCheckpointIdentity,
     expected_profile: BankProfileIdentity,
     evaluated_monotonic_s: object,
+    deposit_results: tuple[DepositResultEvidenceRecord, ...] = (),
     required_cases: frozenset[BankEvidenceCase] = REQUIRED_BANK_EVIDENCE_CASES,
     max_age_s: float = MAX_EVIDENCE_PACKAGE_AGE_S,
 ) -> tuple[BankingBlocker, ...]:
@@ -417,6 +606,15 @@ def _validate_evidence_case_batch(
     An empty result means only that the batch satisfies the selected
     structural policy; this module never inspects pixels. Every applicable
     defect is returned and duplicates are never silently swallowed.
+
+    ``NON_EMPTY_BEFORE_DEPOSIT``/``EMPTY_AFTER_DEPOSIT`` coverage cannot be
+    satisfied merely by the bare presence of an accepted case with that
+    label -- that would let two independently-valid packages from unrelated
+    visits/sessions/attempts satisfy "deposit-result coverage" with no
+    causal link between them at all. When ``required_cases`` includes either
+    label, at least one ``deposit_results`` entry must be present whose
+    ``pre_deposit``/``post_deposit`` are themselves members of ``cases``
+    (see :class:`DepositResultEvidenceRecord` for what that record proves).
     """
     if type(expected_checkpoint) is not BankCheckpointIdentity:
         raise TypeError("expected_checkpoint must be an exact BankCheckpointIdentity")
@@ -428,6 +626,12 @@ def _validate_evidence_case_batch(
         type(case) is not ReviewedBankEvidenceCase for case in cases
     ):
         raise TypeError("cases must be a tuple of exact ReviewedBankEvidenceCase values")
+    if type(deposit_results) is not tuple or any(
+        type(record) is not DepositResultEvidenceRecord for record in deposit_results
+    ):
+        raise TypeError(
+            "deposit_results must be a tuple of exact DepositResultEvidenceRecord values"
+        )
     if type(required_cases) is not frozenset or any(
         type(case) is not BankEvidenceCase for case in required_cases
     ):
@@ -490,8 +694,29 @@ def _validate_evidence_case_batch(
         if case.verdict.accepted:
             accepted_cases.add(case.verdict.reviewed_case)
 
-    if not required_cases.issubset(accepted_cases):
+    # NON_EMPTY_BEFORE_DEPOSIT/EMPTY_AFTER_DEPOSIT are deliberately excluded
+    # from the bare-presence coverage check below -- see the deposit_results
+    # loop further down, which is the only way to satisfy them.
+    independent_required_cases = required_cases - _DEPOSIT_RESULT_CASES
+    if not independent_required_cases.issubset(accepted_cases):
         blockers.append(BankingBlocker.MISSING_REQUIRED_EVIDENCE_CASE)
+
+    deposit_result_required = bool(required_cases & _DEPOSIT_RESULT_CASES)
+    if deposit_result_required:
+        deposit_result_established = False
+        for record in deposit_results:
+            # Re-invoking __post_init__ both defends against object-level
+            # forging after construction and re-proves the full causal chain
+            # (pre_deposit non-empty, exact receipt binding, post_deposit
+            # empty, freshness window) -- see DepositResultEvidenceRecord.
+            DepositResultEvidenceRecord.__post_init__(record)
+            if record.pre_deposit not in cases or record.post_deposit not in cases:
+                if BankingBlocker.DEPOSIT_RESULT_PACKAGE_NOT_IN_BATCH not in blockers:
+                    blockers.append(BankingBlocker.DEPOSIT_RESULT_PACKAGE_NOT_IN_BATCH)
+                continue
+            deposit_result_established = True
+        if not deposit_result_established:
+            blockers.append(BankingBlocker.DEPOSIT_RESULT_COVERAGE_MISSING)
 
     return tuple(blockers)
 
@@ -502,13 +727,17 @@ def validate_release_evidence_case_batch(
     expected_checkpoint: BankCheckpointIdentity,
     expected_profile: BankProfileIdentity,
     evaluated_monotonic_s: object,
+    deposit_results: tuple[DepositResultEvidenceRecord, ...] = (),
 ) -> tuple[BankingBlocker, ...]:
     """Apply fixed coverage/freshness rules to one caller-selected target.
 
     The target checkpoint/profile remain explicit caller inputs until a future
     source-owned deployment policy exists. Complete truth-case coverage and
     the freshness ceiling are private fixed rules: callers cannot request
-    partial coverage or extend package lifetime.
+    partial coverage or extend package lifetime. ``NON_EMPTY_BEFORE_DEPOSIT``/
+    ``EMPTY_AFTER_DEPOSIT`` coverage additionally requires at least one valid,
+    batch-referencing ``DepositResultEvidenceRecord`` in ``deposit_results``
+    -- see :func:`_validate_evidence_case_batch`.
     """
 
     return _validate_evidence_case_batch(
@@ -516,6 +745,7 @@ def validate_release_evidence_case_batch(
         expected_checkpoint=expected_checkpoint,
         expected_profile=expected_profile,
         evaluated_monotonic_s=evaluated_monotonic_s,
+        deposit_results=deposit_results,
         required_cases=_RELEASE_REQUIRED_BANK_EVIDENCE_CASES,
         max_age_s=_RELEASE_MAX_EVIDENCE_PACKAGE_AGE_S,
     )
