@@ -10,6 +10,7 @@ from .checkpoint_evidence import (
 )
 from .contracts import (
     ArrivalEvidence,
+    AttemptEvidenceRole,
     Checkpoint,
     CheckpointDetection,
     CheckpointDetectorIdentity,
@@ -21,6 +22,7 @@ from .contracts import (
     CheckpointProfileIdentity,
     CheckpointRole,
     CheckpointSourceIdentity,
+    CompletedStepAttempt,
     FrameProvenance,
     NavigationFailureReason,
     NavigationPhase,
@@ -38,11 +40,20 @@ from .contracts import (
     RouteProgress,
     RouteStep,
     Sha256Digest,
+    StepAttemptIdentity,
+    StepAttemptSourceIdentity,
+    SyntheticStepAttemptReceipt,
 )
-from .machine import observe_checkpoint, prepare_step, start_route
+from .machine import (
+    observe_checkpoint,
+    prepare_step,
+    record_step_attempt_receipt,
+    start_route,
+)
 
 __all__ = [
     "ArrivalEvidence",
+    "AttemptEvidenceRole",
     "Checkpoint",
     "CheckpointDetection",
     "CheckpointDetector",
@@ -58,6 +69,7 @@ __all__ = [
     "CheckpointProfileIdentity",
     "CheckpointRole",
     "CheckpointSourceIdentity",
+    "CompletedStepAttempt",
     "FrameProvenance",
     "NavigationFailureReason",
     "NavigationPhase",
@@ -75,9 +87,13 @@ __all__ = [
     "RouteProgress",
     "RouteStep",
     "Sha256Digest",
+    "StepAttemptIdentity",
+    "StepAttemptSourceIdentity",
+    "SyntheticStepAttemptReceipt",
     "bind_checkpoint_evidence",
     "observe_checkpoint",
     "prepare_step",
+    "record_step_attempt_receipt",
     "run_checkpoint_detector",
     "start_route",
 ]

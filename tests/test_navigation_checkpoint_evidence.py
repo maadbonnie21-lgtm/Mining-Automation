@@ -14,6 +14,7 @@ from mining_automation.navigation.checkpoint_evidence import (
     run_checkpoint_detector,
 )
 from mining_automation.navigation.contracts import (
+    AttemptEvidenceRole,
     Checkpoint,
     CheckpointDetection,
     CheckpointDetectorIdentity,
@@ -33,6 +34,7 @@ from mining_automation.navigation.contracts import (
     RoutePlan,
     RouteStep,
     Sha256Digest,
+    StepAttemptSourceIdentity,
 )
 from mining_automation.navigation.machine import observe_checkpoint, start_route
 
@@ -98,7 +100,17 @@ def _context(*, source: CheckpointSourceIdentity | None = None) -> RouteEvaluati
     return RouteEvaluationContext(
         plan=_plan(),
         expected_source=source or _source(),
-        policy=NavigationPolicy(max_frame_age_s=0.5, minimum_confidence=0.9),
+        expected_attempt_source=StepAttemptSourceIdentity(
+            source_id="synthetic-attempt-source",
+            version="synthetic-v1",
+            session_id="synthetic-attempt-session",
+            evidence_role=AttemptEvidenceRole.SYNTHETIC_ARCHITECTURE_TEST_ONLY,
+        ),
+        policy=NavigationPolicy(
+            max_frame_age_s=0.5,
+            minimum_confidence=0.9,
+            max_attempt_receipt_age_s=0.5,
+        ),
     )
 
 
