@@ -13,11 +13,11 @@ import json
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import InitVar, dataclass, field
+from dataclasses import MISSING, InitVar, dataclass, field, fields
 from datetime import UTC, datetime
-from enum import StrEnum
+from enum import Enum, StrEnum
 from pathlib import PurePosixPath
-from typing import Final, Literal, cast
+from typing import Any, Final, Literal, cast
 
 from ..capture.frame import PixelFormat
 from ..contracts import FrameRef
@@ -30,6 +30,7 @@ from .contracts import (
     RouteIdentity,
     RoutePlan,
     Sha256Digest,
+    _snapshot_navigation_contract,
 )
 
 __all__ = [
@@ -1748,6 +1749,123 @@ class RouteEvidenceVerificationReport:
         }
 
 
+_ROUTE_EVIDENCE_INGRESS_TYPES: Final[frozenset[type[object]]] = frozenset(
+    {
+        FinalizedRouteEvidencePackage,
+        OwnedRouteEvidenceCase,
+        RouteEvidenceAcquisitionBinding,
+        RouteEvidenceArtifactRef,
+        RouteEvidenceCampaignPlan,
+        RouteEvidenceCaptureBuildIdentity,
+        RouteEvidenceCaseSpec,
+        RouteEvidenceCaseTruth,
+        RouteEvidenceOperatorIntent,
+        RouteEvidenceReview,
+        SyntheticRouteEvidenceDetectorReport,
+    }
+)
+
+
+def _snapshot_route_evidence_contract[ContractT](value: ContractT) -> ContractT:
+    """Reconstruct one closed route-evidence graph from exact owned values."""
+
+    value_type = type(value)
+    if value is None or value_type in {bool, bytes, float, int, str}:
+        return value
+    if isinstance(value, Enum):
+        return value
+    if value_type is tuple:
+        tuple_value = cast(tuple[object, ...], value)
+        return cast(
+            ContractT,
+            tuple(_snapshot_route_evidence_contract(item) for item in tuple_value),
+        )
+    if value_type not in _ROUTE_EVIDENCE_INGRESS_TYPES:
+        return _snapshot_navigation_contract(value)
+
+    constructor = cast(Any, value_type)
+    arguments: dict[str, object] = {}
+    for contract_field in fields(cast(Any, value)):
+        field_value = getattr(value, contract_field.name)
+        if contract_field.init:
+            arguments[contract_field.name] = _snapshot_route_evidence_contract(field_value)
+            continue
+        if (
+            contract_field.default is MISSING
+            or type(field_value) is not type(contract_field.default)
+            or field_value != contract_field.default
+        ):
+            raise ValueError("route evidence carries mutated fixed-authority fields")
+    return cast(ContractT, constructor(**arguments))
+
+
+def _snapshot_load_expectation(
+    expectation: RouteEvidenceLoadExpectation,
+) -> RouteEvidenceLoadExpectation:
+    """Own only the base verifier pins, including from a filesystem expectation."""
+
+    if (
+        type(expectation.evidence_role) is not str
+        or expectation.evidence_role != SYNTHETIC_ROUTE_EVIDENCE_ROLE
+        or expectation.activation_allowed is not False
+        or expectation.input_authority is not False
+    ):
+        raise ValueError("route evidence expectation carries mutated authority fields")
+    return RouteEvidenceLoadExpectation(
+        finalized_package_sha256=_snapshot_navigation_contract(
+            expectation.finalized_package_sha256
+        ),
+        acquisition_head_sha256=_snapshot_navigation_contract(expectation.acquisition_head_sha256),
+        campaign_id=_snapshot_route_evidence_contract(expectation.campaign_id),
+        route=_snapshot_navigation_contract(expectation.route),
+        direction=_snapshot_route_evidence_contract(expectation.direction),
+        route_plan_sha256=_snapshot_navigation_contract(expectation.route_plan_sha256),
+        detector=_snapshot_navigation_contract(expectation.detector),
+        profile=_snapshot_navigation_contract(expectation.profile),
+        capture_source_id=_snapshot_route_evidence_contract(expectation.capture_source_id),
+        capture_session_id=_snapshot_route_evidence_contract(expectation.capture_session_id),
+        capture_build=_snapshot_route_evidence_contract(expectation.capture_build),
+        frame_width=_snapshot_route_evidence_contract(expectation.frame_width),
+        frame_height=_snapshot_route_evidence_contract(expectation.frame_height),
+        pixel_format=_snapshot_route_evidence_contract(expectation.pixel_format),
+        capture_configuration_sha256=_snapshot_navigation_contract(
+            expectation.capture_configuration_sha256
+        ),
+        capture_environment_sha256=_snapshot_navigation_contract(
+            expectation.capture_environment_sha256
+        ),
+        support_envelope_sha256=_snapshot_navigation_contract(expectation.support_envelope_sha256),
+    )
+
+
+def _snapshot_verification_inputs(
+    package: FinalizedRouteEvidencePackage,
+    review: RouteEvidenceReview,
+    expectation: RouteEvidenceLoadExpectation,
+) -> tuple[
+    FinalizedRouteEvidencePackage,
+    RouteEvidenceReview,
+    RouteEvidenceLoadExpectation,
+]:
+    """Take stable owned inputs and reject mutation during the snapshot window."""
+
+    try:
+        owned_package = _snapshot_route_evidence_contract(package)
+        owned_review = _snapshot_route_evidence_contract(review)
+        owned_expectation = _snapshot_load_expectation(expectation)
+        if (
+            _snapshot_route_evidence_contract(package) != owned_package
+            or _snapshot_route_evidence_contract(review) != owned_review
+            or _snapshot_load_expectation(expectation) != owned_expectation
+        ):
+            raise ValueError("route evidence changed while verification inputs were snapshotted")
+    except Exception as exc:
+        raise RouteEvidenceIntegrityError(
+            "route evidence verification inputs are malformed or changed during intake"
+        ) from exc
+    return owned_package, owned_review, owned_expectation
+
+
 def _snapshot_artifacts(
     artifacts: Mapping[str, bytes],
     expected_paths: set[str],
@@ -1896,6 +2014,11 @@ def verify_synthetic_route_evidence(
     if not isinstance(expectation, RouteEvidenceLoadExpectation):
         raise TypeError("expectation must be RouteEvidenceLoadExpectation")
 
+    package, review, expectation = _snapshot_verification_inputs(
+        package,
+        review,
+        expectation,
+    )
     package_sha = package.content_sha256
     _require_package_matches_expectation(package, package_sha, expectation)
     if review.finalized_package_sha256 != package_sha:
@@ -1995,7 +2118,7 @@ def verify_synthetic_route_evidence(
     passed = not failures
     review_sha = review.content_sha256
     endpoint = RouteEndpointVerification(
-        route=package.route,
+        route=_snapshot_navigation_contract(package.route),
         finalized_package_sha256=package_sha,
         reviewer_truth_sha256=review_sha,
         arrival_case_id=arrival_spec.case_id,
@@ -2005,7 +2128,7 @@ def verify_synthetic_route_evidence(
     )
     return RouteEvidenceVerificationReport(
         campaign_id=package.campaign_plan.campaign_id,
-        route=package.route,
+        route=_snapshot_navigation_contract(package.route),
         finalized_package_sha256=package_sha,
         reviewer_truth_sha256=review_sha,
         evidence_conformance_passed=passed,

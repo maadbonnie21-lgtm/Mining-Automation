@@ -158,6 +158,13 @@ Verification snapshots immutable artifact bytes, rejects a missing or foreign ar
 checks every size/hash, and reads the mapping again to detect replacement during verification.
 Review coverage and order must exactly equal the preregistered case set.
 
+The programmatic verifier also reconstructs the package, review, and caller expectation as exact
+owned contract graphs before reading artifacts. Malformed container subclasses, mutated
+fixed-authority fields, or a graph that changes during intake are integrity failures. Verification
+uses only those owned graphs, and the returned report and endpoint carry separate route-identity
+snapshots, so later caller mutation cannot rewrite a latched result or splice its direction from its
+bound package digest.
+
 Verification also requires a caller-supplied `RouteEvidenceLoadExpectation`. This authority pin
 names the exact finalized-package SHA-256, campaign, route, direction, route-plan SHA-256,
 detector/profile, capture source/session/configuration/environment, and support envelope expected

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import FrozenInstanceError, replace
 from hashlib import sha256
 
@@ -403,6 +404,109 @@ def test_synthetic_direction_package_passes_without_release_or_input(
     assert report.live_navigation_enabled is False
     assert report.activation_allowed is False
     assert report.input_authority is False
+
+
+def test_verifier_rejects_caller_graph_change_during_owned_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package, review, artifacts = _build_package(RouteDirection.MINE_TO_BANK)
+    foreign_package, _, _ = _build_package(RouteDirection.BANK_TO_MINE)
+    expectation = _expectation(package)
+    snapshot_expectation = route_evidence_module._snapshot_load_expectation
+    mutation_applied = False
+
+    def snapshot_then_mutate(
+        value: RouteEvidenceLoadExpectation,
+    ) -> RouteEvidenceLoadExpectation:
+        nonlocal mutation_applied
+        owned = snapshot_expectation(value)
+        if not mutation_applied:
+            mutation_applied = True
+            object.__setattr__(package, "campaign_plan", foreign_package.campaign_plan)
+        return owned
+
+    monkeypatch.setattr(
+        route_evidence_module,
+        "_snapshot_load_expectation",
+        snapshot_then_mutate,
+    )
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="changed during intake"):
+        verify_synthetic_route_evidence(package, review, artifacts, expectation)
+
+
+def test_verifier_rejects_hostile_review_case_tuple_before_iteration() -> None:
+    package, review, artifacts = _build_package(RouteDirection.MINE_TO_BANK)
+    foreign_package, _, _ = _build_package(RouteDirection.BANK_TO_MINE)
+    expectation = _expectation(package)
+
+    class MutatingReviewCases(tuple[RouteEvidenceCaseTruth, ...]):
+        iterations: int
+
+        def __new__(
+            cls,
+            values: tuple[RouteEvidenceCaseTruth, ...],
+        ) -> MutatingReviewCases:
+            instance = super().__new__(cls, values)
+            instance.iterations = 0
+            return instance
+
+        def __iter__(self) -> Iterator[RouteEvidenceCaseTruth]:
+            self.iterations += 1
+            yield from tuple.__iter__(self)
+            if self.iterations >= 2:
+                object.__setattr__(package, "campaign_plan", foreign_package.campaign_plan)
+
+    hostile_cases = MutatingReviewCases(review.cases)
+    object.__setattr__(review, "cases", hostile_cases)
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="malformed or changed"):
+        verify_synthetic_route_evidence(package, review, artifacts, expectation)
+
+    assert hostile_cases.iterations == 0
+    assert package.route.direction is RouteDirection.MINE_TO_BANK
+
+
+def test_verifier_owns_inputs_across_hostile_artifact_mapping_callback() -> None:
+    package, review, artifacts = _build_package(RouteDirection.MINE_TO_BANK)
+    foreign_package, _, _ = _build_package(RouteDirection.BANK_TO_MINE)
+    expectation = _expectation(package)
+    original_package_sha256 = package.content_sha256
+
+    class MutatingArtifacts(dict[str, bytes]):
+        def __iter__(self) -> Iterator[str]:
+            object.__setattr__(package, "campaign_plan", foreign_package.campaign_plan)
+            return super().__iter__()
+
+    report = verify_synthetic_route_evidence(
+        package,
+        review,
+        MutatingArtifacts(artifacts),
+        expectation,
+    )
+
+    assert report.evidence_conformance_passed is True
+    assert report.finalized_package_sha256 == original_package_sha256
+    assert report.route.direction is RouteDirection.MINE_TO_BANK
+    assert report.endpoint.arrival_checkpoint_id == "synthetic-m2b-arrival"
+
+
+def test_verification_report_routes_are_detached_from_caller_and_each_other() -> None:
+    package, review, artifacts = _build_package()
+    original_package_sha256 = package.content_sha256
+
+    report = _verify(package, review, artifacts)
+
+    assert report.route is not package.route
+    assert report.endpoint.route is not package.route
+    assert report.route is not report.endpoint.route
+    object.__setattr__(package.campaign_plan.route_plan.identity, "version", "caller-mutated")
+    assert report.route.version == "1.0.0-synthetic"
+    assert report.endpoint.route.version == "1.0.0-synthetic"
+    assert report.finalized_package_sha256 == original_package_sha256
+
+    object.__setattr__(report.route, "version", "report-mutated")
+    assert report.endpoint.route.version == "1.0.0-synthetic"
 
 
 def test_canonical_digest_is_compact_sorted_ascii_with_one_lf() -> None:
