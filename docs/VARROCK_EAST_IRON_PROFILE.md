@@ -286,26 +286,36 @@ plain-language diagnosis. When it reports `camera_not_actually_restored`, the
 next useful evidence is one fresh capture made after returning RuneLite to the
 reviewed supported view—not threshold tuning.
 
-## Release boundary
+## Constrained-v1 release boundary
 
 This is a calibrated development profile, not yet a claim of universal or
-four-node release readiness. Before Issue #11 can close, collect and pass:
+four-node release readiness. Constrained v1 supports only the exact reviewed
+Varrock East view. Automatic camera recovery and arbitrary camera
+reacquisition are not part of that support claim: if the production scene gate
+does not validate, every resource remains uncertain, no interaction target is
+exposed, and the caller must stop. Diagnostic registration/reacquisition code
+cannot override that result.
+
+The accepted real drift proof already establishes that all 36 reviewed camera
+drift frames remain uncertain with zero false definitive targets. The reviewed
+fixtures also establish all-node available states, the complete south-west
+available/depleted/respawn cycle, and mixed states. Before Issue #11 can close,
+the remaining evidence must collect and pass:
 
 - a real depletion/respawn sequence for north-west
 - a real depletion/respawn sequence for center
 - a real depletion/respawn sequence for north-east
 - a reviewed unsupported-location frame
+- reviewed neighboring copper/tin and terrain-clutter negative evidence
 - at least one deliberate real obstruction over a profiled sample patch (the
   Issue #13 occlusion defense is mechanism-validated against real pixels with
   a synthetic mutation — see above — not yet against a genuinely captured
   occlusion event)
-- the 36 real camera-drift frames re-run through the Issue #22 combined command:
-  all 36 frames remain UNCERTAIN, with zero false definitive targets
-- one fresh supported-view capture, because the stored frame was proven to be
-  the same unsupported view as the drift set; rerun it through the combined
-  command as `--restored-frame`
-- an ordinary RuneLite restart followed by supported-view reacquisition,
-  re-run with `--expect definitive`
-- repeated runs with the supported camera restored after ordinary client restart
+- one fresh current-client positive startup capture already in the exact
+  reviewed `1005x1078` BGRA supported view
+- final lead review of the exact constrained-v1 client/capture/profile envelope
 
-PR #12 remains a draft until those gates pass.
+The 36-frame drift corpus must still be rerun on any detector/profile-changing
+head. Client-restart camera reacquisition and repeated automatic camera
+normalization are intentionally retired requirements, not deferred evidence.
+PR #12 remains a draft until the genuine remaining gates pass.

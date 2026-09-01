@@ -38,16 +38,19 @@
     }
   ],
   "capture_envelope": {
+    "automatic_camera_recovery_allowed": false,
     "camera": "fixed-reviewed-camera-v1",
     "frame_height": 1078,
     "frame_width": 1005,
     "pixel_format": "bgra8888",
-    "reported_dpi": 96
+    "reported_dpi": 96,
+    "unsupported_or_uncertain_view_policy": "zero_targets_and_stop"
   },
-  "detector_version": "1.0.0",
+  "detector_version": "2.1.0",
   "location_id": "varrock-east-mine",
   "ore_label": "iron",
   "profile_id": "varrock-east-iron-v1",
+  "profile_schema_version": 3,
   "real_fixture_dataset": {
     "available_validated_for": [
       "varrock-east-iron-northwest",
@@ -75,8 +78,10 @@
     "real center depletion and respawn",
     "real north-east depletion and respawn",
     "real unsupported-location fixture",
+    "real neighboring copper/tin/terrain negative fixtures",
     "real sample-patch obstruction fixture",
-    "repeatability after supported client restart"
+    "fresh current-client positive capture in the exact reviewed supported view",
+    "final constrained-v1 supported-envelope review"
   ],
   "schema_version": 1,
   "support_status": "calibrated_partial_validation"

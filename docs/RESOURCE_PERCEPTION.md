@@ -156,6 +156,12 @@ Production support is not yet claimed merely by this infrastructure. The Varrock
 
 The first profile may require a fixed RuneLite client geometry and a validated camera/zoom. Those assumptions must stay explicit until visual localization removes them.
 
+For constrained v1, that fixed reviewed view is a startup precondition rather
+than a camera-control objective. The resource pipeline captures and evaluates
+one frame. It does not retry, normalize, or move the camera. An unsupported or
+scene-uncertain frame exposes zero actionable targets and requires the future
+workflow to stop; development diagnostics cannot promote it.
+
 ## Research basis
 
 Public OSRS references reviewed for this milestone report that:

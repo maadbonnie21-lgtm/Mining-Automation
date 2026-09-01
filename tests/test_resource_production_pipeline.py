@@ -154,6 +154,37 @@ def test_wrong_geometry_fails_closed_to_zero_resource_authority() -> None:
     assert result.actionable_targets == ()
 
 
+def test_unsupported_scene_stops_after_one_capture_without_camera_recovery(
+    reviewed_available_raw: RawFrame,
+) -> None:
+    unsupported = RawFrame(
+        payload=bytes(len(reviewed_available_raw.payload)),
+        width=reviewed_available_raw.width,
+        height=reviewed_available_raw.height,
+        pixel_format=reviewed_available_raw.pixel_format,
+    )
+    backend = FakeCaptureBackend([unsupported, reviewed_available_raw])
+
+    with CaptureSource(backend, clock=ManualClock(23.0)) as source:
+        result = capture_detect_trust_varrock_east_iron(source)
+
+    # ``accepted`` means the four-observation identity/shape contract was
+    # complete. It is not scene or action authority. The unsupported scene is
+    # retained as explicit UNKNOWN state and cannot expose a target.
+    assert result.accepted is True
+    assert tuple(resource.available for resource in result.resources) == (
+        None,
+        None,
+        None,
+        None,
+    )
+    assert all(resource.interaction_region is None for resource in result.resources)
+    assert result.actionable_targets == ()
+    # A reviewed supported frame remains queued: the production boundary does
+    # not retry, hunt for a camera pose, or silently recover from uncertainty.
+    assert backend.grab_calls == 1
+
+
 def test_internal_detector_metadata_drift_cannot_reach_trust(
     monkeypatch: pytest.MonkeyPatch,
     reviewed_available_raw: RawFrame,

@@ -1,36 +1,43 @@
 # Project Status
 
-| Person | Working on | Status | Next step |
-|---|---|---|---|
-| ChatGPT | Issue #11 — Varrock East iron-rock perception + real fixture capture | ACTIVE | Build recorder/annotation path, collect real frames, implement and test detector |
-| Claude 1 | Issue #5 / PR #8 — Windows RuneLite capture backend | COMPLETE / MERGED | Await next assigned issue when available |
-| Codex | Issue #9 — inventory perception + InventoryState | IN PROGRESS | Implement Issue #9 and open PR |
-
 ## Current milestone
 
-M3 — First production perception.
+M3 — constrained-v1 perception release-gate closure.
 
-## Completed
+The current support target is one exact reviewed Varrock East iron view.
+Arbitrary camera reacquisition is not part of the v1 critical path. An
+unsupported or uncertain view exposes zero targets and stops.
 
-- Capture foundation and shared-contract hardening are merged.
-- Perception replay/regression infrastructure is merged.
-- Windows RuneLite capture backend merged through PR #8 as `1c7c770`.
-- Linux CI, Windows smoke, and real-machine RuneLite capture validation passed for the tested envelope.
-- Real capture correctly handled live pixels, move/resize, minimize/restore, and frame identity.
+## Accepted development lineages
 
-## Active
+- Windows RuneLite capture backend: merged through PR #8.
+- Inventory V3 frozen candidate:
+  `5975532b472a74d93f010e04ca44b2efa2a3ffd7`.
+- Inventory independent-validation protocol/readiness:
+  `32764bfd82afb46d4e99292bab7d162be536e2d7`.
+- Resource assembly/trust/replay:
+  `225ea7525ee21b5161f584b4daaad90551d65b31`.
+- Deny-only constrained-v1 reference:
+  `d8fd03d8087732a2f3314da4a0c25edb5d134f55`.
 
-- ChatGPT Issue #11: first real iron-rock detector for Varrock East Mine, including real fixture capture and replay regression data.
-- Codex Issue #9: 28-slot inventory perception and clean `InventoryState` adapter.
+These open lineages are accepted development inputs, not production
+activation or a supported end-to-end workflow.
+
+## Open perception release gates
+
+- Inventory: one separately authorized, independently reviewed seven-case
+  campaign, exact evaluator PASS, source-owned approval, and a later reviewed
+  production binding.
+- Resource: real depletion/respawn cycles for north-west, center, and
+  north-east; real obstruction; unsupported-location and neighboring
+  copper/tin/terrain negatives; and final exact-view startup/envelope review.
+
+See `docs/V1_PERCEPTION_RELEASE_GATE_AUDIT.md` for the exact closed/offline/
+fresh-evidence ledger and immutable evidence identities.
 
 ## Next integration target
 
-Combine resource and inventory observations into world state so the application can reliably know:
-- which supported iron rocks are available/depleted/uncertain
-- whether inventory is empty/partial/full/uncertain
-
-No clicking, navigation, or banking will be added until both perception paths pass their release tests.
-
-## Blocker
-
-- None.
+Issue #14 remains blocked. Once both perception release gates genuinely close,
+the next implementation is atomic same-frame resource/inventory acquisition
+into canonical `WorldState`. No controller, clicking, navigation, or banking
+activation is authorized before that gate.
