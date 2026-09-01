@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
-from math import isfinite
+from math import copysign, isfinite
 
+from ..contracts import FrameRef
 from .contracts import (
     ArrivalEvidence,
+    CheckpointDetection,
+    CheckpointDetectorIdentity,
+    CheckpointEvidence,
     CheckpointMatchKind,
     CheckpointObservation,
+    CheckpointProfile,
+    CheckpointSourceIdentity,
     CompletedStepAttempt,
+    FrameProvenance,
     NavigationFailureReason,
     NavigationPhase,
     NavigationStop,
@@ -16,9 +23,13 @@ from .contracts import (
     NavigationTransitionOutcome,
     OfflineStepProposal,
     RouteEvaluationContext,
+    RouteIdentity,
     RouteProgress,
+    Sha256Digest,
     StepAttemptIdentity,
+    StepAttemptSourceIdentity,
     SyntheticStepAttemptReceipt,
+    _snapshot_navigation_contract,
 )
 
 __all__ = [
@@ -26,20 +37,116 @@ __all__ = [
     "prepare_step",
     "record_step_attempt_receipt",
     "start_route",
+    "stop_route",
 ]
 
 
 def _validate_evaluation_time(evaluated_monotonic_s: float) -> None:
-    if isinstance(evaluated_monotonic_s, bool) or not isinstance(
-        evaluated_monotonic_s, (int, float)
+    if (
+        type(evaluated_monotonic_s) is not float
+        or not isfinite(evaluated_monotonic_s)
+        or evaluated_monotonic_s < 0.0
+        or (evaluated_monotonic_s == 0.0 and copysign(1.0, evaluated_monotonic_s) < 0.0)
     ):
-        raise ValueError("evaluated_monotonic_s must be finite and non-negative")
-    try:
-        finite = isfinite(float(evaluated_monotonic_s))
-    except (OverflowError, TypeError, ValueError):
-        finite = False
-    if not finite or evaluated_monotonic_s < 0:
-        raise ValueError("evaluated_monotonic_s must be finite and non-negative")
+        raise ValueError("evaluated_monotonic_s must be an exact finite non-negative float")
+
+
+def _snapshot_route_identity(identity: RouteIdentity) -> RouteIdentity:
+    if type(identity) is not RouteIdentity:
+        raise ValueError("route identity must use the exact navigation contract")
+    return RouteIdentity(identity.route_id, identity.version, identity.direction)
+
+
+def _snapshot_checkpoint_source(source: CheckpointSourceIdentity) -> CheckpointSourceIdentity:
+    if type(source) is not CheckpointSourceIdentity:
+        raise ValueError("checkpoint source must use the exact navigation contract")
+    detector = source.detector
+    profile = source.profile
+    if type(detector) is not CheckpointDetectorIdentity or type(profile) is not CheckpointProfile:
+        raise ValueError("checkpoint source contains a replaced detector contract")
+    return CheckpointSourceIdentity(
+        detector=CheckpointDetectorIdentity(detector.detector_id, detector.version),
+        profile=CheckpointProfile(
+            profile_id=profile.profile_id,
+            version=profile.version,
+            evidence_role=profile.evidence_role,
+            frame_width=profile.frame_width,
+            frame_height=profile.frame_height,
+            pixel_format=profile.pixel_format,
+            checkpoint_ids=tuple(profile.checkpoint_ids),
+        ),
+        frame_source_id=source.frame_source_id,
+        capture_session_id=source.capture_session_id,
+    )
+
+
+def _snapshot_observation(observation: CheckpointObservation) -> CheckpointObservation:
+    if type(observation) is not CheckpointObservation:
+        raise ValueError("observation must use the exact CheckpointObservation contract")
+    evidence = observation.evidence
+    if type(evidence) is not CheckpointEvidence:
+        raise ValueError("observation contains replaced checkpoint evidence")
+    provenance = evidence.provenance
+    detection = evidence.detection
+    if type(provenance) is not FrameProvenance or type(detection) is not CheckpointDetection:
+        raise ValueError("observation contains replaced provenance or detection")
+    frame = provenance.frame
+    digest = provenance.frame_payload_sha256
+    if type(frame) is not FrameRef or type(digest) is not Sha256Digest:
+        raise ValueError("observation contains replaced frame provenance")
+    return CheckpointObservation(
+        route=_snapshot_route_identity(observation.route),
+        evidence=CheckpointEvidence(
+            provenance=FrameProvenance(
+                source=_snapshot_checkpoint_source(provenance.source),
+                frame=FrameRef(
+                    frame_id=frame.frame_id,
+                    captured_monotonic_s=frame.captured_monotonic_s,
+                    width=frame.width,
+                    height=frame.height,
+                ),
+                pixel_format=provenance.pixel_format,
+                frame_payload_sha256=Sha256Digest(digest.value),
+            ),
+            detection=CheckpointDetection(
+                match=detection.match,
+                candidate_checkpoint_ids=tuple(detection.candidate_checkpoint_ids),
+                confidence=detection.confidence,
+            ),
+        ),
+    )
+
+
+def _snapshot_attempt_receipt(
+    receipt: SyntheticStepAttemptReceipt,
+) -> SyntheticStepAttemptReceipt:
+    if type(receipt) is not SyntheticStepAttemptReceipt:
+        raise ValueError("receipt must use the exact SyntheticStepAttemptReceipt contract")
+    if (
+        receipt.authoritative is not False
+        or receipt.movement_success_proven is not False
+        or receipt.live_input_enabled is not False
+    ):
+        raise ValueError("synthetic attempt receipt authority fields were mutated")
+    identity = receipt.identity
+    source = receipt.source
+    if type(identity) is not StepAttemptIdentity or type(source) is not StepAttemptSourceIdentity:
+        raise ValueError("synthetic attempt receipt contains replaced identity contracts")
+    return SyntheticStepAttemptReceipt(
+        identity=StepAttemptIdentity(
+            route=_snapshot_route_identity(identity.route),
+            step_id=identity.step_id,
+            attempt_id=identity.attempt_id,
+        ),
+        source=StepAttemptSourceIdentity(
+            source_id=source.source_id,
+            version=source.version,
+            session_id=source.session_id,
+            evidence_role=source.evidence_role,
+        ),
+        prepared_monotonic_s=receipt.prepared_monotonic_s,
+        post_attempt_monotonic_s=receipt.post_attempt_monotonic_s,
+    )
 
 
 def start_route(
@@ -50,6 +157,7 @@ def start_route(
     """Create route-local progress with only the departure checkpoint expected."""
 
     _validate_evaluation_time(started_monotonic_s)
+    context = _snapshot_navigation_contract(context)
     return RouteProgress(
         context=context,
         phase=NavigationPhase.AWAITING_CHECKPOINT,
@@ -86,6 +194,33 @@ def _stop(
 
 def _terminal(progress: RouteProgress) -> NavigationTransition:
     return NavigationTransition(NavigationTransitionOutcome.TERMINAL_NO_CHANGE, progress)
+
+
+def stop_route(
+    progress: RouteProgress,
+    reason: NavigationFailureReason,
+    *,
+    evaluated_monotonic_s: float,
+) -> NavigationTransition:
+    """Fail-stop a route from any non-stopped phase.
+
+    This is the only core transition used for caller-owned interruption and
+    timeout events.  It deliberately clears actionable checkpoint, proposal,
+    and arrival evidence so a stopped outer session cannot be advanced by
+    calling the pure route reducers directly.
+    """
+
+    if type(progress) is not RouteProgress:
+        raise ValueError("progress must be RouteProgress")
+    if not isinstance(reason, NavigationFailureReason):
+        raise ValueError("stop reason must be NavigationFailureReason")
+    _validate_evaluation_time(evaluated_monotonic_s)
+    progress = _snapshot_navigation_contract(progress)
+    if progress.phase is NavigationPhase.STOPPED:
+        return _terminal(progress)
+    if evaluated_monotonic_s < progress.last_transition_monotonic_s:
+        reason = NavigationFailureReason.OUT_OF_ORDER_EVALUATION
+    return _stop(progress, reason, evaluated_monotonic_s)
 
 
 def _context_mismatch(
@@ -169,10 +304,15 @@ def observe_checkpoint(
     """
 
     _validate_evaluation_time(evaluated_monotonic_s)
+    context = _snapshot_navigation_contract(context)
+    progress = _snapshot_navigation_contract(progress)
+    if progress.phase is NavigationPhase.STOPPED:
+        return _terminal(progress)
+    observation = _snapshot_observation(observation)
     mismatch = _context_mismatch(context, progress)
     if mismatch is not None:
         return _stop(progress, mismatch, evaluated_monotonic_s)
-    if progress.phase in {NavigationPhase.ARRIVED, NavigationPhase.STOPPED}:
+    if progress.phase is NavigationPhase.ARRIVED:
         return _terminal(progress)
     if evaluated_monotonic_s < progress.last_transition_monotonic_s:
         return _stop(
@@ -294,10 +434,14 @@ def prepare_step(
     """Consume one fresh checkpoint observation into an input-disabled proposal."""
 
     _validate_evaluation_time(evaluated_monotonic_s)
+    context = _snapshot_navigation_contract(context)
+    progress = _snapshot_navigation_contract(progress)
+    if progress.phase is NavigationPhase.STOPPED:
+        return _terminal(progress)
     mismatch = _context_mismatch(context, progress)
     if mismatch is not None:
         return _stop(progress, mismatch, evaluated_monotonic_s)
-    if progress.phase in {NavigationPhase.ARRIVED, NavigationPhase.STOPPED}:
+    if progress.phase is NavigationPhase.ARRIVED:
         return _terminal(progress)
     if evaluated_monotonic_s < progress.last_transition_monotonic_s:
         return _stop(
@@ -317,9 +461,7 @@ def prepare_step(
     current_checkpoint_id = progress.current_checkpoint_id
     expected_checkpoint_id = progress.expected_next_checkpoint_id
     if (
-        evidence is None
-        or current_checkpoint_id is None
-        or expected_checkpoint_id is None
+        evidence is None or current_checkpoint_id is None or expected_checkpoint_id is None
     ):  # pragma: no cover - RouteProgress validates this invariant
         raise AssertionError("ready progress lost its active checkpoint evidence")
     if evidence.provenance.source != context.expected_source:
@@ -343,8 +485,7 @@ def prepare_step(
         return _stop(progress, NavigationFailureReason.PLAN_MISMATCH, evaluated_monotonic_s)
     attempt_identity = StepAttemptIdentity(context.plan.identity, step.step_id, attempt_id)
     if any(
-        previous.attempt_id == attempt_identity.attempt_id
-        for previous in progress.attempt_history
+        previous.attempt_id == attempt_identity.attempt_id for previous in progress.attempt_history
     ):
         return _stop(
             progress,
@@ -391,10 +532,14 @@ def record_step_attempt_receipt(
     """
 
     _validate_evaluation_time(evaluated_monotonic_s)
+    context = _snapshot_navigation_contract(context)
+    progress = _snapshot_navigation_contract(progress)
+    if progress.phase is NavigationPhase.STOPPED:
+        return _terminal(progress)
     mismatch = _context_mismatch(context, progress)
     if mismatch is not None:
         return _stop(progress, mismatch, evaluated_monotonic_s)
-    if progress.phase in {NavigationPhase.ARRIVED, NavigationPhase.STOPPED}:
+    if progress.phase is NavigationPhase.ARRIVED:
         return _terminal(progress)
     if evaluated_monotonic_s < progress.last_transition_monotonic_s:
         return _stop(
@@ -402,8 +547,8 @@ def record_step_attempt_receipt(
             NavigationFailureReason.OUT_OF_ORDER_EVALUATION,
             evaluated_monotonic_s,
         )
-    if receipt is not None and not isinstance(receipt, SyntheticStepAttemptReceipt):
-        raise ValueError("receipt must be SyntheticStepAttemptReceipt or None")
+    if receipt is not None:
+        receipt = _snapshot_attempt_receipt(receipt)
     if receipt is not None and receipt.identity in progress.attempt_history:
         return _stop(
             progress,

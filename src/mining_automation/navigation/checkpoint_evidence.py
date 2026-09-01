@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
 from typing import Protocol, cast, runtime_checkable
 
 from ..capture import Frame
+from ..contracts import FrameRef
 from .contracts import (
     CheckpointDetection,
     CheckpointDetectorIdentity,
@@ -44,15 +46,12 @@ class CheckpointDetector(Protocol):
     """Produce one route-free checkpoint classification for one owned frame."""
 
     @property
-    def identity(self) -> CheckpointDetectorIdentity:
-        ...
+    def identity(self) -> CheckpointDetectorIdentity: ...
 
     @property
-    def profile(self) -> CheckpointProfile:
-        ...
+    def profile(self) -> CheckpointProfile: ...
 
-    def detect(self, frame: Frame, /) -> CheckpointDetection:
-        ...
+    def detect(self, frame: Frame, /) -> CheckpointDetection: ...
 
 
 def run_checkpoint_detector(
@@ -68,14 +67,19 @@ def run_checkpoint_detector(
     the navigation reducer decides that they cannot advance a route.
     """
 
-    if not isinstance(expected_source, CheckpointSourceIdentity):
-        raise CheckpointDetectorContractError(
-            "expected checkpoint source must be CheckpointSourceIdentity"
-        )
-    _validate_frame(frame, expected_source)
-    identity, profile = _read_detector_contract(detector)
-    _require_expected_detector(identity, profile, expected_source)
-    frame_digest = Sha256Digest.from_bytes(frame.payload)
+    source = _snapshot_source_identity(expected_source)
+    _validate_frame(frame, source)
+    input_frame_ref = FrameRef(
+        frame_id=frame.frame_id,
+        captured_monotonic_s=frame.captured_monotonic_s,
+        width=frame.width,
+        height=frame.height,
+    )
+    input_payload = frame.payload
+    input_pixel_format = frame.pixel_format
+    identity, profile = _snapshot_detector_contract(*_read_detector_contract(detector))
+    _require_expected_detector(identity, profile, source)
+    frame_digest = Sha256Digest.from_bytes(input_payload)
 
     try:
         result = detector.detect(frame)
@@ -84,26 +88,45 @@ def run_checkpoint_detector(
             f"checkpoint detector {identity.detector_id!r}@{identity.version!r} "
             f"failed on frame {frame.frame_id}: {type(exc).__name__}: {exc}"
         ) from exc
+    detection = _snapshot_detection(result)
 
-    final_identity, final_profile = _read_detector_contract(detector)
+    final_identity, final_profile = _snapshot_detector_contract(*_read_detector_contract(detector))
+    final_source = _snapshot_source_identity(expected_source)
     if final_identity != identity or final_profile != profile:
         raise CheckpointDetectorContractError(
             "checkpoint detector identity or profile changed during one-frame execution"
         )
-    if not isinstance(result, CheckpointDetection):
+    if final_source != source:
         raise CheckpointDetectorContractError(
-            "checkpoint detector must return exactly one CheckpointDetection, "
-            f"got {type(result).__name__}"
+            "expected checkpoint source changed during one-frame execution"
+        )
+    _validate_frame(frame, source)
+    if (
+        frame.ref != input_frame_ref
+        or frame.payload != input_payload
+        or frame.pixel_format is not input_pixel_format
+        or Sha256Digest.from_bytes(frame.payload) != frame_digest
+    ):
+        raise CheckpointDetectorContractError(
+            "checkpoint frame identity, payload, or pixel format changed during detection"
+        )
+    if (
+        result.match is not detection.match
+        or result.candidate_checkpoint_ids != detection.candidate_checkpoint_ids
+        or result.confidence != detection.confidence
+    ):
+        raise CheckpointDetectorContractError(
+            "checkpoint detector result changed after its exact output was snapshotted"
         )
     try:
         return CheckpointEvidence(
             provenance=FrameProvenance(
-                source=expected_source,
-                frame=frame.ref,
-                pixel_format=frame.pixel_format,
+                source=source,
+                frame=input_frame_ref,
+                pixel_format=input_pixel_format,
                 frame_payload_sha256=frame_digest,
             ),
-            detection=result,
+            detection=detection,
         )
     except ValueError as exc:
         raise CheckpointDetectorContractError(
@@ -123,9 +146,9 @@ def bind_checkpoint_evidence(
     this API, and the exact current frame bytes are rehashed before binding.
     """
 
-    if not isinstance(context, RouteEvaluationContext):
+    if type(context) is not RouteEvaluationContext:
         raise CheckpointDetectorContractError("binding context must be RouteEvaluationContext")
-    if not isinstance(evidence, CheckpointEvidence):
+    if type(evidence) is not CheckpointEvidence:
         raise CheckpointDetectorContractError("binding evidence must be CheckpointEvidence")
     if evidence.provenance.source != context.expected_source:
         raise CheckpointDetectorContractError(
@@ -182,15 +205,80 @@ def _read_detector_contract(
         raise CheckpointDetectorContractError(
             "checkpoint detector identity or profile could not be read"
         ) from exc
-    if not isinstance(identity, CheckpointDetectorIdentity):
+    if type(identity) is not CheckpointDetectorIdentity:
         raise CheckpointDetectorContractError(
             "checkpoint detector identity must be CheckpointDetectorIdentity"
         )
-    if not isinstance(profile, CheckpointProfile):
+    if type(profile) is not CheckpointProfile:
         raise CheckpointDetectorContractError(
             "checkpoint detector profile must be CheckpointProfile"
         )
     return identity, profile
+
+
+def _snapshot_detector_contract(
+    identity: CheckpointDetectorIdentity,
+    profile: CheckpointProfile,
+) -> tuple[CheckpointDetectorIdentity, CheckpointProfile]:
+    return (
+        CheckpointDetectorIdentity(identity.detector_id, identity.version),
+        CheckpointProfile(
+            profile_id=profile.profile_id,
+            version=profile.version,
+            evidence_role=profile.evidence_role,
+            frame_width=profile.frame_width,
+            frame_height=profile.frame_height,
+            pixel_format=profile.pixel_format,
+            checkpoint_ids=tuple(profile.checkpoint_ids),
+        ),
+    )
+
+
+def _snapshot_detection(result: object) -> CheckpointDetection:
+    if type(result) is not CheckpointDetection:
+        raise CheckpointDetectorContractError(
+            "checkpoint detector must return exactly one CheckpointDetection, "
+            f"got {type(result).__name__}"
+        )
+    typed_result = result
+    try:
+        detection = CheckpointDetection(
+            match=typed_result.match,
+            candidate_checkpoint_ids=tuple(typed_result.candidate_checkpoint_ids),
+            confidence=typed_result.confidence,
+        )
+    except Exception as exc:
+        raise CheckpointDetectorContractError(
+            "checkpoint detector result could not be snapshotted"
+        ) from exc
+    if (
+        typed_result.match is not detection.match
+        or typed_result.candidate_checkpoint_ids != detection.candidate_checkpoint_ids
+        or typed_result.confidence != detection.confidence
+    ):
+        raise CheckpointDetectorContractError(
+            "checkpoint detector result changed while its exact output was snapshotted"
+        )
+    return detection
+
+
+def _snapshot_source_identity(source: object) -> CheckpointSourceIdentity:
+    if type(source) is not CheckpointSourceIdentity:
+        raise CheckpointDetectorContractError(
+            "expected checkpoint source must be exactly CheckpointSourceIdentity"
+        )
+    try:
+        identity, profile = _snapshot_detector_contract(source.detector, source.profile)
+        return CheckpointSourceIdentity(
+            detector=identity,
+            profile=profile,
+            frame_source_id=source.frame_source_id,
+            capture_session_id=source.capture_session_id,
+        )
+    except Exception as exc:
+        raise CheckpointDetectorContractError(
+            "expected checkpoint source could not be snapshotted"
+        ) from exc
 
 
 def _require_expected_detector(
@@ -209,15 +297,29 @@ def _require_expected_detector(
 
 
 def _validate_frame(frame: object, source: CheckpointSourceIdentity) -> None:
-    if not isinstance(frame, Frame):
+    if type(frame) is not Frame:
         raise CheckpointDetectorContractError(
             f"checkpoint detector input must be Frame, got {type(frame).__name__}"
         )
-    if not isinstance(frame.payload, bytes):
+    if type(frame.ref) is not FrameRef:
+        raise CheckpointDetectorContractError("checkpoint frame ref must be exact FrameRef")
+    if type(frame.payload) is not bytes:
         raise CheckpointDetectorContractError("checkpoint frame payload must be immutable bytes")
-    if frame.frame_id < 1:
+    if type(frame.frame_id) is not int or frame.frame_id < 1:
         raise CheckpointDetectorContractError(
             "checkpoint detector requires a positive captured frame id"
+        )
+    if type(frame.width) is not int or type(frame.height) is not int:
+        raise CheckpointDetectorContractError("checkpoint frame geometry must use exact integers")
+    captured = frame.captured_monotonic_s
+    if (
+        type(captured) is not float
+        or not math.isfinite(captured)
+        or captured < 0.0
+        or (captured == 0.0 and math.copysign(1.0, captured) < 0.0)
+    ):
+        raise CheckpointDetectorContractError(
+            "checkpoint frame time must be an exact finite non-negative float"
         )
     if (frame.width, frame.height) != (source.frame_width, source.frame_height):
         raise CheckpointDetectorContractError(

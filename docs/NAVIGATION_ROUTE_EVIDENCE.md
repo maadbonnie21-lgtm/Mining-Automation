@@ -58,7 +58,9 @@ The preregistered plan is finalized before any owned frame. It binds:
 - route-plan SHA-256;
 - checkpoint detector ID/version;
 - checkpoint profile ID/version/content SHA-256;
+- passive capture build ID/version/content SHA-256;
 - capture-source and capture-session identities;
+- exact required frame width, height, and pixel format;
 - exact capture-configuration SHA-256;
 - capture-environment manifest SHA-256;
 - declared support-envelope SHA-256;
@@ -90,16 +92,26 @@ Frames and reports use distinct safe relative POSIX paths. The frame length must
 `FrameRef` geometry and pixel format.
 
 Every case repeats the campaign's detector, profile, capture source, capture session, capture
-configuration, environment, and support-envelope bindings. Finalization requires exact equality;
+build, configuration, environment, and support-envelope bindings. Finalization requires exact
+equality, including the campaign-required geometry and pixel format;
 mixing a case from another session or a stale configuration cannot be hidden behind otherwise
 valid frame/report hashes.
+
+Every v2 case and detector report also contains the same canonical acquisition binding. It binds
+the exact campaign/source identity, request/capture/operator identities, fixed-false input and truth
+claims, and strict acknowledgement/expiry/frame/record chronology. The first binding starts at the
+campaign-plan digest; each later binding names the prior full owned-case digest, thereby committing
+to that case's exact frame and detector-report artifacts. The package declares the final owned-case
+digest as its chain head and a strictly later monotonic finalization time; the external load
+expectation pins that head.
 
 ### `SyntheticRouteEvidenceDetectorReport`
 
 Every detector-report artifact is a typed canonical record, not an opaque blob. It repeats the
 campaign/plan/case/capture/sequence identities; directional route and route-plan digest;
 detector/profile identities; capture source, session, configuration, environment, and support
-envelope; exact `FrameRef`, pixel format, and frame SHA-256; and the route-free detector output.
+envelope; exact capture build; exact `FrameRef`, pixel format, and frame SHA-256; and the route-free
+detector output.
 
 The three authority fields are schema-fixed false:
 `detector_output_is_reviewer_truth`, `activation_allowed`, and `input_authority`. The verifier
@@ -132,10 +144,13 @@ Review happens only after finalization. It binds the exact finalized-package SHA
 route, direction, route-plan digest, reviewer identity, review time, and one truth record for every
 case in exact order.
 
-Reviewer truth binds the inspected frame and detector-report hashes. It independently supplies an
+Reviewer truth binds the inspected frame and detector-report hashes. It separately supplies an
 approved/rejected decision and an explicit `MATCHED`, `UNKNOWN`, or `AMBIGUOUS` checkpoint result.
-The reviewer must differ from the operator. Operator staging and stored detector output are never
-accepted as reviewer truth.
+The schema requires portable operator/reviewer identifiers that differ after Unicode-aware
+normalization. Operator staging and stored detector output cannot structurally substitute for a
+review record. The data model cannot attest that two labels represent different humans or prove the
+reviewer's process; stronger human or cryptographic identity independence remains an external
+release prerequisite.
 
 ### `RouteEvidenceVerificationReport`
 
@@ -146,7 +161,8 @@ Review coverage and order must exactly equal the preregistered case set.
 Verification also requires a caller-supplied `RouteEvidenceLoadExpectation`. This authority pin
 names the exact finalized-package SHA-256, campaign, route, direction, route-plan SHA-256,
 detector/profile, capture source/session/configuration/environment, and support envelope expected
-by the caller. It is intentionally external to the package graph. Therefore a uniformly stale but
+by the caller. It also pins the acquisition-chain head, capture build, and required geometry/pixel format. It is
+intentionally external to the package graph. Therefore a uniformly stale but
 internally self-consistent package/report/review graph cannot authorize itself by recomputing all
 of its own hashes. Omitting the expectation is a type/API error; any mismatch is an integrity
 failure.
@@ -159,8 +175,8 @@ For this synthetic contract:
 - rejected cases remain failures; and
 - foreign checkpoint candidates are integrity errors.
 
-Stored detector output is never promoted to reviewer truth. It is compared with the independent
-review solely as a conformance check; disagreement is retained as a conformance failure.
+Stored detector output is never promoted to reviewer truth. It is compared with the separately
+recorded review solely as a conformance check; disagreement is retained as a conformance failure.
 
 A conformance PASS is synthetic architecture evidence only.
 
@@ -267,6 +283,11 @@ open and does not enter Claude's banking workflow. Those require separate, fresh
 perception evidence.
 
 ## Future real-campaign runbook
+
+The display-free append-only acquisition lifecycle, explicit failure/restart behavior, outer
+execution-session rehearsal, and direction-specific future evidence checklist are specified in
+[`NAVIGATION_PASSIVE_CAMPAIGN_READINESS.md`](NAVIGATION_PASSIVE_CAMPAIGN_READINESS.md). Those
+contracts extend this synthetic package format to v2 but grant no live role.
 
 Nothing in this section authorizes a live run. A future direction campaign must use the following
 one-way lifecycle:
