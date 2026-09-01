@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import gzip
 import inspect
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Any, cast
 
@@ -21,7 +22,10 @@ from mining_automation.perception import (
     VARROCK_EAST_IRON_DETECTOR_VERSION,
     DetectorContractError,
     DetectorMetadata,
+    ProductionResourceEvaluationResult,
     capture_detect_trust_varrock_east_iron,
+    capture_evaluate_trust_varrock_east_iron,
+    evaluate_varrock_east_iron_frame,
 )
 from mining_automation.perception import production_resource_pipeline as pipeline
 
@@ -64,6 +68,46 @@ def test_source_owned_cycle_accepts_reviewed_current_frame(
     )
     assert len(result.resources) == 4
     assert len(result.actionable_targets) == 4
+    assert backend.grab_calls == 1
+
+
+def test_rich_source_owned_cycle_retains_exact_frame_observations_and_trust(
+    reviewed_available_raw: RawFrame,
+) -> None:
+    backend = FakeCaptureBackend([reviewed_available_raw])
+    with CaptureSource(backend, clock=ManualClock(17.5)) as source:
+        result = capture_evaluate_trust_varrock_east_iron(source)
+
+    assert isinstance(result, ProductionResourceEvaluationResult)
+    assert result.frame.ref == FrameRef(
+        frame_id=1,
+        captured_monotonic_s=17.5,
+        width=1005,
+        height=1078,
+    )
+    assert result.frame.payload == reviewed_available_raw.payload
+    assert tuple(observation.frame for observation in result.observations) == (
+        result.frame.ref,
+    ) * 4
+    assert result.trust.accepted is True
+    assert result.trust.frame == result.frame.ref
+    assert backend.grab_calls == 1
+
+    with pytest.raises(FrozenInstanceError):
+        cast(Any, result).trust = result.trust
+
+
+def test_fixed_frame_evaluator_uses_owned_frame_without_another_capture(
+    reviewed_available_raw: RawFrame,
+) -> None:
+    backend = FakeCaptureBackend([reviewed_available_raw])
+    with CaptureSource(backend, clock=ManualClock(4.5)) as source:
+        frame = source.capture()
+        result = evaluate_varrock_east_iron_frame(frame)
+
+    assert result.frame is frame
+    assert all(observation.frame == frame.ref for observation in result.observations)
+    assert result.trust.frame == frame.ref
     assert backend.grab_calls == 1
 
 
@@ -111,6 +155,49 @@ def test_public_cycle_has_no_observation_detector_or_frame_token_injection() -> 
             observations=(),
             current_frame=FrameRef(1, 0.0, 4, 2),
         )
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [capture_evaluate_trust_varrock_east_iron, evaluate_varrock_east_iron_frame],
+)
+def test_rich_operations_have_one_positional_input_and_no_policy_injection(
+    operation: Callable[..., object],
+    reviewed_available_raw: RawFrame,
+) -> None:
+    signature = inspect.signature(operation)
+    expected_name = (
+        "source"
+        if operation is capture_evaluate_trust_varrock_east_iron
+        else "frame"
+    )
+
+    assert tuple(signature.parameters) == (expected_name,)
+    assert (
+        signature.parameters[expected_name].kind
+        is inspect.Parameter.POSITIONAL_ONLY
+    )
+
+    if operation is capture_evaluate_trust_varrock_east_iron:
+        value: object = CaptureSource(FakeCaptureBackend([reviewed_available_raw]))
+    else:
+        with CaptureSource(
+            FakeCaptureBackend([reviewed_available_raw]),
+            clock=ManualClock(),
+        ) as source:
+            value = source.capture()
+    with pytest.raises(TypeError):
+        cast(Any, operation)(
+            value,
+            detector=object(),
+            current_frame=FrameRef(1, 0.0, 1005, 1078),
+            policy=object(),
+        )
+
+
+def test_fixed_frame_evaluator_rejects_non_frame_input() -> None:
+    with pytest.raises(TypeError, match="frame must be Frame"):
+        cast(Any, evaluate_varrock_east_iron_frame)(object())
 
 
 def test_duck_typed_capture_cannot_replace_owned_capture_source() -> None:
@@ -182,6 +269,35 @@ def test_unsupported_scene_stops_after_one_capture_without_camera_recovery(
     assert result.actionable_targets == ()
     # A reviewed supported frame remains queued: the production boundary does
     # not retry, hunt for a camera pose, or silently recover from uncertainty.
+    assert backend.grab_calls == 1
+
+
+def test_rich_unsupported_scene_retains_evidence_without_retry(
+    reviewed_available_raw: RawFrame,
+) -> None:
+    unsupported = RawFrame(
+        payload=bytes(len(reviewed_available_raw.payload)),
+        width=reviewed_available_raw.width,
+        height=reviewed_available_raw.height,
+        pixel_format=reviewed_available_raw.pixel_format,
+    )
+    backend = FakeCaptureBackend([unsupported, reviewed_available_raw])
+
+    with CaptureSource(backend, clock=ManualClock(23.0)) as source:
+        result = capture_evaluate_trust_varrock_east_iron(source)
+
+    assert result.frame.payload == unsupported.payload
+    assert tuple(observation.kind for observation in result.observations) == (
+        "resource.uncertain",
+    ) * 4
+    assert result.trust.accepted is True
+    assert tuple(resource.available for resource in result.trust.resources) == (
+        None,
+        None,
+        None,
+        None,
+    )
+    assert result.trust.actionable_targets == ()
     assert backend.grab_calls == 1
 
 

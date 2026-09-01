@@ -9,3 +9,7 @@ htmlcov/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Private real-client resource campaign sessions. Only an explicitly reviewed
+# export package may be placed outside this ignored root.
+/diagnostics/resource-release-campaigns/
