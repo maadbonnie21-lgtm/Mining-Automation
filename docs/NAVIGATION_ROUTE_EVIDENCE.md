@@ -256,10 +256,15 @@ Files are created with exclusive pathname opens. Static links/reparse points and
 observed by the pre/post identity checks fail closed, but the writer does not hold a directory
 handle across the last check and create. A hostile actor could replace a parent in that interval;
 the path open may create bytes in the replacement namespace before the post-write identity check
-detects the swap. Detection latches the transaction `STOPPED`; no acquisition or review terminal
-manifest can be produced, and strict intake cannot verify the partial root. It does not undo the
-misdirected write and does not claim hostile-namespace confinement. Future real release-evidence
-acquisition requires a separately reviewed handle-relative, no-follow writer boundary.
+detects the swap. Detection latches the transaction `STOPPED` and returns no writer receipt.
+
+The terminal manifests bind the physical `transaction_root_identity` captured from the
+writer-owned root. A swap during the terminal open can therefore leave terminal-named bytes in a
+complete replacement clone, but strict intake recomputes the current root identity and rejects the
+clone before content verification. A recreated/copy root is audit bytes, not the same finalized
+transaction. The writer does not undo the misdirected write and does not claim hostile-namespace
+confinement. Future real release-evidence acquisition requires a separately reviewed
+handle-relative, no-follow writer boundary.
 
 One acquisition transaction exclusively reserves a previously absent root, constructs and owns
 one private passive sequencer, and writes an append-only prefix:
@@ -352,7 +357,8 @@ operation exists.
 | Reviewer rejects a case | retained conformance failure |
 | Synthetic package asks for real release authority | always false |
 | Existing acquisition/review root or immutable file at check/open | collision; existing bytes untouched |
-| Hostile parent swap between identity check and pathname open | unsupported namespace; possible replacement-namespace write, then `STOPPED`; no terminal verification |
+| Hostile parent swap between identity check and pathname open | unsupported namespace; possible replacement-namespace write, then `STOPPED`; no receipt or verification |
+| Root clone swapped during terminal-manifest open | terminal-named bytes may exist, but bound physical root identity differs; strict intake rejects |
 | Partial prefix, stop record, or missing terminal manifest | non-reviewable integrity failure |
 | Foreign sentinel inserted before finalization | finalization failure; prefix retained |
 | Stale request/case/review journal predecessor | integrity failure |

@@ -122,8 +122,13 @@ is present when checked are rejected rather than intentionally followed.
 Those checks are fail-closed for evidence acceptance, not a hostile-namespace write
 confinement guarantee. A concurrent actor can replace an owned parent after the
 check and before a pathname-based create. The writer rechecks directory and file
-identity after creation, latches `STOPPED`, emits no valid terminal manifest, and
-cannot be finalized or verified, but it cannot promise to undo or prevent bytes
+identity after creation, latches `STOPPED`, and returns no receipt. A swap during a
+terminal-manifest open can still place terminal-named bytes into a complete cloned
+replacement root. Each terminal manifest therefore binds the physical transaction
+root identity captured by the writer; strict intake recomputes that identity and
+rejects a replacement clone before accepting its content. Recreated/copy roots are
+audit bytes rather than the same finalized transaction. This prevents verification
+after a detected root replacement, but it cannot promise to undo or prevent bytes
 created in the replacement namespace. The trusted dedicated-parent precondition is
 therefore mandatory for this offline synthetic writer.
 

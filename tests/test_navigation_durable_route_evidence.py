@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import shutil
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
@@ -89,6 +90,7 @@ from mining_automation.navigation.replay import (
     run_navigation_replay,
 )
 from mining_automation.navigation.route_evidence import (
+    FinalizedRouteEvidencePackage,
     RouteEvidenceCampaignPlan,
     RouteEvidenceCaptureBuildIdentity,
     RouteEvidenceCaseRole,
@@ -96,6 +98,7 @@ from mining_automation.navigation.route_evidence import (
     RouteEvidenceCaseTruth,
     RouteEvidenceIntegrityError,
     RouteEvidenceReviewDecision,
+    RouteEvidenceVerificationReport,
     canonical_route_evidence_bytes,
     parse_synthetic_detector_report,
 )
@@ -465,6 +468,13 @@ class _ParentSwapProbe:
     parked_parent: Path | None = None
 
 
+@dataclass(slots=True)
+class _RootCloneSwapProbe:
+    swapped: bool = False
+    replacement_terminal: Path | None = None
+    parked_root: Path | None = None
+
+
 def _swap_owned_parent_during_path_open(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -487,6 +497,35 @@ def _swap_owned_parent_during_path_open(
             probe.swapped = True
             probe.foreign_file = candidate
             probe.parked_parent = parked
+        return original_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "open", swapping_open)
+    return probe
+
+
+def _swap_owned_root_with_complete_clone_during_path_open(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    target_root: Path,
+    parked_root: Path,
+    terminal_filename: str,
+) -> _RootCloneSwapProbe:
+    """Clone a complete prefix after the terminal write's last root check."""
+
+    probe = _RootCloneSwapProbe()
+    owned_root = target_root.absolute()
+    parked = parked_root.absolute()
+    terminal = owned_root / terminal_filename
+    original_open = Path.open
+
+    def swapping_open(path: Path, *args: object, **kwargs: object) -> object:
+        candidate = path.absolute()
+        if not probe.swapped and candidate == terminal:
+            owned_root.rename(parked)
+            probe.swapped = True
+            shutil.copytree(parked, owned_root)
+            probe.replacement_terminal = candidate
+            probe.parked_root = parked
         return original_open(path, *args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(Path, "open", swapping_open)
@@ -1354,6 +1393,132 @@ def test_review_parent_swap_at_path_open_cannot_finalize_or_verify(
             acquisition_root,
             review_root,
             control_expectation,
+        )
+
+
+def test_acquisition_root_clone_swap_at_terminal_open_is_not_verifiable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_root = (tmp_path / "terminal-swapped-acquisition").absolute()
+    transaction, source, detector, clock = _begin_acquisition(target_root)
+    for ordinal in range(1, len(transaction.progress.plan.cases) + 1):
+        _capture_next(transaction, source, detector, clock, ordinal)
+    assert transaction.phase is DurableAcquisitionPhase.COMPLETE
+    clock.value = 40.0
+
+    captured_expectations: list[DurableAcquisitionFilesystemExpectation] = []
+    original_expectation_factory = durable_module._acquisition_expectation_from_package
+
+    def capture_expectation(
+        package: FinalizedRouteEvidencePackage,
+        *,
+        journal_head_sha256: Sha256Digest,
+        finalization_sha256: Sha256Digest,
+    ) -> DurableAcquisitionFilesystemExpectation:
+        expectation = original_expectation_factory(
+            package,
+            journal_head_sha256=journal_head_sha256,
+            finalization_sha256=finalization_sha256,
+        )
+        captured_expectations.append(expectation)
+        return expectation
+
+    monkeypatch.setattr(
+        durable_module,
+        "_acquisition_expectation_from_package",
+        capture_expectation,
+    )
+    probe = _swap_owned_root_with_complete_clone_during_path_open(
+        monkeypatch,
+        target_root=target_root,
+        parked_root=tmp_path / "parked-complete-acquisition-prefix",
+        terminal_filename=ACQUISITION_FINALIZATION_FILENAME,
+    )
+
+    with pytest.raises(DurableEvidenceError, match="durable transaction root was replaced"):
+        transaction.finalize(finalized_at_utc="2026-09-01T00:00:10Z")
+
+    assert len(captured_expectations) == 1
+    assert probe.swapped is True
+    assert probe.replacement_terminal is not None and probe.replacement_terminal.is_file()
+    assert probe.parked_root is not None and probe.parked_root.is_dir()
+    assert not (probe.parked_root / ACQUISITION_FINALIZATION_FILENAME).exists()
+    assert transaction.phase is DurableAcquisitionPhase.STOPPED
+    with pytest.raises(RouteEvidenceIntegrityError, match="transaction root identity differs"):
+        load_durable_acquisition(target_root, captured_expectations[0])
+
+
+def test_review_root_clone_swap_at_terminal_open_is_not_verifiable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    acquisition_root = tmp_path / "acquisition"
+    acquisition_receipt, _ = _complete_acquisition(acquisition_root)
+    review_root = (tmp_path / "terminal-swapped-review").absolute()
+    transaction, acquisition = _begin_review(
+        review_root,
+        acquisition_root,
+        acquisition_receipt,
+    )
+    for ordinal, truth in enumerate(_truths(acquisition), start=1):
+        transaction.record_case_truth(
+            truth,
+            recorded_at_utc=f"2026-09-01T00:00:{20 + ordinal:02d}Z",
+        )
+    assert transaction.phase is DurableReviewPhase.COMPLETE
+
+    captured_receipts: list[DurableReviewReceipt] = []
+    original_receipt_type = DurableReviewReceipt
+
+    def capture_receipt(
+        *,
+        review_id: str,
+        reviewer_id: str,
+        independent_review_sha256: Sha256Digest,
+        review_plan_sha256: Sha256Digest,
+        review_journal_head_sha256: Sha256Digest,
+        review_finalization_sha256: Sha256Digest,
+        report: RouteEvidenceVerificationReport,
+    ) -> DurableReviewReceipt:
+        receipt = original_receipt_type(
+            review_id=review_id,
+            reviewer_id=reviewer_id,
+            independent_review_sha256=independent_review_sha256,
+            review_plan_sha256=review_plan_sha256,
+            review_journal_head_sha256=review_journal_head_sha256,
+            review_finalization_sha256=review_finalization_sha256,
+            report=report,
+        )
+        captured_receipts.append(receipt)
+        return receipt
+
+    monkeypatch.setattr(durable_module, "DurableReviewReceipt", capture_receipt)
+    probe = _swap_owned_root_with_complete_clone_during_path_open(
+        monkeypatch,
+        target_root=review_root,
+        parked_root=tmp_path / "parked-complete-review-prefix",
+        terminal_filename=REVIEW_FINALIZATION_FILENAME,
+    )
+
+    with pytest.raises(DurableEvidenceError, match="durable transaction root was replaced"):
+        transaction.finalize(reviewed_at_utc="2026-09-01T00:00:30Z")
+
+    assert len(captured_receipts) == 1
+    assert probe.swapped is True
+    assert probe.replacement_terminal is not None and probe.replacement_terminal.is_file()
+    assert probe.parked_root is not None and probe.parked_root.is_dir()
+    assert not (probe.parked_root / REVIEW_FINALIZATION_FILENAME).exists()
+    assert transaction.phase is DurableReviewPhase.STOPPED
+    expectation = _full_expectation(
+        acquisition_receipt.expectation,
+        captured_receipts[0],
+    )
+    with pytest.raises(RouteEvidenceIntegrityError, match="transaction root identity differs"):
+        load_and_verify_durable_synthetic_route_evidence(
+            acquisition_root,
+            review_root,
+            expectation,
         )
 
 
