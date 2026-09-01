@@ -8,13 +8,20 @@ from pathlib import Path
 
 import pytest
 
+from mining_automation.capture import PixelFormat
 from mining_automation.contracts import FrameRef
 from mining_automation.navigation.cli import main as navigation_cli_main
 from mining_automation.navigation.contracts import (
     ArrivalEvidence,
+    AttemptEvidenceRole,
     Checkpoint,
+    CheckpointDetection,
+    CheckpointDetectorIdentity,
+    CheckpointEvidence,
+    CheckpointEvidenceRole,
     CheckpointMatchKind,
     CheckpointObservation,
+    CheckpointProfile,
     CheckpointRole,
     CheckpointSourceIdentity,
     FrameProvenance,
@@ -32,10 +39,20 @@ from mining_automation.navigation.contracts import (
     RoutePlan,
     RouteProgress,
     RouteStep,
+    Sha256Digest,
+    StepAttemptIdentity,
+    StepAttemptSourceIdentity,
+    SyntheticStepAttemptReceipt,
 )
-from mining_automation.navigation.machine import observe_checkpoint, prepare_step, start_route
+from mining_automation.navigation.machine import (
+    observe_checkpoint,
+    prepare_step,
+    record_step_attempt_receipt,
+    start_route,
+)
 from mining_automation.navigation.replay import (
     NavigationManifestError,
+    ReplayMismatch,
     load_navigation_replay,
     run_navigation_replay,
 )
@@ -78,22 +95,58 @@ def _plan(direction: RouteDirection = RouteDirection.MINE_TO_BANK) -> RoutePlan:
     )
 
 
-def _source(session_id: str = "synthetic-session") -> CheckpointSourceIdentity:
-    return CheckpointSourceIdentity(
-        detector_id="synthetic-detector",
-        detector_version="synthetic-v1",
-        frame_source_id="synthetic-frame-source",
-        capture_session_id=session_id,
+def _profile(
+    direction: RouteDirection = RouteDirection.MINE_TO_BANK,
+) -> CheckpointProfile:
+    plan = _plan(direction)
+    prefix = "m2b" if direction is RouteDirection.MINE_TO_BANK else "b2m"
+    return CheckpointProfile(
+        profile_id=f"synthetic-{prefix}-profile",
+        version="synthetic-v1",
+        evidence_role=CheckpointEvidenceRole.SYNTHETIC_ARCHITECTURE_TEST_ONLY,
         frame_width=64,
         frame_height=48,
+        pixel_format=PixelFormat.BGRA8888,
+        checkpoint_ids=(
+            *(checkpoint.checkpoint_id for checkpoint in plan.checkpoints),
+            "synthetic-foreign",
+        ),
+    )
+
+
+def _source(
+    session_id: str = "synthetic-session",
+    direction: RouteDirection = RouteDirection.MINE_TO_BANK,
+) -> CheckpointSourceIdentity:
+    return CheckpointSourceIdentity(
+        detector=CheckpointDetectorIdentity("synthetic-detector", "synthetic-v1"),
+        profile=_profile(direction),
+        frame_source_id="synthetic-frame-source",
+        capture_session_id=session_id,
+    )
+
+
+def _attempt_source(
+    session_id: str = "synthetic-attempt-session",
+) -> StepAttemptSourceIdentity:
+    return StepAttemptSourceIdentity(
+        source_id="synthetic-attempt-source",
+        version="synthetic-v1",
+        session_id=session_id,
+        evidence_role=AttemptEvidenceRole.SYNTHETIC_ARCHITECTURE_TEST_ONLY,
     )
 
 
 def _context(direction: RouteDirection = RouteDirection.MINE_TO_BANK) -> RouteEvaluationContext:
     return RouteEvaluationContext(
         plan=_plan(direction),
-        expected_source=_source(),
-        policy=NavigationPolicy(max_frame_age_s=0.5, minimum_confidence=0.9),
+        expected_source=_source(direction=direction),
+        expected_attempt_source=_attempt_source(),
+        policy=NavigationPolicy(
+            max_frame_age_s=0.5,
+            minimum_confidence=0.9,
+            max_attempt_receipt_age_s=0.5,
+        ),
     )
 
 
@@ -113,13 +166,19 @@ def _observation(
         candidates = () if checkpoint_id is None else (checkpoint_id,)
     return CheckpointObservation(
         route=context.plan.identity if route is None else route,
-        provenance=FrameProvenance(
-            context.expected_source if source is None else source,
-            FrameRef(frame_id, captured_monotonic_s, 64, 48),
+        evidence=CheckpointEvidence(
+            provenance=FrameProvenance(
+                context.expected_source if source is None else source,
+                FrameRef(frame_id, captured_monotonic_s, 64, 48),
+                PixelFormat.BGRA8888,
+                Sha256Digest.from_bytes(f"synthetic-frame-{frame_id}".encode()),
+            ),
+            detection=CheckpointDetection(
+                match=match,
+                candidate_checkpoint_ids=candidates,
+                confidence=confidence,
+            ),
         ),
-        match=match,
-        candidate_checkpoint_ids=candidates,
-        confidence=confidence,
     )
 
 
@@ -134,9 +193,25 @@ def _prepared_after_departure(
         departure,
         evaluated_monotonic_s=100.1,
     )
-    prepared = prepare_step(context, accepted.progress, evaluated_monotonic_s=100.2)
+    prepared = prepare_step(
+        context,
+        accepted.progress,
+        attempt_id="synthetic-attempt-1",
+        evaluated_monotonic_s=100.2,
+    )
     assert prepared.step_proposal is not None
-    return prepared.progress, departure
+    recorded = record_step_attempt_receipt(
+        context,
+        prepared.progress,
+        SyntheticStepAttemptReceipt(
+            prepared.step_proposal.attempt_identity,
+            context.expected_attempt_source,
+            100.2,
+            100.21,
+        ),
+        evaluated_monotonic_s=100.22,
+    )
+    return recorded.progress, departure
 
 
 def _complete_route(context: RouteEvaluationContext) -> RouteProgress:
@@ -144,6 +219,8 @@ def _complete_route(context: RouteEvaluationContext) -> RouteProgress:
     captures = (100.0, 100.3, 100.6)
     evaluations = (100.1, 100.4, 100.7)
     preparations = (100.2, 100.5)
+    attempt_boundaries = (100.21, 100.51)
+    attempt_evaluations = (100.22, 100.52)
     for index, checkpoint in enumerate(context.plan.checkpoints):
         transition = observe_checkpoint(
             context,
@@ -161,11 +238,24 @@ def _complete_route(context: RouteEvaluationContext) -> RouteProgress:
             transition = prepare_step(
                 context,
                 progress,
+                attempt_id=f"synthetic-attempt-{index + 1}",
                 evaluated_monotonic_s=preparations[index],
             )
             assert transition.step_proposal is not None
             assert transition.step_proposal.live_input_enabled is False
-            progress = transition.progress
+            recorded = record_step_attempt_receipt(
+                context,
+                transition.progress,
+                SyntheticStepAttemptReceipt(
+                    transition.step_proposal.attempt_identity,
+                    context.expected_attempt_source,
+                    preparations[index],
+                    attempt_boundaries[index],
+                ),
+                evaluated_monotonic_s=attempt_evaluations[index],
+            )
+            assert recorded.attempt_receipt is not None
+            progress = recorded.progress
     return progress
 
 
@@ -283,9 +373,19 @@ def test_observation_rejects_invalid_confidence(confidence: float) -> None:
 
 def test_frame_provenance_requires_positive_frame_identity_and_exact_geometry() -> None:
     with pytest.raises(ValueError, match="positive captured frame"):
-        FrameProvenance(_source(), FrameRef(0, 1.0, 64, 48))
+        FrameProvenance(
+            _source(),
+            FrameRef(0, 1.0, 64, 48),
+            PixelFormat.BGRA8888,
+            Sha256Digest.from_bytes(b"frame"),
+        )
     with pytest.raises(ValueError, match="geometry"):
-        FrameProvenance(_source(), FrameRef(1, 1.0, 63, 48))
+        FrameProvenance(
+            _source(),
+            FrameRef(1, 1.0, 63, 48),
+            PixelFormat.BGRA8888,
+            Sha256Digest.from_bytes(b"frame"),
+        )
 
 
 def test_public_nested_contracts_fail_with_value_error() -> None:
@@ -294,7 +394,13 @@ def test_public_nested_contracts_fail_with_value_error() -> None:
     with pytest.raises(ValueError):
         ArrivalEvidence(context, arrival, object())  # type: ignore[arg-type]
     with pytest.raises(ValueError):
-        OfflineStepProposal(context, context.plan.steps[0], object(), 1.0)  # type: ignore[arg-type]
+        OfflineStepProposal(
+            context,
+            context.plan.steps[0],
+            StepAttemptIdentity(context.plan.identity, context.plan.steps[0].step_id, "attempt"),
+            object(),  # type: ignore[arg-type]
+            1.0,
+        )
 
 
 def test_start_route_has_no_implicit_location_evidence() -> None:
@@ -329,7 +435,7 @@ def test_happy_path_requires_every_checkpoint_and_consumes_each_step_evidence(
 
 def test_prepared_step_is_data_only_and_clears_current_location_evidence() -> None:
     context = _context()
-    progress, departure = _prepared_after_departure(context)
+    _, departure = _prepared_after_departure(context)
 
     accepted = observe_checkpoint(
         context,
@@ -337,19 +443,32 @@ def test_prepared_step_is_data_only_and_clears_current_location_evidence() -> No
         departure,
         evaluated_monotonic_s=100.1,
     )
-    prepared = prepare_step(context, accepted.progress, evaluated_monotonic_s=100.2)
+    prepared = prepare_step(
+        context,
+        accepted.progress,
+        attempt_id="synthetic-attempt-1",
+        evaluated_monotonic_s=100.2,
+    )
     proposal = prepared.step_proposal
     assert proposal is not None
     assert proposal.checkpoint_evidence is departure
     assert proposal.prepared_monotonic_s == 100.2
     assert proposal.live_input_enabled is False
-    assert progress.current_checkpoint_id is None
-    assert progress.active_checkpoint_evidence is None
-    assert progress.expected_next_checkpoint_id == context.plan.checkpoints[1].checkpoint_id
-    assert progress.accepted_checkpoint_count == 1
-    assert progress.evidence_boundary_monotonic_s == 100.2
+    assert proposal.attempt_identity == prepared.progress.pending_attempt
+    assert prepared.progress.phase is NavigationPhase.AWAITING_ATTEMPT_RECEIPT
+    assert prepared.progress.current_checkpoint_id is None
+    assert prepared.progress.active_checkpoint_evidence is None
+    assert prepared.progress.expected_next_checkpoint_id == context.plan.checkpoints[1].checkpoint_id
+    assert prepared.progress.accepted_checkpoint_count == 1
+    assert prepared.progress.evidence_boundary_monotonic_s == 100.2
     parameter_names = set(inspect.signature(OfflineStepProposal).parameters)
-    assert parameter_names == {"context", "step", "checkpoint_evidence", "prepared_monotonic_s"}
+    assert parameter_names == {
+        "context",
+        "step",
+        "attempt_identity",
+        "checkpoint_evidence",
+        "prepared_monotonic_s",
+    }
 
 
 @pytest.mark.parametrize(
@@ -472,9 +591,9 @@ def test_higher_frame_id_at_exact_step_boundary_is_not_causal_proof() -> None:
             context,
             context.plan.checkpoints[1].checkpoint_id,
             frame_id=11,
-            captured_monotonic_s=100.2,
+            captured_monotonic_s=100.21,
         ),
-        evaluated_monotonic_s=100.2,
+        evaluated_monotonic_s=100.22,
     )
     assert transition.progress.failure_reason is NavigationFailureReason.EVIDENCE_NOT_AFTER_BOUNDARY
 
@@ -488,17 +607,34 @@ def test_higher_frame_id_with_same_capture_timestamp_cannot_cross_boundary() -> 
         _observation(context, context.plan.checkpoints[0].checkpoint_id),
         evaluated_monotonic_s=100.0,
     )
-    prepared = prepare_step(context, accepted.progress, evaluated_monotonic_s=100.0)
-    transition = observe_checkpoint(
+    prepared = prepare_step(
+        context,
+        accepted.progress,
+        attempt_id="synthetic-attempt-1",
+        evaluated_monotonic_s=100.0,
+    )
+    assert prepared.step_proposal is not None
+    recorded = record_step_attempt_receipt(
         context,
         prepared.progress,
+        SyntheticStepAttemptReceipt(
+            prepared.step_proposal.attempt_identity,
+            context.expected_attempt_source,
+            100.0,
+            100.1,
+        ),
+        evaluated_monotonic_s=100.1,
+    )
+    transition = observe_checkpoint(
+        context,
+        recorded.progress,
         _observation(
             context,
             context.plan.checkpoints[1].checkpoint_id,
             frame_id=11,
-            captured_monotonic_s=100.0,
+            captured_monotonic_s=100.1,
         ),
-        evaluated_monotonic_s=100.0,
+        evaluated_monotonic_s=100.1,
     )
     assert transition.progress.failure_reason is NavigationFailureReason.EVIDENCE_NOT_AFTER_BOUNDARY
 
@@ -605,7 +741,12 @@ def test_checkpoint_cannot_advance_before_step_evidence_is_consumed() -> None:
 def test_step_preparation_requires_current_fresh_evidence_and_is_single_use() -> None:
     context = _context()
     started = start_route(context, started_monotonic_s=99.9)
-    premature = prepare_step(context, started, evaluated_monotonic_s=100.0)
+    premature = prepare_step(
+        context,
+        started,
+        attempt_id="synthetic-attempt-1",
+        evaluated_monotonic_s=100.0,
+    )
     assert premature.progress.failure_reason is NavigationFailureReason.STEP_NOT_READY
 
     accepted = observe_checkpoint(
@@ -614,12 +755,27 @@ def test_step_preparation_requires_current_fresh_evidence_and_is_single_use() ->
         _observation(context, context.plan.checkpoints[0].checkpoint_id),
         evaluated_monotonic_s=100.1,
     )
-    stale = prepare_step(context, accepted.progress, evaluated_monotonic_s=100.6)
+    stale = prepare_step(
+        context,
+        accepted.progress,
+        attempt_id="synthetic-attempt-1",
+        evaluated_monotonic_s=100.6,
+    )
     assert stale.progress.failure_reason is NavigationFailureReason.STALE_FRAME
 
-    prepared = prepare_step(context, accepted.progress, evaluated_monotonic_s=100.2)
-    repeated = prepare_step(context, prepared.progress, evaluated_monotonic_s=100.2)
-    assert repeated.progress.failure_reason is NavigationFailureReason.STEP_NOT_READY
+    prepared = prepare_step(
+        context,
+        accepted.progress,
+        attempt_id="synthetic-attempt-1",
+        evaluated_monotonic_s=100.2,
+    )
+    repeated = prepare_step(
+        context,
+        prepared.progress,
+        attempt_id="synthetic-attempt-2",
+        evaluated_monotonic_s=100.2,
+    )
+    assert repeated.progress.failure_reason is NavigationFailureReason.ATTEMPT_RECEIPT_REQUIRED
 
 
 def test_stop_and_arrival_are_absorbing() -> None:
@@ -640,7 +796,12 @@ def test_stop_and_arrival_are_absorbing() -> None:
     assert after_stop.progress is stopped
 
     arrived = _complete_route(context)
-    after_arrival = prepare_step(context, arrived, evaluated_monotonic_s=101.0)
+    after_arrival = prepare_step(
+        context,
+        arrived,
+        attempt_id="synthetic-attempt-3",
+        evaluated_monotonic_s=101.0,
+    )
     assert after_arrival.outcome is NavigationTransitionOutcome.TERMINAL_NO_CHANGE
     assert after_arrival.progress is arrived
 
@@ -672,14 +833,23 @@ def test_evaluation_time_cannot_move_backwards() -> None:
         _observation(context, context.plan.checkpoints[0].checkpoint_id),
         evaluated_monotonic_s=100.5,
     )
-    transition = prepare_step(context, accepted.progress, evaluated_monotonic_s=100.1)
+    transition = prepare_step(
+        context,
+        accepted.progress,
+        attempt_id="synthetic-attempt-1",
+        evaluated_monotonic_s=100.1,
+    )
     assert transition.progress.failure_reason is NavigationFailureReason.OUT_OF_ORDER_EVALUATION
     assert transition.progress.last_transition_monotonic_s == 100.5
 
 
 def test_zero_confidence_policy_cannot_be_configured() -> None:
     with pytest.raises(ValueError, match="positive"):
-        NavigationPolicy(max_frame_age_s=0.5, minimum_confidence=0.0)
+        NavigationPolicy(
+            max_frame_age_s=0.5,
+            minimum_confidence=0.0,
+            max_attempt_receipt_age_s=0.5,
+        )
 
 
 def test_route_is_incomplete_without_explicit_terminal_observation() -> None:
@@ -696,10 +866,27 @@ def test_route_is_incomplete_without_explicit_terminal_observation() -> None:
         ),
         evaluated_monotonic_s=100.4,
     )
-    prepared = prepare_step(context, transit.progress, evaluated_monotonic_s=100.5)
-    assert prepared.progress.phase is NavigationPhase.AWAITING_CHECKPOINT
-    assert prepared.progress.expected_next_checkpoint_id == context.plan.checkpoints[-1].checkpoint_id
-    assert prepared.progress.arrival_evidence is None
+    prepared = prepare_step(
+        context,
+        transit.progress,
+        attempt_id="synthetic-attempt-2",
+        evaluated_monotonic_s=100.5,
+    )
+    assert prepared.step_proposal is not None
+    recorded = record_step_attempt_receipt(
+        context,
+        prepared.progress,
+        SyntheticStepAttemptReceipt(
+            prepared.step_proposal.attempt_identity,
+            context.expected_attempt_source,
+            100.5,
+            100.51,
+        ),
+        evaluated_monotonic_s=100.52,
+    )
+    assert recorded.progress.phase is NavigationPhase.AWAITING_CHECKPOINT
+    assert recorded.progress.expected_next_checkpoint_id == context.plan.checkpoints[-1].checkpoint_id
+    assert recorded.progress.arrival_evidence is None
 
 
 def test_invalid_public_progress_and_transition_construction_is_rejected() -> None:
@@ -752,7 +939,12 @@ def test_prepared_transition_binds_step_target_and_time_to_resulting_progress() 
         _observation(context, context.plan.checkpoints[0].checkpoint_id),
         evaluated_monotonic_s=100.1,
     )
-    prepared = prepare_step(context, accepted.progress, evaluated_monotonic_s=100.2)
+    prepared = prepare_step(
+        context,
+        accepted.progress,
+        attempt_id="synthetic-attempt-1",
+        evaluated_monotonic_s=100.2,
+    )
     assert prepared.step_proposal is not None
     inconsistent = replace(prepared.step_proposal, prepared_monotonic_s=100.3)
     with pytest.raises(ValueError, match="route history"):
@@ -766,8 +958,13 @@ def test_prepared_transition_binds_step_target_and_time_to_resulting_progress() 
 def test_terminal_progress_still_rejects_context_replacement() -> None:
     context = _context()
     arrived = _complete_route(context)
-    changed_context = replace(context, policy=NavigationPolicy(0.4, 0.9))
-    transition = prepare_step(changed_context, arrived, evaluated_monotonic_s=101.0)
+    changed_context = replace(context, policy=NavigationPolicy(0.4, 0.9, 0.4))
+    transition = prepare_step(
+        changed_context,
+        arrived,
+        attempt_id="synthetic-attempt-3",
+        evaluated_monotonic_s=101.0,
+    )
     assert transition.outcome is NavigationTransitionOutcome.STOPPED
     assert transition.progress.failure_reason is NavigationFailureReason.CONTEXT_MISMATCH
 
@@ -783,10 +980,12 @@ def test_direct_progress_history_must_use_the_bound_source() -> None:
             accepted_checkpoint_count=1,
             evidence_boundary_monotonic_s=100.2,
             last_transition_monotonic_s=100.2,
-            last_accepted_provenance=FrameProvenance(
-                _source("foreign-session"),
-                FrameRef(10, 100.0, 64, 48),
-            ),
+                last_accepted_provenance=FrameProvenance(
+                    _source("foreign-session"),
+                    FrameRef(10, 100.0, 64, 48),
+                    PixelFormat.BGRA8888,
+                    Sha256Digest.from_bytes(b"synthetic-frame-10"),
+                ),
         )
 
 
@@ -811,11 +1010,31 @@ def test_direct_ready_proposal_and_arrival_require_confident_fresh_evidence() ->
             active_checkpoint_evidence=low_departure,
         )
     with pytest.raises(ValueError, match="evaluation context"):
-        OfflineStepProposal(context, context.plan.steps[0], low_departure, 100.1)
+        OfflineStepProposal(
+            context,
+            context.plan.steps[0],
+            StepAttemptIdentity(
+                context.plan.identity,
+                context.plan.steps[0].step_id,
+                "synthetic-attempt",
+            ),
+            low_departure,
+            100.1,
+        )
 
     confident_departure = _observation(context, departure.checkpoint_id)
     with pytest.raises(ValueError, match="fresh"):
-        OfflineStepProposal(context, context.plan.steps[0], confident_departure, 100.6)
+        OfflineStepProposal(
+            context,
+            context.plan.steps[0],
+            StepAttemptIdentity(
+                context.plan.identity,
+                context.plan.steps[0].step_id,
+                "synthetic-attempt",
+            ),
+            confident_departure,
+            100.6,
+        )
 
     arrival_checkpoint = context.plan.checkpoints[-1]
     low_arrival = _observation(
@@ -857,10 +1076,19 @@ def test_committed_synthetic_replays_pass_deterministically(fixture_name: str) -
     assert first.to_json() == second.to_json()
     assert first.final_progress.phase is NavigationPhase.ARRIVED
     assert len(first.step_proposals) == 2
+    assert len(first.completed_attempts) == 2
     assert all(proposal.live_input_enabled is False for proposal in first.step_proposals)
+    assert all(
+        attempt.receipt.authoritative is False
+        and attempt.receipt.movement_success_proven is False
+        and attempt.receipt.live_input_enabled is False
+        and attempt.recorded_monotonic_s >= attempt.receipt.post_attempt_monotonic_s
+        for attempt in first.completed_attempts
+    )
     assert first.fixture_role == "synthetic_navigation_architecture_test_only"
     assert first.live_navigation_enabled is False
     assert '"live_navigation_enabled": false' in first.to_json()
+    assert '"recorded_monotonic_s"' in first.to_json()
 
     with pytest.raises(ValueError, match="synthetic fixture role"):
         replace(first, fixture_role="production_route_evidence")
@@ -869,6 +1097,55 @@ def test_committed_synthetic_replays_pass_deterministically(fixture_name: str) -
             first,
             route=RouteIdentity("different-synthetic-route", "synthetic-v1", first.route.direction),
         )
+    with pytest.raises(ValueError, match="outcome"):
+        replace(first.trace[0], outcome=NavigationTransitionOutcome.ARRIVAL_CONFIRMED)
+
+    forged_last = replace(
+        first.trace[-1],
+        current_checkpoint_id="synthetic-forged-arrival",
+    )
+    with pytest.raises(ValueError, match="final trace"):
+        replace(first, trace=first.trace[:-1] + (forged_last,))
+
+    forged_first = replace(
+        first.trace[0],
+        current_checkpoint_id=first.trace[0].expected_next_checkpoint_id,
+        expected_next_checkpoint_id=first.trace[-1].current_checkpoint_id,
+    )
+    with pytest.raises(ValueError, match="route sequence"):
+        replace(first, trace=(forged_first,) + first.trace[1:])
+
+    forged_receipt_time = replace(
+        first.trace[2],
+        evaluated_monotonic_s=first.trace[2].evaluated_monotonic_s + 0.01,
+    )
+    with pytest.raises(ValueError, match="receipts"):
+        replace(first, trace=first.trace[:2] + (forged_receipt_time,) + first.trace[3:])
+
+    with pytest.raises(ValueError, match="non-negative integer"):
+        ReplayMismatch(-1, "field", None, None)
+    with pytest.raises(ValueError, match="printable"):
+        ReplayMismatch(0, "field\nspoofed-output", None, None)
+    with pytest.raises(ValueError, match="string or None"):
+        ReplayMismatch(0, "field", object(), None)  # type: ignore[arg-type]
+
+
+def test_replay_report_rejects_proposals_from_another_provenance_context(tmp_path: Path) -> None:
+    original_manifest = load_navigation_replay(FIXTURE_DIRECTORY / "synthetic_mine_to_bank.json")
+    original_report = run_navigation_replay(original_manifest)
+    other_data = _fixture_json()
+    other_data["context"]["expected_source"]["capture_session_id"] = "other-session"  # type: ignore[index]
+    for event in other_data["events"]:  # type: ignore[union-attr]
+        if "observation" in event:
+            event["observation"]["provenance"]["source"]["capture_session_id"] = (  # type: ignore[index]
+                "other-session"
+            )
+    other_manifest = load_navigation_replay(_write_json(tmp_path, other_data))
+    other_report = run_navigation_replay(other_manifest)
+
+    assert original_report.route == other_report.route
+    with pytest.raises(ValueError, match="exact evaluation context"):
+        replace(original_report, step_proposals=other_report.step_proposals)
 
 
 def test_replay_cli_emits_stable_machine_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -912,7 +1189,7 @@ def test_manifest_rejects_malformed_or_scope_claiming_data(tmp_path: Path, case:
     if case == "extra_root_key":
         data["real_route_claim"] = True
     elif case == "wrong_schema":
-        data["schema_version"] = 2
+        data["schema_version"] = 999
     elif case == "non_synthetic_role":
         data["fixture_role"] = "production_varrock_route"
     elif case == "boolean_frame_id":
@@ -962,6 +1239,18 @@ def test_manifest_rejects_nonstandard_numbers(tmp_path: Path) -> None:
         load_navigation_replay(path)
 
 
+def test_navigation_identifiers_reject_control_characters(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="printable"):
+        RouteIdentity("synthetic-route\nspoofed-output", "synthetic-v1", RouteDirection.MINE_TO_BANK)
+
+    data = _fixture_json()
+    data["case_id"] = (
+        "synthetic-case\nlive navigation: enabled\nfixture role: production_route_evidence"
+    )
+    with pytest.raises(NavigationManifestError, match="printable"):
+        load_navigation_replay(_write_json(tmp_path, data))
+
+
 def test_manifest_rejects_unrepresentable_large_number(tmp_path: Path) -> None:
     raw = (FIXTURE_DIRECTORY / "synthetic_mine_to_bank.json").read_text(encoding="utf-8")
     path = tmp_path / "navigation.json"
@@ -970,6 +1259,29 @@ def test_manifest_rejects_unrepresentable_large_number(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(NavigationManifestError, match="finite JSON number"):
+        load_navigation_replay(path)
+
+
+def test_manifest_normalizes_json_integer_conversion_failures(tmp_path: Path) -> None:
+    path = tmp_path / "navigation.json"
+    path.write_text(
+        '{"schema_version": ' + "1" * 5_000 + "}",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(NavigationManifestError, match="invalid navigation replay JSON"):
+        load_navigation_replay(path)
+
+
+def test_manifest_normalizes_json_recursion_failures(tmp_path: Path) -> None:
+    path = tmp_path / "navigation.json"
+    nesting_depth = 20_000
+    path.write_text(
+        "[" * nesting_depth + "0" + "]" * nesting_depth,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(NavigationManifestError):
         load_navigation_replay(path)
 
 
@@ -1022,6 +1334,12 @@ def test_replay_harness_accepts_expected_fail_closed_scenarios(
         "expected_next_checkpoint_id": None,
         "failure_reason": expected_reason.value,
         "proposed_step_id": None,
+        "proposed_attempt_id": None,
+        "proposed_prepared_monotonic_s": None,
+        "recorded_step_id": None,
+        "recorded_attempt_id": None,
+        "recorded_prepared_monotonic_s": None,
+        "recorded_post_attempt_monotonic_s": None,
     }
     data["events"] = [first_event]
     data["expected_final_phase"] = "stopped"
@@ -1047,9 +1365,9 @@ def test_replay_harness_preserves_adversarial_frame_identity(
     expected_reason: NavigationFailureReason,
 ) -> None:
     data = _fixture_json()
-    events = copy.deepcopy(data["events"][:3])  # type: ignore[index]
+    events = copy.deepcopy(data["events"][:4])  # type: ignore[index]
     first_frame = events[0]["observation"]["provenance"]["frame"]
-    candidate_frame = events[2]["observation"]["provenance"]["frame"]
+    candidate_frame = events[3]["observation"]["provenance"]["frame"]
     if case == "repeated":
         candidate_frame["frame_id"] = first_frame["frame_id"]
         candidate_frame["captured_monotonic_s"] = first_frame["captured_monotonic_s"]
@@ -1057,20 +1375,26 @@ def test_replay_harness_preserves_adversarial_frame_identity(
         first_frame["frame_id"] = 5
         candidate_frame["frame_id"] = 4
     elif case == "prior_checkpoint":
-        events[2]["observation"]["candidate_checkpoint_ids"] = [
+        events[3]["observation"]["candidate_checkpoint_ids"] = [
             "synthetic-mine-departure"
         ]
     elif case == "route_version_change":
-        events[2]["observation"]["route"]["version"] = "synthetic-v2"
+        events[3]["observation"]["route"]["version"] = "synthetic-v2"
     else:
         candidate_frame["captured_monotonic_s"] = 10.1
-    events[2]["expected"] = {
+    events[3]["expected"] = {
         "outcome": "stopped",
         "phase": "stopped",
         "current_checkpoint_id": None,
         "expected_next_checkpoint_id": None,
         "failure_reason": expected_reason.value,
         "proposed_step_id": None,
+        "proposed_attempt_id": None,
+        "proposed_prepared_monotonic_s": None,
+        "recorded_step_id": None,
+        "recorded_attempt_id": None,
+        "recorded_prepared_monotonic_s": None,
+        "recorded_post_attempt_monotonic_s": None,
     }
     data["events"] = events
     data["expected_final_phase"] = "stopped"

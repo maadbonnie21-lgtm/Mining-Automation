@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "fixture_role": "synthetic_navigation_architecture_test_only",
   "case_id": "synthetic_bank_to_mine_happy_path",
   "started_monotonic_s": 19.9,
@@ -33,12 +33,33 @@
     "expected_source": {
       "detector_id": "synthetic-checkpoint-detector",
       "detector_version": "synthetic-v1",
+      "profile_id": "synthetic-b2m-profile",
+      "profile_version": "synthetic-v1",
+      "profile_sha256": "1802823c259d738439b6432a39b08014b7ea60b99efe10456c2e1ca6d7e19233",
+      "evidence_role": "synthetic_checkpoint_architecture_test_only",
       "frame_source_id": "synthetic-frame-source",
       "capture_session_id": "synthetic-session-b2m",
       "frame_width": 64,
-      "frame_height": 48
+      "frame_height": 48,
+      "pixel_format": "bgra8888",
+      "checkpoint_ids": [
+        "synthetic-bank-departure",
+        "synthetic-b2m-transit",
+        "synthetic-mine-arrival",
+        "synthetic-foreign"
+      ]
     },
-    "policy": {"max_frame_age_s": 0.5, "minimum_confidence": 0.9}
+    "expected_attempt_source": {
+      "source_id": "synthetic-step-attempt-source",
+      "version": "synthetic-v1",
+      "session_id": "synthetic-attempt-session-b2m",
+      "evidence_role": "synthetic_attempt_receipt_test_only"
+    },
+    "policy": {
+      "max_frame_age_s": 0.5,
+      "minimum_confidence": 0.9,
+      "max_attempt_receipt_age_s": 0.5
+    }
   },
   "events": [
     {
@@ -54,12 +75,25 @@
           "source": {
             "detector_id": "synthetic-checkpoint-detector",
             "detector_version": "synthetic-v1",
+            "profile_id": "synthetic-b2m-profile",
+            "profile_version": "synthetic-v1",
+            "profile_sha256": "1802823c259d738439b6432a39b08014b7ea60b99efe10456c2e1ca6d7e19233",
+            "evidence_role": "synthetic_checkpoint_architecture_test_only",
             "frame_source_id": "synthetic-frame-source",
             "capture_session_id": "synthetic-session-b2m",
             "frame_width": 64,
-            "frame_height": 48
+            "frame_height": 48,
+            "pixel_format": "bgra8888",
+            "checkpoint_ids": [
+              "synthetic-bank-departure",
+              "synthetic-b2m-transit",
+              "synthetic-mine-arrival",
+              "synthetic-foreign"
+            ]
           },
-          "frame": {"frame_id": 11, "captured_monotonic_s": 20.0, "width": 64, "height": 48}
+          "frame": {"frame_id": 11, "captured_monotonic_s": 20.0, "width": 64, "height": 48},
+          "pixel_format": "bgra8888",
+          "frame_payload_sha256": "c1a10a7f396eb8052e78c6384db232232149402c1a3dd61a7c8345bb0974cf8a"
         },
         "match": "matched",
         "candidate_checkpoint_ids": ["synthetic-bank-departure"],
@@ -71,24 +105,74 @@
         "current_checkpoint_id": "synthetic-bank-departure",
         "expected_next_checkpoint_id": "synthetic-b2m-transit",
         "failure_reason": null,
-        "proposed_step_id": null
+        "proposed_step_id": null,
+        "proposed_attempt_id": null,
+        "proposed_prepared_monotonic_s": null,
+        "recorded_step_id": null,
+        "recorded_attempt_id": null,
+        "recorded_prepared_monotonic_s": null,
+        "recorded_post_attempt_monotonic_s": null
       }
     },
     {
       "kind": "prepare_step",
       "evaluated_monotonic_s": 20.2,
+      "attempt_id": "synthetic-b2m-attempt-1",
       "expected": {
         "outcome": "step_prepared",
+        "phase": "awaiting_attempt_receipt",
+        "current_checkpoint_id": null,
+        "expected_next_checkpoint_id": "synthetic-b2m-transit",
+        "failure_reason": null,
+        "proposed_step_id": "synthetic-b2m-step-1",
+        "proposed_attempt_id": "synthetic-b2m-attempt-1",
+        "proposed_prepared_monotonic_s": 20.2,
+        "recorded_step_id": null,
+        "recorded_attempt_id": null,
+        "recorded_prepared_monotonic_s": null,
+        "recorded_post_attempt_monotonic_s": null
+      }
+    },
+    {
+      "kind": "record_step_attempt_receipt",
+      "evaluated_monotonic_s": 20.3,
+      "receipt": {
+        "identity": {
+          "route": {
+            "route_id": "synthetic-bank-to-mine",
+            "version": "synthetic-v1",
+            "direction": "bank_to_mine"
+          },
+          "step_id": "synthetic-b2m-step-1",
+          "attempt_id": "synthetic-b2m-attempt-1"
+        },
+        "source": {
+          "source_id": "synthetic-step-attempt-source",
+          "version": "synthetic-v1",
+          "session_id": "synthetic-attempt-session-b2m",
+          "evidence_role": "synthetic_attempt_receipt_test_only"
+        },
+        "prepared_monotonic_s": 20.2,
+        "post_attempt_monotonic_s": 20.3
+      },
+      "expected": {
+        "outcome": "step_attempt_recorded",
         "phase": "awaiting_checkpoint",
         "current_checkpoint_id": null,
         "expected_next_checkpoint_id": "synthetic-b2m-transit",
         "failure_reason": null,
-        "proposed_step_id": "synthetic-b2m-step-1"
+        "proposed_step_id": null,
+        "proposed_attempt_id": null,
+        "proposed_prepared_monotonic_s": null,
+        "recorded_step_id": "synthetic-b2m-step-1",
+        "recorded_attempt_id": "synthetic-b2m-attempt-1",
+        "recorded_prepared_monotonic_s": 20.2,
+        "recorded_post_attempt_monotonic_s": 20.3
       }
     },
     {
       "kind": "observe_checkpoint",
-      "evaluated_monotonic_s": 20.4,
+      "evaluated_monotonic_s": 20.5,
       "observation": {
         "route": {
           "route_id": "synthetic-bank-to-mine",
@@ -99,12 +183,25 @@
           "source": {
             "detector_id": "synthetic-checkpoint-detector",
             "detector_version": "synthetic-v1",
+            "profile_id": "synthetic-b2m-profile",
+            "profile_version": "synthetic-v1",
+            "profile_sha256": "1802823c259d738439b6432a39b08014b7ea60b99efe10456c2e1ca6d7e19233",
+            "evidence_role": "synthetic_checkpoint_architecture_test_only",
             "frame_source_id": "synthetic-frame-source",
             "capture_session_id": "synthetic-session-b2m",
             "frame_width": 64,
-            "frame_height": 48
+            "frame_height": 48,
+            "pixel_format": "bgra8888",
+            "checkpoint_ids": [
+              "synthetic-bank-departure",
+              "synthetic-b2m-transit",
+              "synthetic-mine-arrival",
+              "synthetic-foreign"
+            ]
           },
-          "frame": {"frame_id": 12, "captured_monotonic_s": 20.3, "width": 64, "height": 48}
+          "frame": {"frame_id": 12, "captured_monotonic_s": 20.4, "width": 64, "height": 48},
+          "pixel_format": "bgra8888",
+          "frame_payload_sha256": "47265cadb84199f83be910fd6c3b0561a4c20555dfe16d60e3b7fc0f8ef9296f"
         },
         "match": "matched",
         "candidate_checkpoint_ids": ["synthetic-b2m-transit"],
@@ -116,24 +213,74 @@
         "current_checkpoint_id": "synthetic-b2m-transit",
         "expected_next_checkpoint_id": "synthetic-mine-arrival",
         "failure_reason": null,
-        "proposed_step_id": null
+        "proposed_step_id": null,
+        "proposed_attempt_id": null,
+        "proposed_prepared_monotonic_s": null,
+        "recorded_step_id": null,
+        "recorded_attempt_id": null,
+        "recorded_prepared_monotonic_s": null,
+        "recorded_post_attempt_monotonic_s": null
       }
     },
     {
       "kind": "prepare_step",
-      "evaluated_monotonic_s": 20.5,
+      "evaluated_monotonic_s": 20.6,
+      "attempt_id": "synthetic-b2m-attempt-2",
       "expected": {
         "outcome": "step_prepared",
+        "phase": "awaiting_attempt_receipt",
+        "current_checkpoint_id": null,
+        "expected_next_checkpoint_id": "synthetic-mine-arrival",
+        "failure_reason": null,
+        "proposed_step_id": "synthetic-b2m-step-2",
+        "proposed_attempt_id": "synthetic-b2m-attempt-2",
+        "proposed_prepared_monotonic_s": 20.6,
+        "recorded_step_id": null,
+        "recorded_attempt_id": null,
+        "recorded_prepared_monotonic_s": null,
+        "recorded_post_attempt_monotonic_s": null
+      }
+    },
+    {
+      "kind": "record_step_attempt_receipt",
+      "evaluated_monotonic_s": 20.7,
+      "receipt": {
+        "identity": {
+          "route": {
+            "route_id": "synthetic-bank-to-mine",
+            "version": "synthetic-v1",
+            "direction": "bank_to_mine"
+          },
+          "step_id": "synthetic-b2m-step-2",
+          "attempt_id": "synthetic-b2m-attempt-2"
+        },
+        "source": {
+          "source_id": "synthetic-step-attempt-source",
+          "version": "synthetic-v1",
+          "session_id": "synthetic-attempt-session-b2m",
+          "evidence_role": "synthetic_attempt_receipt_test_only"
+        },
+        "prepared_monotonic_s": 20.6,
+        "post_attempt_monotonic_s": 20.7
+      },
+      "expected": {
+        "outcome": "step_attempt_recorded",
         "phase": "awaiting_checkpoint",
         "current_checkpoint_id": null,
         "expected_next_checkpoint_id": "synthetic-mine-arrival",
         "failure_reason": null,
-        "proposed_step_id": "synthetic-b2m-step-2"
+        "proposed_step_id": null,
+        "proposed_attempt_id": null,
+        "proposed_prepared_monotonic_s": null,
+        "recorded_step_id": "synthetic-b2m-step-2",
+        "recorded_attempt_id": "synthetic-b2m-attempt-2",
+        "recorded_prepared_monotonic_s": 20.6,
+        "recorded_post_attempt_monotonic_s": 20.7
       }
     },
     {
       "kind": "observe_checkpoint",
-      "evaluated_monotonic_s": 20.7,
+      "evaluated_monotonic_s": 20.9,
       "observation": {
         "route": {
           "route_id": "synthetic-bank-to-mine",
@@ -144,12 +291,25 @@
           "source": {
             "detector_id": "synthetic-checkpoint-detector",
             "detector_version": "synthetic-v1",
+            "profile_id": "synthetic-b2m-profile",
+            "profile_version": "synthetic-v1",
+            "profile_sha256": "1802823c259d738439b6432a39b08014b7ea60b99efe10456c2e1ca6d7e19233",
+            "evidence_role": "synthetic_checkpoint_architecture_test_only",
             "frame_source_id": "synthetic-frame-source",
             "capture_session_id": "synthetic-session-b2m",
             "frame_width": 64,
-            "frame_height": 48
+            "frame_height": 48,
+            "pixel_format": "bgra8888",
+            "checkpoint_ids": [
+              "synthetic-bank-departure",
+              "synthetic-b2m-transit",
+              "synthetic-mine-arrival",
+              "synthetic-foreign"
+            ]
           },
-          "frame": {"frame_id": 13, "captured_monotonic_s": 20.6, "width": 64, "height": 48}
+          "frame": {"frame_id": 13, "captured_monotonic_s": 20.8, "width": 64, "height": 48},
+          "pixel_format": "bgra8888",
+          "frame_payload_sha256": "27832c95864f3860926a3de59745e2a3788be5f05761b392c5846ded92b9b2f5"
         },
         "match": "matched",
         "candidate_checkpoint_ids": ["synthetic-mine-arrival"],
@@ -161,7 +321,13 @@
         "current_checkpoint_id": "synthetic-mine-arrival",
         "expected_next_checkpoint_id": null,
         "failure_reason": null,
-        "proposed_step_id": null
+        "proposed_step_id": null,
+        "proposed_attempt_id": null,
+        "proposed_prepared_monotonic_s": null,
+        "recorded_step_id": null,
+        "recorded_attempt_id": null,
+        "recorded_prepared_monotonic_s": null,
+        "recorded_post_attempt_monotonic_s": null
       }
     }
   ],

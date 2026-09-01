@@ -8,6 +8,7 @@ from .contracts import (
     ArrivalEvidence,
     CheckpointMatchKind,
     CheckpointObservation,
+    CompletedStepAttempt,
     NavigationFailureReason,
     NavigationPhase,
     NavigationStop,
@@ -16,9 +17,16 @@ from .contracts import (
     OfflineStepProposal,
     RouteEvaluationContext,
     RouteProgress,
+    StepAttemptIdentity,
+    SyntheticStepAttemptReceipt,
 )
 
-__all__ = ["observe_checkpoint", "prepare_step", "start_route"]
+__all__ = [
+    "observe_checkpoint",
+    "prepare_step",
+    "record_step_attempt_receipt",
+    "start_route",
+]
 
 
 def _validate_evaluation_time(evaluated_monotonic_s: float) -> None:
@@ -70,6 +78,7 @@ def _stop(
             evaluated_monotonic_s,
         ),
         last_accepted_provenance=progress.last_accepted_provenance,
+        completed_attempts=progress.completed_attempts,
         stop=NavigationStop(reason),
     )
     return NavigationTransition(NavigationTransitionOutcome.STOPPED, stopped)
@@ -94,6 +103,21 @@ def _route_mismatch(
 ) -> NavigationFailureReason | None:
     expected = context.plan.identity
     observed = observation.route
+    if observed.route_id != expected.route_id:
+        return NavigationFailureReason.ROUTE_ID_MISMATCH
+    if observed.version != expected.version:
+        return NavigationFailureReason.ROUTE_VERSION_MISMATCH
+    if observed.direction is not expected.direction:
+        return NavigationFailureReason.DIRECTION_MISMATCH
+    return None
+
+
+def _attempt_route_mismatch(
+    context: RouteEvaluationContext,
+    receipt: SyntheticStepAttemptReceipt,
+) -> NavigationFailureReason | None:
+    expected = context.plan.identity
+    observed = receipt.identity.route
     if observed.route_id != expected.route_id:
         return NavigationFailureReason.ROUTE_ID_MISMATCH
     if observed.version != expected.version:
@@ -160,6 +184,12 @@ def observe_checkpoint(
         return _stop(
             progress,
             NavigationFailureReason.STEP_EVIDENCE_NOT_CONSUMED,
+            evaluated_monotonic_s,
+        )
+    if progress.phase is NavigationPhase.AWAITING_ATTEMPT_RECEIPT:
+        return _stop(
+            progress,
+            NavigationFailureReason.ATTEMPT_RECEIPT_REQUIRED,
             evaluated_monotonic_s,
         )
 
@@ -234,6 +264,7 @@ def observe_checkpoint(
             evidence_boundary_monotonic_s=progress.evidence_boundary_monotonic_s,
             last_transition_monotonic_s=evaluated_monotonic_s,
             last_accepted_provenance=observation.provenance,
+            completed_attempts=progress.completed_attempts,
             arrival_evidence=arrival,
         )
         return NavigationTransition(NavigationTransitionOutcome.ARRIVAL_CONFIRMED, arrived)
@@ -247,6 +278,7 @@ def observe_checkpoint(
         evidence_boundary_monotonic_s=progress.evidence_boundary_monotonic_s,
         last_transition_monotonic_s=evaluated_monotonic_s,
         last_accepted_provenance=observation.provenance,
+        completed_attempts=progress.completed_attempts,
         active_checkpoint_evidence=observation,
     )
     return NavigationTransition(NavigationTransitionOutcome.CHECKPOINT_ACCEPTED, ready)
@@ -256,6 +288,7 @@ def prepare_step(
     context: RouteEvaluationContext,
     progress: RouteProgress,
     *,
+    attempt_id: str,
     evaluated_monotonic_s: float,
 ) -> NavigationTransition:
     """Consume one fresh checkpoint observation into an input-disabled proposal."""
@@ -270,6 +303,12 @@ def prepare_step(
         return _stop(
             progress,
             NavigationFailureReason.OUT_OF_ORDER_EVALUATION,
+            evaluated_monotonic_s,
+        )
+    if progress.phase is NavigationPhase.AWAITING_ATTEMPT_RECEIPT:
+        return _stop(
+            progress,
+            NavigationFailureReason.ATTEMPT_RECEIPT_REQUIRED,
             evaluated_monotonic_s,
         )
     if progress.phase is not NavigationPhase.READY_FOR_STEP:
@@ -302,24 +341,157 @@ def prepare_step(
     step = context.plan.step_from(current_checkpoint_id)
     if step is None or step.to_checkpoint_id != expected_checkpoint_id:  # pragma: no cover
         return _stop(progress, NavigationFailureReason.PLAN_MISMATCH, evaluated_monotonic_s)
+    attempt_identity = StepAttemptIdentity(context.plan.identity, step.step_id, attempt_id)
+    if any(
+        previous.attempt_id == attempt_identity.attempt_id
+        for previous in progress.attempt_history
+    ):
+        return _stop(
+            progress,
+            NavigationFailureReason.DUPLICATE_ATTEMPT_ID,
+            evaluated_monotonic_s,
+        )
     proposal = OfflineStepProposal(
         context=context,
         step=step,
+        attempt_identity=attempt_identity,
         checkpoint_evidence=evidence,
         prepared_monotonic_s=evaluated_monotonic_s,
     )
     awaiting = RouteProgress(
         context=progress.context,
-        phase=NavigationPhase.AWAITING_CHECKPOINT,
+        phase=NavigationPhase.AWAITING_ATTEMPT_RECEIPT,
         current_checkpoint_id=None,
         expected_next_checkpoint_id=expected_checkpoint_id,
         accepted_checkpoint_count=progress.accepted_checkpoint_count,
         evidence_boundary_monotonic_s=evaluated_monotonic_s,
         last_transition_monotonic_s=evaluated_monotonic_s,
         last_accepted_provenance=progress.last_accepted_provenance,
+        completed_attempts=progress.completed_attempts,
+        pending_step_proposal=proposal,
     )
     return NavigationTransition(
         NavigationTransitionOutcome.STEP_PREPARED,
         awaiting,
         proposal,
+    )
+
+
+def record_step_attempt_receipt(
+    context: RouteEvaluationContext,
+    progress: RouteProgress,
+    receipt: SyntheticStepAttemptReceipt | None,
+    *,
+    evaluated_monotonic_s: float,
+) -> NavigationTransition:
+    """Bind one source-issued synthetic attempt boundary to the pending step.
+
+    A receipt proves only that the named offline attempt event occurred.  It
+    cannot prove movement, arrival, or permission to send input.
+    """
+
+    _validate_evaluation_time(evaluated_monotonic_s)
+    mismatch = _context_mismatch(context, progress)
+    if mismatch is not None:
+        return _stop(progress, mismatch, evaluated_monotonic_s)
+    if progress.phase in {NavigationPhase.ARRIVED, NavigationPhase.STOPPED}:
+        return _terminal(progress)
+    if evaluated_monotonic_s < progress.last_transition_monotonic_s:
+        return _stop(
+            progress,
+            NavigationFailureReason.OUT_OF_ORDER_EVALUATION,
+            evaluated_monotonic_s,
+        )
+    if receipt is not None and not isinstance(receipt, SyntheticStepAttemptReceipt):
+        raise ValueError("receipt must be SyntheticStepAttemptReceipt or None")
+    if receipt is not None and receipt.identity in progress.attempt_history:
+        return _stop(
+            progress,
+            NavigationFailureReason.DUPLICATE_ATTEMPT_RECEIPT,
+            evaluated_monotonic_s,
+        )
+    if progress.phase is not NavigationPhase.AWAITING_ATTEMPT_RECEIPT:
+        return _stop(
+            progress,
+            NavigationFailureReason.ATTEMPT_RECEIPT_NOT_EXPECTED,
+            evaluated_monotonic_s,
+        )
+    if receipt is None:
+        return _stop(
+            progress,
+            NavigationFailureReason.ATTEMPT_RECEIPT_REQUIRED,
+            evaluated_monotonic_s,
+        )
+
+    mismatch = _attempt_route_mismatch(context, receipt)
+    if mismatch is not None:
+        return _stop(progress, mismatch, evaluated_monotonic_s)
+    if receipt.source != context.expected_attempt_source:
+        return _stop(
+            progress,
+            NavigationFailureReason.ATTEMPT_RECEIPT_SOURCE_MISMATCH,
+            evaluated_monotonic_s,
+        )
+    pending = progress.pending_attempt
+    if pending is None:  # pragma: no cover - RouteProgress validates this invariant
+        raise AssertionError("awaiting-receipt progress lost its pending attempt")
+    if receipt.identity.step_id != pending.step_id:
+        return _stop(
+            progress,
+            NavigationFailureReason.ATTEMPT_STEP_MISMATCH,
+            evaluated_monotonic_s,
+        )
+    if receipt.identity.attempt_id != pending.attempt_id:
+        return _stop(
+            progress,
+            NavigationFailureReason.ATTEMPT_ID_MISMATCH,
+            evaluated_monotonic_s,
+        )
+    pending_proposal = progress.pending_step_proposal
+    if pending_proposal is None:  # pragma: no cover - RouteProgress validates this invariant
+        raise AssertionError("awaiting-receipt progress lost its pending proposal")
+    if receipt.prepared_monotonic_s != pending_proposal.prepared_monotonic_s:
+        return _stop(
+            progress,
+            NavigationFailureReason.ATTEMPT_PREPARATION_MISMATCH,
+            evaluated_monotonic_s,
+        )
+    if receipt.post_attempt_monotonic_s > evaluated_monotonic_s:
+        return _stop(
+            progress,
+            NavigationFailureReason.INVALID_ATTEMPT_TIME,
+            evaluated_monotonic_s,
+        )
+    if receipt.post_attempt_monotonic_s <= progress.evidence_boundary_monotonic_s:
+        return _stop(
+            progress,
+            NavigationFailureReason.ATTEMPT_NOT_AFTER_PREPARATION,
+            evaluated_monotonic_s,
+        )
+    if (
+        evaluated_monotonic_s - receipt.post_attempt_monotonic_s
+        > context.policy.max_attempt_receipt_age_s
+    ):
+        return _stop(
+            progress,
+            NavigationFailureReason.STALE_ATTEMPT_RECEIPT,
+            evaluated_monotonic_s,
+        )
+
+    awaiting = RouteProgress(
+        context=progress.context,
+        phase=NavigationPhase.AWAITING_CHECKPOINT,
+        current_checkpoint_id=None,
+        expected_next_checkpoint_id=progress.expected_next_checkpoint_id,
+        accepted_checkpoint_count=progress.accepted_checkpoint_count,
+        evidence_boundary_monotonic_s=receipt.post_attempt_monotonic_s,
+        last_transition_monotonic_s=evaluated_monotonic_s,
+        last_accepted_provenance=progress.last_accepted_provenance,
+        completed_attempts=progress.completed_attempts
+        + (CompletedStepAttempt(pending_proposal, receipt, evaluated_monotonic_s),),
+    )
+    return NavigationTransition(
+        NavigationTransitionOutcome.STEP_ATTEMPT_RECORDED,
+        awaiting,
+        attempt_receipt=receipt,
     )

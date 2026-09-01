@@ -53,23 +53,27 @@ The pure reducer reads no clock. Every transition receives an explicit monotonic
 2. A fresh exact observation of the expected non-terminal checkpoint enters `READY_FOR_STEP`, with
    current and expected-next IDs plus the active observation.
 3. `prepare_step` rechecks that observation's freshness, creates one immutable
-   `OfflineStepProposal`, then clears current-location and active evidence. Progress returns to
-   `AWAITING_CHECKPOINT` and moves the evidence boundary to the preparation time.
-4. In this offline reducer, only a higher ordered frame captured strictly after that preparation
-   boundary can prove the next checkpoint. A queued pre-proposal frame cannot advance the route.
-5. A fresh exact observation of the explicit terminal arrival checkpoint enters `ARRIVED` and
+   `OfflineStepProposal`, then clears current-location and active evidence. Progress enters
+   `AWAITING_ATTEMPT_RECEIPT`; preparation alone cannot authorize another observation.
+4. `record_step_attempt_receipt` accepts only the exact pending route/step/attempt identity from
+   the configured synthetic receipt source. The receipt must bind the proposal's preparation
+   boundary, be strictly later than preparation, not be future or stale at evaluation, and be new.
+   The reducer retains the complete proposal-plus-receipt record for every step.
+5. Only after a receipt is accepted does progress return to `AWAITING_CHECKPOINT`. The next proof
+   must use a higher ordered frame captured strictly after the receipt boundary. A queued
+   pre-attempt frame cannot advance the route.
+6. A fresh exact observation of the explicit terminal arrival checkpoint enters `ARRIVED` and
    stores `ArrivalEvidence`. Merely exhausting steps cannot complete a route.
-6. Any runtime rejection enters absorbing `STOPPED`, clears active location evidence, and emits no
+7. Any runtime rejection enters absorbing `STOPPED`, clears active location evidence, and emits no
    proposal. `ARRIVED` is also absorbing.
 
 `OfflineStepProposal` is data only. Its `live_input_enabled` field is a non-init
 `Literal[False]`. It has no coordinates, interaction region, mouse/keyboard payload, executor, or
 controller hook. Nothing in the navigation package can send physical input.
 
-Preparation time is not future proof that a physical action occurred. A later live integration
-must establish a new boundary at or after each actual input attempt and require the next checkpoint
-frame to be captured strictly after that post-attempt boundary. This branch has no attempt event and
-no input path.
+Preparation time is not proof that a physical action occurred. `SyntheticStepAttemptReceipt` is a
+future integration contract whose authority, movement-success, and live-input fields are immutable
+false. It records only that a named synthetic attempt event occurred. This branch has no input path.
 
 ## Fail-closed matrix
 
@@ -81,7 +85,7 @@ no input path.
 | Wrong/reversed direction | `STOPPED / DIRECTION_MISMATCH` |
 | Detector, source, session, or geometry provenance differs | `STOPPED / PROVENANCE_MISMATCH` |
 | Frame capture time is in the future | `STOPPED / INVALID_FRAME_TIME` |
-| Frame does not postdate route-start or prepared-step boundary | `STOPPED / EVIDENCE_NOT_AFTER_BOUNDARY` |
+| Frame does not postdate route-start or accepted receipt boundary | `STOPPED / EVIDENCE_NOT_AFTER_BOUNDARY` |
 | Frame age exceeds policy | `STOPPED / STALE_FRAME` |
 | Frame ID repeats | `STOPPED / REPEATED_FRAME` |
 | Frame ID or capture time regresses | `STOPPED / OUT_OF_ORDER_FRAME` |
@@ -94,6 +98,11 @@ no input path.
 | A foreign checkpoint appears | `STOPPED / UNEXPECTED_CHECKPOINT` |
 | Another observation arrives before active evidence is consumed | `STOPPED / STEP_EVIDENCE_NOT_CONSUMED` |
 | Step preparation is requested without active evidence | `STOPPED / STEP_NOT_READY` |
+| Observation or second preparation arrives while a receipt is pending | `STOPPED / ATTEMPT_RECEIPT_REQUIRED` |
+| Receipt arrives when no proposal is pending | `STOPPED / ATTEMPT_RECEIPT_NOT_EXPECTED` |
+| Receipt source, route, step, attempt, or preparation binding differs | `STOPPED` with the exact mismatch reason |
+| Attempt ID or receipt identity is reused | `STOPPED / DUPLICATE_ATTEMPT_ID` or `DUPLICATE_ATTEMPT_RECEIPT` |
+| Receipt is future, pre-preparation, delayed, or evaluated out of order | `STOPPED` with the exact temporal reason |
 | Replay ends before its declared terminal state | replay failure; never implicit arrival |
 
 Failure precedence is deterministic: route and source provenance are checked before checkpoint
@@ -106,11 +115,11 @@ unknown or missing fields, wrong types, unsupported schema versions, non-synthet
 malformed linear plans, and decreasing event times. Explicit frame IDs and capture timestamps are
 preserved; the loader does not normalize adversarial sequences.
 
-Replay events are either an observation or an offline step preparation. Each event declares the
-exact expected outcome, phase, current checkpoint, expected-next checkpoint, failure reason, and
-proposed step. The harness produces an immutable trace and deterministic text/JSON reports. A case
-must declare an expected terminal phase of `ARRIVED` or `STOPPED`, so an incomplete route cannot
-pass as complete.
+Replay events are an observation, an offline step preparation, or a synthetic attempt receipt.
+Each event declares the exact expected outcome, phase, current checkpoint, expected-next
+checkpoint, failure reason, proposal identity, and receipt identity/boundaries as applicable. The
+harness produces an immutable trace and deterministic text/JSON reports. A case must declare an
+expected terminal phase of `ARRIVED` or `STOPPED`, so an incomplete route cannot pass as complete.
 
 Run the committed architecture fixtures without a display:
 
@@ -133,7 +142,7 @@ Route arrival proves only a fresh match of that direction's terminal checkpoint.
 
 - Mine arrival does not prove that the supported mining view is visible or usable.
 - Bank arrival does not prove that the bank interface is open.
-- A prepared step does not prove movement or checkpoint arrival.
+- A prepared step or accepted attempt receipt does not prove movement or checkpoint arrival.
 
 `ArrivalEvidence` exposes both downstream claims as hard-coded false values. Separate future
 perception and state evidence must establish them.
