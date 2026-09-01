@@ -325,6 +325,52 @@ Mine-to-bank and bank-to-mine require different campaign, source-session, acquis
 review-root, package, review, and external-expectation lineages. No reverse, relabel, or shared-root
 operation exists.
 
+## Deny-only production-binding decision
+
+`navigation.release_decision` is a read-only B1 release-readiness boundary. It is intentionally not
+exported by the navigation package root or `navigation.integration_boundary`. The evaluator accepts
+exactly one named mine-to-bank direction and one separately validated bank-to-mine direction. It
+binds each strict durable package/review graph to its full route plan, ordered checkpoints and
+steps, detector/profile/frame contract, capture build/configuration/environment/support envelope,
+capture source/session, reviewer decisions, physical acquisition/review root identities, one
+caller-owned causal expectation, and one factory-issued offline post-attempt result. The caller pins
+the exact route digest, route-session identity, attempt source, and offline navigation policy
+(`max_frame_age_s`, `minimum_confidence`, and `max_attempt_receipt_age_s`). The policy is an exact
+synthetic binding only and always records `support_attested=false`.
+
+Each direction retains evaluator-owned, detached copies of the strict durable-intake graph and the
+offline session result as internal anchors. Its serialized route, expectation, review cases,
+filesystem identities, endpoint report, causal steps, and matrix are reconstructed independently
+and must equal those anchors. A post-return mutation or serializer-overriding subtype therefore
+cannot be rewrapped as a valid bound direction.
+
+Paths are evaluated once and used only as diagnostic storage slots. All four resolved transaction
+roots must be disjoint and their stable physical identities must differ. Each strict intake rejects
+changes during its own verification. Repeated interleaved snapshots reject changes observed between
+the two snapshots of either direction. The detached result is not an atomic live lock across all
+four roots, so any later use requires a fresh evaluation. Direction durable lineages must be
+independent, but opposite-direction
+plans may legitimately share opaque route ID/version text because the typed direction is part of
+the full route identity. No outbound checkpoint sequence is reversed or inferred as a return plan.
+
+The deterministic matrix uses only `bound_offline` and `not_satisfied`. A valid reviewer rejection,
+stopped offline session, missing step, or nonfresh post-attempt checkpoint is retained as a denial;
+malformed or rebound input produces no decision. Even a fully conforming synthetic pair keeps
+production navigation-policy attestation, real route evidence, real post-attempt causality,
+downstream endpoint evidence, and final release unsatisfied.
+
+The decision records `win32`, `trusted_single_windows_user_host_v1`, and
+`trusted_non_hostile_dedicated_parent_namespace_v1` as required future conditions. It does not call
+them observed or attested: current environment/support values are opaque digests, and the durable
+manifests do not prove the host/namespace precondition. Therefore
+`supported_host_namespace_attested=false`, while the frozen writer's
+`DURABLE_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE=false` remains an independent blocker.
+
+Every top-level activation surface is fixed false: real release role, release eligibility, live
+navigation, WorldState, controller, general activation, and input authority. Terminal bank arrival
+still does not prove bank OPEN; terminal mine arrival still does not prove a supported mining view.
+See ADR 0002 for the complete claim boundary.
+
 ## Fail-closed matrix
 
 | Condition | Result |
@@ -368,6 +414,16 @@ operation exists.
 | Review id, plan, journal, finalization, or package pin drift | integrity failure |
 | Post-review acquisition or review mutation | integrity failure; fresh review required |
 | Opposite-direction durable package/review reuse | identity/integrity failure |
+| Named release-decision direction slots are exchanged | integrity failure; no decision |
+| Direction package, review, source session, or post-attempt result is cross-bound | integrity failure; no decision |
+| Any two release-decision transaction roots overlap or share physical identity | integrity failure; no decision |
+| Exact logical mine/bank endpoint contracts do not cohere across directions | integrity failure; no decision |
+| Reviewer truth is valid but rejects a case | deterministic `not_satisfied`; release remains false |
+| Offline route session is stopped, incomplete, or lacks fresh post-receipt evidence | deterministic `not_satisfied`; release remains false |
+| Offline result route/session/source/policy differs from caller causal pins | integrity failure; no decision |
+| Production navigation-policy support has not been separately attested | deterministic `not_satisfied`; release remains false |
+| Synthetic durable and offline causal graphs both conform | offline bindings only; real evidence and release remain false |
+| Windows/dedicated-parent requirement lacks external attestation | explicit host/namespace blocker |
 
 ## Endpoint proof boundary
 

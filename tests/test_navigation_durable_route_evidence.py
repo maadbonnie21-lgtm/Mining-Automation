@@ -796,6 +796,33 @@ def test_durable_acquisition_and_separate_review_pass_for_each_direction(
     assert FINALIZED_PACKAGE_FILENAME not in _relative_files(review_root)
 
 
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    (
+        ("activation_allowed", True),
+        ("input_authority", True),
+        ("evidence_role", "foreign-route-evidence-role"),
+    ),
+)
+def test_durable_full_intake_rejects_mutated_fixed_authority_expectation(
+    tmp_path: Path,
+    field_name: str,
+    value: object,
+) -> None:
+    acquisition_root = tmp_path / "acquisition"
+    review_root = tmp_path / "review"
+    receipt, _ = _complete_acquisition(acquisition_root)
+    _, expectation = _complete_review(review_root, acquisition_root, receipt)
+    object.__setattr__(expectation, field_name, value)
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="mutated authority fields"):
+        load_and_verify_durable_synthetic_route_evidence(
+            acquisition_root,
+            review_root,
+            expectation,
+        )
+
+
 def test_verified_persisted_artifacts_drive_deterministic_post_attempt_replay(
     tmp_path: Path,
 ) -> None:
