@@ -14,6 +14,7 @@ from mining_automation.banking.errors import (
     BankDetectorExecutionError,
 )
 from mining_automation.banking.perception import (
+    BANK_PUBLICATION_CONFIDENCE_FLOOR,
     MAX_BANKING_EVIDENCE_AGE_S,
     BankDetectorMetadata,
     BankPerceptionResult,
@@ -26,7 +27,9 @@ from mining_automation.banking.perception import (
 from mining_automation.banking.testing import (
     SYNTHETIC_BANK_CHECKPOINT,
     SYNTHETIC_BANK_PROFILE,
+    build_ambiguous_bank_observation,
     build_bank_observation,
+    build_obstructed_bank_observation,
     build_post_deposit_inventory_observation,
     build_pre_deposit_inventory_observation,
     build_provenance,
@@ -307,6 +310,72 @@ def test_evaluate_bank_observation_current_provenance_rejects_mixed_frame_eviden
         current_provenance=claimed_current,
     )
     assert result.blockers == (BankingBlocker.EVIDENCE_PROVENANCE_MISMATCH,)
+
+
+def test_evaluate_bank_observation_obstructed_view_resolves_unknown_no_blocker() -> None:
+    """Obstruction: a confidently-unknown reading is genuine uncertainty, not a defect."""
+    result = evaluate_bank_observation(
+        build_obstructed_bank_observation(),
+        expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+        expected_profile=SYNTHETIC_BANK_PROFILE,
+        evaluated_monotonic_s=0.0,
+    )
+    assert result.accepted
+    assert result.interface_state is BankInterfaceState.UNKNOWN
+    assert result.blockers == ()
+
+
+def test_evaluate_bank_observation_ambiguous_ui_resolves_unknown_no_blocker() -> None:
+    """Ambiguous UI (e.g. mid-transition): same safe handling as obstruction."""
+    result = evaluate_bank_observation(
+        build_ambiguous_bank_observation(),
+        expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+        expected_profile=SYNTHETIC_BANK_PROFILE,
+        evaluated_monotonic_s=0.0,
+    )
+    assert result.accepted
+    assert result.interface_state is BankInterfaceState.UNKNOWN
+    assert result.blockers == ()
+
+
+def test_evaluate_bank_observation_rejects_false_open_below_confidence_floor() -> None:
+    """A confidently-labeled OPEN with low detector confidence is a 'false OPEN'.
+
+    It must be rejected outright (forced to UNKNOWN with a blocker), never
+    accepted as if it were a genuine, high-confidence OPEN reading.
+    """
+    result = evaluate_bank_observation(
+        build_bank_observation(interface_state=BankInterfaceState.OPEN, confidence=0.3),
+        expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+        expected_profile=SYNTHETIC_BANK_PROFILE,
+        evaluated_monotonic_s=0.0,
+    )
+    assert not result.accepted
+    assert result.interface_state is BankInterfaceState.UNKNOWN
+    assert result.blockers == (BankingBlocker.BANK_CONFIDENCE_BELOW_FLOOR,)
+
+
+def test_evaluate_bank_observation_rejects_false_closed_below_confidence_floor() -> None:
+    result = evaluate_bank_observation(
+        build_bank_observation(interface_state=BankInterfaceState.CLOSED, confidence=0.1),
+        expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+        expected_profile=SYNTHETIC_BANK_PROFILE,
+        evaluated_monotonic_s=0.0,
+    )
+    assert result.blockers == (BankingBlocker.BANK_CONFIDENCE_BELOW_FLOOR,)
+
+
+def test_evaluate_bank_observation_accepts_confidence_exactly_at_floor() -> None:
+    result = evaluate_bank_observation(
+        build_bank_observation(
+            interface_state=BankInterfaceState.OPEN, confidence=BANK_PUBLICATION_CONFIDENCE_FLOOR
+        ),
+        expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+        expected_profile=SYNTHETIC_BANK_PROFILE,
+        evaluated_monotonic_s=0.0,
+    )
+    assert result.accepted
+    assert result.interface_state is BankInterfaceState.OPEN
 
 
 def test_evaluate_bank_observation_current_provenance_accepts_matching_evidence() -> None:

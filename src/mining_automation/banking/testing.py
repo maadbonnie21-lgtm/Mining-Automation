@@ -11,6 +11,7 @@ without a live game.
 from __future__ import annotations
 
 from ..contracts import FrameRef, InventoryState
+from .attempts import DepositAttemptReceipt, OpenBankAttemptReceipt
 from .contracts import (
     INVENTORY_CAPACITY,
     BankCheckpointIdentity,
@@ -27,7 +28,11 @@ __all__ = [
     "SYNTHETIC_BANK_PROFILE",
     "SYNTHETIC_DETECTOR_ID",
     "SYNTHETIC_DETECTOR_VERSION",
+    "build_ambiguous_bank_observation",
     "build_bank_observation",
+    "build_deposit_attempt_receipt",
+    "build_obstructed_bank_observation",
+    "build_open_bank_attempt_receipt",
     "build_post_deposit_inventory_observation",
     "build_pre_deposit_inventory_observation",
     "build_provenance",
@@ -136,4 +141,80 @@ def build_post_deposit_inventory_observation(
         provenance=provenance if provenance is not None else build_provenance(),
         detector_id=detector_id,
         detector_version=detector_version,
+    )
+
+
+def build_obstructed_bank_observation(
+    *,
+    provenance: BankEvidenceProvenance | None = None,
+    identity: BankCheckpointIdentity = SYNTHETIC_BANK_CHECKPOINT,
+    profile: BankProfileIdentity = SYNTHETIC_BANK_PROFILE,
+    confidence: float = 0.95,
+) -> BankObservation:
+    """Build a synthetic UNKNOWN reading modeling an obstructed bank view.
+
+    Named separately from :func:`build_ambiguous_bank_observation` purely for
+    test readability -- both resolve through the same UNKNOWN, no-blocker
+    path in :func:`~mining_automation.banking.perception.evaluate_bank_observation`.
+    A high confidence here models a detector that is *sure* the view is
+    obstructed, not unsure about OPEN vs. CLOSED.
+    """
+    return build_bank_observation(
+        interface_state=BankInterfaceState.UNKNOWN,
+        provenance=provenance,
+        identity=identity,
+        profile=profile,
+        confidence=confidence,
+    )
+
+
+def build_ambiguous_bank_observation(
+    *,
+    provenance: BankEvidenceProvenance | None = None,
+    identity: BankCheckpointIdentity = SYNTHETIC_BANK_CHECKPOINT,
+    profile: BankProfileIdentity = SYNTHETIC_BANK_PROFILE,
+    confidence: float = 0.95,
+) -> BankObservation:
+    """Build a synthetic UNKNOWN reading modeling an ambiguous UI presentation.
+
+    See :func:`build_obstructed_bank_observation`.
+    """
+    return build_bank_observation(
+        interface_state=BankInterfaceState.UNKNOWN,
+        provenance=provenance,
+        identity=identity,
+        profile=profile,
+        confidence=confidence,
+    )
+
+
+def build_open_bank_attempt_receipt(
+    *,
+    attempt_id: str = "synthetic-open-attempt-1",
+    issued_monotonic_s: float = 0.0,
+    preceding_provenance: BankEvidenceProvenance | None = None,
+) -> OpenBankAttemptReceipt:
+    """Build a synthetic open-bank attempt receipt. Never proof of an outcome."""
+    return OpenBankAttemptReceipt(
+        attempt_id=attempt_id,
+        issued_monotonic_s=issued_monotonic_s,
+        preceding_provenance=(
+            preceding_provenance if preceding_provenance is not None else build_provenance()
+        ),
+    )
+
+
+def build_deposit_attempt_receipt(
+    *,
+    attempt_id: str = "synthetic-deposit-attempt-1",
+    issued_monotonic_s: float = 0.0,
+    preceding_provenance: BankEvidenceProvenance | None = None,
+) -> DepositAttemptReceipt:
+    """Build a synthetic deposit attempt receipt. Never proof of an outcome."""
+    return DepositAttemptReceipt(
+        attempt_id=attempt_id,
+        issued_monotonic_s=issued_monotonic_s,
+        preceding_provenance=(
+            preceding_provenance if preceding_provenance is not None else build_provenance()
+        ),
     )

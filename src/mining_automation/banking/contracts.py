@@ -66,6 +66,15 @@ def _validate_non_empty_string(value: object, field_name: str) -> None:
         raise ValueError(f"{field_name} must be a non-empty string")
 
 
+def _validate_sha256_digest(value: object, field_name: str) -> None:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{field_name} must be a 64-character lowercase hex digest")
+
+
 class BankInterfaceState(StrEnum):
     """Tri-state reading of the bank interface.
 
@@ -136,10 +145,7 @@ class BankEvidenceProvenance:
         if type(self.frame) is not FrameRef:
             raise ValueError("frame must be an exact FrameRef")
         _validate_non_empty_string(self.cycle_id, "cycle_id")
-        if not isinstance(self.frame_sha256, str) or len(self.frame_sha256) != 64:
-            raise ValueError("frame_sha256 must be a 64-character lowercase hex digest")
-        if any(character not in "0123456789abcdef" for character in self.frame_sha256):
-            raise ValueError("frame_sha256 must be a 64-character lowercase hex digest")
+        _validate_sha256_digest(self.frame_sha256, "frame_sha256")
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,8 +258,21 @@ class BankingBlocker(StrEnum):
     BANK_GEOMETRY_UNSUPPORTED = "bank_geometry_unsupported"
     BANK_EVIDENCE_STALE = "bank_evidence_stale"
     BANK_STATE_UNKNOWN = "bank_state_unknown"
+    BANK_CONFIDENCE_BELOW_FLOOR = "bank_confidence_below_floor"
     DUPLICATE_CONFLICTING_BANK_OBSERVATIONS = "duplicate_conflicting_bank_observations"
     OPEN_ATTEMPT_WITHOUT_VERIFICATION = "open_attempt_without_verification"
+
+    ATTEMPT_RECEIPT_EVALUATION_TIME_INVALID = "attempt_receipt_evaluation_time_invalid"
+    ATTEMPT_RECEIPT_FROM_FUTURE = "attempt_receipt_from_future"
+    ATTEMPT_RECEIPT_STALE = "attempt_receipt_stale"
+    ATTEMPT_RECEIPT_WRONG_PROVENANCE = "attempt_receipt_wrong_provenance"
+    ATTEMPT_RECEIPT_DUPLICATE = "attempt_receipt_duplicate"
+
+    DUPLICATE_EVIDENCE_PACKAGE = "duplicate_evidence_package"
+    REJECTED_EVIDENCE_PACKAGE_INCLUDED = "rejected_evidence_package_included"
+    MISSING_REQUIRED_EVIDENCE_CASE = "missing_required_evidence_case"
+    EVIDENCE_PACKAGE_STALE = "evidence_package_stale"
+    REVIEWER_VERDICT_PRECEDES_FINALIZATION = "reviewer_verdict_precedes_finalization"
 
     INVENTORY_EVIDENCE_MISSING = "inventory_evidence_missing"
     INVENTORY_EVIDENCE_TYPE_INVALID = "inventory_evidence_type_invalid"

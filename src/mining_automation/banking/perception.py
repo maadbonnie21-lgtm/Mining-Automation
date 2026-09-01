@@ -28,6 +28,9 @@ Required semantics (all covered by tests):
   :func:`evaluate_bank_observation` for why this only fires when a caller has
   a real independent source to check against
 * a missing detector delivery carries zero banking authority
+* a confidently-labeled but under-floor-confidence reading (a "false OPEN" or
+  "false CLOSED") is rejected -- not accepted as ambiguous -- distinguishing
+  it from a detector's own genuine, high-confidence ``UNKNOWN`` call
 """
 
 from __future__ import annotations
@@ -50,6 +53,7 @@ from .contracts import (
 from .errors import BankDetectorContractError, BankDetectorExecutionError
 
 __all__ = [
+    "BANK_PUBLICATION_CONFIDENCE_FLOOR",
     "INVENTORY_PUBLICATION_CONFIDENCE_FLOOR",
     "MAX_BANKING_EVIDENCE_AGE_S",
     "BankDetector",
@@ -64,6 +68,7 @@ __all__ = [
 
 MAX_BANKING_EVIDENCE_AGE_S: Final[float] = 1.0
 INVENTORY_PUBLICATION_CONFIDENCE_FLOOR: Final[float] = 0.8
+BANK_PUBLICATION_CONFIDENCE_FLOOR: Final[float] = 0.8
 
 
 def _finite_float(value: object) -> float | None:
@@ -212,6 +217,7 @@ def evaluate_bank_observation(
     current_provenance: BankEvidenceProvenance | None = None,
     previous_provenance: BankEvidenceProvenance | None = None,
     max_age_s: float = MAX_BANKING_EVIDENCE_AGE_S,
+    min_confidence: float = BANK_PUBLICATION_CONFIDENCE_FLOOR,
 ) -> BankPerceptionResult:
     """Resolve one bank observation into a trustworthy interface-state reading.
 
@@ -226,6 +232,16 @@ def evaluate_bank_observation(
     should leave it as ``None`` rather than fake one. ``previous_provenance``,
     when supplied, guards against replaying an old or non-advancing frame as
     if it were fresh.
+
+    A confidence below ``min_confidence`` rejects the reading regardless of
+    its claimed state -- this is the guard against a "false OPEN": a
+    detector confidently mislabeling CLOSED as OPEN is exactly the failure
+    mode a floor on the *label itself* cannot catch, since the label already
+    says OPEN. Only the detector's own admitted uncertainty (confidence) can
+    catch it, so a below-floor reading is rejected (blockers set, forced to
+    UNKNOWN) rather than accepted-as-ambiguous -- unlike a genuine
+    UNKNOWN-state reading, which the detector itself already flagged as
+    uncertain and which this function accepts with no blocker.
     """
     if type(expected_checkpoint) is not BankCheckpointIdentity:
         raise TypeError("expected_checkpoint must be an exact BankCheckpointIdentity")
@@ -266,6 +282,9 @@ def evaluate_bank_observation(
     )
     if freshness_blocker is not None:
         blockers.append(freshness_blocker)
+
+    if observation.confidence < min_confidence:
+        blockers.append(BankingBlocker.BANK_CONFIDENCE_BELOW_FLOOR)
 
     if blockers:
         return BankPerceptionResult(BankInterfaceState.UNKNOWN, tuple(blockers))

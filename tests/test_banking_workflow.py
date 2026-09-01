@@ -21,6 +21,8 @@ from mining_automation.banking.testing import (
     SYNTHETIC_BANK_CHECKPOINT,
     SYNTHETIC_BANK_PROFILE,
     build_bank_observation,
+    build_deposit_attempt_receipt,
+    build_open_bank_attempt_receipt,
     build_post_deposit_inventory_observation,
     build_pre_deposit_inventory_observation,
     build_provenance,
@@ -676,3 +678,157 @@ def test_post_deposit_observation_missing() -> None:
         evaluated_monotonic_s=3.0,
     )
     assert result.blockers == (BankingBlocker.INVENTORY_EVIDENCE_MISSING,)
+
+
+# ---------------------------------------------------------------------------
+# Attempt-receipt causality integration (Part D3)
+# ---------------------------------------------------------------------------
+
+
+def test_open_bank_attempt_with_valid_receipt_advances_and_records_receipt() -> None:
+    context = _arrive(_initial(), frame_id=1)
+    context = _observe_bank(context, BankInterfaceState.CLOSED, frame_id=2)
+    receipt = build_open_bank_attempt_receipt(
+        attempt_id="open-1",
+        issued_monotonic_s=2.0,
+        preceding_provenance=context.last_accepted_provenance,
+    )
+    result = advance_banking_workflow(
+        context, OpenBankAttempted(receipt=receipt), evaluated_monotonic_s=2.0
+    )
+    assert result.state is BankingWorkflowState.BANK_OPEN_ATTEMPT_PENDING
+    assert result.blockers == ()
+    assert "open-1" in result.used_attempt_receipt_ids
+
+
+def test_open_bank_attempt_receipt_wrong_provenance_denied() -> None:
+    context = _arrive(_initial(), frame_id=1)
+    context = _observe_bank(context, BankInterfaceState.CLOSED, frame_id=2)
+    receipt = build_open_bank_attempt_receipt(
+        attempt_id="open-1",
+        issued_monotonic_s=2.0,
+        preceding_provenance=build_provenance(frame_id=99),
+    )
+    result = advance_banking_workflow(
+        context, OpenBankAttempted(receipt=receipt), evaluated_monotonic_s=2.0
+    )
+    assert result.state is BankingWorkflowState.BANK_CLOSED_VERIFIED
+    assert result.blockers == (BankingBlocker.ATTEMPT_RECEIPT_WRONG_PROVENANCE,)
+
+
+def test_open_bank_attempt_stale_receipt_denied() -> None:
+    context = _arrive(_initial(), frame_id=1)
+    context = _observe_bank(context, BankInterfaceState.CLOSED, frame_id=2)
+    receipt = build_open_bank_attempt_receipt(
+        attempt_id="open-1",
+        issued_monotonic_s=2.0,
+        preceding_provenance=context.last_accepted_provenance,
+    )
+    result = advance_banking_workflow(
+        context, OpenBankAttempted(receipt=receipt), evaluated_monotonic_s=200.0
+    )
+    assert result.state is BankingWorkflowState.BANK_CLOSED_VERIFIED
+    assert result.blockers == (BankingBlocker.ATTEMPT_RECEIPT_STALE,)
+
+
+def test_open_bank_attempt_duplicate_receipt_denied_after_reattempt() -> None:
+    """A retried attempt after a fault (bank still closed) must not reuse an old receipt id."""
+    context = _arrive(_initial(), frame_id=1)
+    context = _observe_bank(context, BankInterfaceState.CLOSED, frame_id=2)
+    receipt = build_open_bank_attempt_receipt(
+        attempt_id="open-1",
+        issued_monotonic_s=2.0,
+        preceding_provenance=context.last_accepted_provenance,
+    )
+    context = advance_banking_workflow(
+        context, OpenBankAttempted(receipt=receipt), evaluated_monotonic_s=2.0
+    )
+    assert context.state is BankingWorkflowState.BANK_OPEN_ATTEMPT_PENDING
+
+    context = _observe_bank(context, BankInterfaceState.CLOSED, frame_id=3)
+    assert context.state is BankingWorkflowState.BANK_CLOSED_VERIFIED
+
+    replayed_receipt = build_open_bank_attempt_receipt(
+        attempt_id="open-1",
+        issued_monotonic_s=3.0,
+        preceding_provenance=context.last_accepted_provenance,
+    )
+    result = advance_banking_workflow(
+        context, OpenBankAttempted(receipt=replayed_receipt), evaluated_monotonic_s=3.0
+    )
+    assert result.state is BankingWorkflowState.BANK_CLOSED_VERIFIED
+    assert result.blockers == (BankingBlocker.ATTEMPT_RECEIPT_DUPLICATE,)
+
+
+def test_deposit_attempt_with_valid_receipt_advances_and_records_receipt() -> None:
+    context = _to_deposit_ready(_initial())
+    receipt = build_deposit_attempt_receipt(
+        attempt_id="deposit-1",
+        issued_monotonic_s=3.0,
+        preceding_provenance=context.last_accepted_provenance,
+    )
+    result = advance_banking_workflow(
+        context, DepositAttempted(receipt=receipt), evaluated_monotonic_s=3.0
+    )
+    assert result.state is BankingWorkflowState.DEPOSIT_ATTEMPT_PENDING
+    assert result.blockers == ()
+    assert "deposit-1" in result.used_attempt_receipt_ids
+
+
+def test_deposit_attempt_receipt_wrong_provenance_denied() -> None:
+    context = _to_deposit_ready(_initial())
+    receipt = build_deposit_attempt_receipt(
+        attempt_id="deposit-1",
+        issued_monotonic_s=3.0,
+        preceding_provenance=build_provenance(frame_id=99),
+    )
+    result = advance_banking_workflow(
+        context, DepositAttempted(receipt=receipt), evaluated_monotonic_s=3.0
+    )
+    assert result.state is BankingWorkflowState.DEPOSIT_READY_VERIFIED
+    assert result.blockers == (BankingBlocker.ATTEMPT_RECEIPT_WRONG_PROVENANCE,)
+
+
+def test_deposit_attempt_stale_receipt_denied() -> None:
+    context = _to_deposit_ready(_initial())
+    receipt = build_deposit_attempt_receipt(
+        attempt_id="deposit-1",
+        issued_monotonic_s=3.0,
+        preceding_provenance=context.last_accepted_provenance,
+    )
+    result = advance_banking_workflow(
+        context, DepositAttempted(receipt=receipt), evaluated_monotonic_s=300.0
+    )
+    assert result.state is BankingWorkflowState.DEPOSIT_READY_VERIFIED
+    assert result.blockers == (BankingBlocker.ATTEMPT_RECEIPT_STALE,)
+
+
+def test_attempted_without_receipt_behaves_exactly_as_before_receipts_existed() -> None:
+    context = _to_deposit_ready(_initial())
+    result = advance_banking_workflow(context, DepositAttempted(), evaluated_monotonic_s=3.0)
+    assert result.state is BankingWorkflowState.DEPOSIT_ATTEMPT_PENDING
+    assert result.used_attempt_receipt_ids == frozenset()
+
+
+def test_open_bank_attempted_rejects_wrong_receipt_type() -> None:
+    with pytest.raises(
+        ValueError, match="receipt must be an exact OpenBankAttemptReceipt or None"
+    ):
+        OpenBankAttempted(receipt="not-a-receipt")  # type: ignore[arg-type]
+
+
+def test_deposit_attempted_rejects_wrong_receipt_type() -> None:
+    with pytest.raises(ValueError, match="receipt must be an exact DepositAttemptReceipt or None"):
+        DepositAttempted(receipt="not-a-receipt")  # type: ignore[arg-type]
+
+
+def test_context_rejects_wrong_used_attempt_receipt_ids_type() -> None:
+    with pytest.raises(ValueError, match="used_attempt_receipt_ids must be a frozenset of str"):
+        BankingWorkflowContext(
+            state=BankingWorkflowState.AWAITING_CHECKPOINT_ARRIVAL,
+            expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
+            expected_profile=SYNTHETIC_BANK_PROFILE,
+            blockers=(),
+            last_accepted_provenance=None,
+            used_attempt_receipt_ids={"not", "frozen"},  # type: ignore[arg-type]
+        )

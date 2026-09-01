@@ -20,6 +20,7 @@ from dataclasses import dataclass, replace
 
 import pytest
 
+from mining_automation.banking.attempts import OpenBankAttemptReceipt
 from mining_automation.banking.contracts import BankingBlocker, BankInterfaceState
 from mining_automation.banking.testing import (
     SYNTHETIC_BANK_CHECKPOINT,
@@ -94,6 +95,14 @@ def _bank_observed_step(
 
 def _open_attempt_step(evaluated_monotonic_s: float) -> WorkflowStep:
     return WorkflowStep(OpenBankAttempted(), evaluated_monotonic_s=evaluated_monotonic_s)
+
+
+def _open_attempt_with_receipt_step(
+    receipt: OpenBankAttemptReceipt, evaluated_monotonic_s: float
+) -> WorkflowStep:
+    return WorkflowStep(
+        OpenBankAttempted(receipt=receipt), evaluated_monotonic_s=evaluated_monotonic_s
+    )
 
 
 def _deposit_attempt_step(evaluated_monotonic_s: float) -> WorkflowStep:
@@ -229,6 +238,68 @@ PROFILE_CHANGE = WorkflowScenario(
     expected_final_blockers=(BankingBlocker.BANK_PROFILE_MISMATCH,),
 )
 
+BANK_CLOSES_UNEXPECTEDLY_AFTER_OPEN_VERIFIED = WorkflowScenario(
+    scenario_id="bank-closes-unexpectedly-after-open-verified",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.OPEN, 2),
+        # A stray re-observation once OPEN is already verified -- e.g. the
+        # bank interface unexpectedly closed mid-visit. The workflow does not
+        # re-verify bank state from BANK_OPEN_VERIFIED; it must deny this,
+        # never silently treat it as a new/different accepted state.
+        _bank_observed_step(BankInterfaceState.CLOSED, 3),
+    ),
+    expected_final_state=BankingWorkflowState.BANK_OPEN_VERIFIED,
+    expected_final_blockers=(BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,),
+)
+
+INTERRUPTED_TRANSACTION_STRAY_ARRIVAL_DURING_DEPOSIT_PENDING = WorkflowScenario(
+    scenario_id="interrupted-transaction-stray-arrival-during-deposit-pending",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.OPEN, 2),
+        _pre_deposit_inventory_step(28, 3),
+        _deposit_attempt_step(3.0),
+        # Simulates a session interruption replaying an old arrival event
+        # while a deposit is still pending -- must not be mistaken for a
+        # fresh post-deposit inventory reading or a restart.
+        _arrive_step(4),
+    ),
+    expected_final_state=BankingWorkflowState.DEPOSIT_ATTEMPT_PENDING,
+    expected_final_blockers=(BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,),
+)
+
+_DUPLICATE_RECEIPT_AFTER_FAULT_ATTEMPT_ID = "replay-open-attempt-1"
+
+DUPLICATE_RECEIPT_AFTER_FAULT = WorkflowScenario(
+    scenario_id="duplicate-attempt-receipt-reused-after-open-fails",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.CLOSED, 2),
+        _open_attempt_with_receipt_step(
+            OpenBankAttemptReceipt(
+                attempt_id=_DUPLICATE_RECEIPT_AFTER_FAULT_ATTEMPT_ID,
+                issued_monotonic_s=2.0,
+                preceding_provenance=build_provenance(frame_id=2, captured_monotonic_s=2.0),
+            ),
+            evaluated_monotonic_s=2.0,
+        ),
+        # Open fails -- the bank is still closed on the next observation.
+        _bank_observed_step(BankInterfaceState.CLOSED, 3),
+        # A buggy fault-recovery retry reuses the exact same attempt id.
+        _open_attempt_with_receipt_step(
+            OpenBankAttemptReceipt(
+                attempt_id=_DUPLICATE_RECEIPT_AFTER_FAULT_ATTEMPT_ID,
+                issued_monotonic_s=3.0,
+                preceding_provenance=build_provenance(frame_id=3, captured_monotonic_s=3.0),
+            ),
+            evaluated_monotonic_s=3.0,
+        ),
+    ),
+    expected_final_state=BankingWorkflowState.BANK_CLOSED_VERIFIED,
+    expected_final_blockers=(BankingBlocker.ATTEMPT_RECEIPT_DUPLICATE,),
+)
+
 ALL_SCENARIOS = (
     HAPPY_PATH,
     STILL_CLOSED_AFTER_OPEN_ATTEMPT,
@@ -238,6 +309,9 @@ ALL_SCENARIOS = (
     FRAME_GEOMETRY_MISMATCH,
     ORDERING_ERROR,
     PROFILE_CHANGE,
+    BANK_CLOSES_UNEXPECTEDLY_AFTER_OPEN_VERIFIED,
+    INTERRUPTED_TRANSACTION_STRAY_ARRIVAL_DURING_DEPOSIT_PENDING,
+    DUPLICATE_RECEIPT_AFTER_FAULT,
 )
 
 

@@ -23,6 +23,11 @@ Concretely:
 * Every non-advancing call returns at least one
   :class:`~mining_automation.banking.contracts.BankingBlocker`, so a caller
   can never mistake "nothing happened" for a silent success.
+* ``OpenBankAttempted``/``DepositAttempted`` may optionally carry a
+  :mod:`mining_automation.banking.attempts` receipt for causality bookkeeping
+  (duplicate/wrong-provenance/stale-attempt detection). A rejected receipt
+  denies the transition outright; an accepted one still only reaches a
+  ``*_PENDING`` state -- receipts are never evidence of an attempt's outcome.
 
 Transition summary::
 
@@ -61,11 +66,16 @@ Transition summary::
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from math import isfinite
 from typing import Final
 
+from .attempts import (
+    DepositAttemptReceipt,
+    OpenBankAttemptReceipt,
+    evaluate_attempt_receipt_causality,
+)
 from .contracts import (
     BankCheckpointIdentity,
     BankEvidenceProvenance,
@@ -165,9 +175,20 @@ class BankObservationEvidence:
 class OpenBankAttempted:
     """A marker that an open-bank interaction was attempted.
 
-    Carries no evidence. Cannot advance the workflow past a "pending"
-    state on its own.
+    Carries no evidence -- ``receipt`` is causality bookkeeping only (see
+    :mod:`mining_automation.banking.attempts`), never proof of the attempt's
+    outcome. Cannot advance the workflow past a "pending" state on its own.
+    A duplicate, wrong-provenance, or stale ``receipt`` denies the transition
+    outright (see :func:`advance_banking_workflow`); omitting ``receipt``
+    (``None``) skips causality bookkeeping entirely and behaves exactly as
+    before receipts existed.
     """
+
+    receipt: OpenBankAttemptReceipt | None = None
+
+    def __post_init__(self) -> None:
+        if self.receipt is not None and type(self.receipt) is not OpenBankAttemptReceipt:
+            raise ValueError("receipt must be an exact OpenBankAttemptReceipt or None")
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,9 +210,16 @@ class PreDepositInventoryObservationEvidence:
 class DepositAttempted:
     """A marker that a deposit interaction was attempted.
 
-    Carries no evidence. Cannot advance the workflow past a "pending" state
-    on its own.
+    Carries no evidence -- ``receipt`` is causality bookkeeping only, never
+    proof of the attempt's outcome. See :class:`OpenBankAttempted` for the
+    same ``receipt`` contract.
     """
+
+    receipt: DepositAttemptReceipt | None = None
+
+    def __post_init__(self) -> None:
+        if self.receipt is not None and type(self.receipt) is not DepositAttemptReceipt:
+            raise ValueError("receipt must be an exact DepositAttemptReceipt or None")
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +262,7 @@ class BankingWorkflowContext:
     expected_profile: BankProfileIdentity
     blockers: tuple[BankingBlocker, ...]
     last_accepted_provenance: BankEvidenceProvenance | None
+    used_attempt_receipt_ids: frozenset[str] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
         if type(self.state) is not BankingWorkflowState:
@@ -260,6 +289,10 @@ class BankingWorkflowContext:
             raise ValueError(
                 "every state past AWAITING_CHECKPOINT_ARRIVAL requires accepted provenance"
             )
+        if not isinstance(self.used_attempt_receipt_ids, frozenset) or any(
+            not isinstance(item, str) for item in self.used_attempt_receipt_ids
+        ):
+            raise ValueError("used_attempt_receipt_ids must be a frozenset of str")
 
     @property
     def complete(self) -> bool:
@@ -278,6 +311,7 @@ def initial_banking_workflow_context(
         expected_profile=expected_profile,
         blockers=(),
         last_accepted_provenance=None,
+        used_attempt_receipt_ids=frozenset(),
     )
 
 
@@ -304,6 +338,7 @@ def _denied(context: BankingWorkflowContext, blockers: tuple[BankingBlocker, ...
         expected_profile=context.expected_profile,
         blockers=blockers,
         last_accepted_provenance=context.last_accepted_provenance,
+        used_attempt_receipt_ids=context.used_attempt_receipt_ids,
     )
 
 
@@ -312,6 +347,7 @@ def _advanced(
     new_state: BankingWorkflowState,
     *,
     provenance: BankEvidenceProvenance,
+    used_attempt_receipt_ids: frozenset[str] | None = None,
 ) -> BankingWorkflowContext:
     return BankingWorkflowContext(
         state=new_state,
@@ -319,6 +355,11 @@ def _advanced(
         expected_profile=context.expected_profile,
         blockers=(),
         last_accepted_provenance=provenance,
+        used_attempt_receipt_ids=(
+            context.used_attempt_receipt_ids
+            if used_attempt_receipt_ids is None
+            else used_attempt_receipt_ids
+        ),
     )
 
 
@@ -439,14 +480,30 @@ def _handle_bank_closed_verified(
     event: BankingWorkflowEvent,
     evaluated_monotonic_s: object,
 ) -> BankingWorkflowContext:
-    del evaluated_monotonic_s
     if not isinstance(event, OpenBankAttempted):
         return _denied(context, (BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,))
     assert context.last_accepted_provenance is not None  # invariant of this state, see __post_init__
+
+    if event.receipt is None:
+        return _advanced(
+            context,
+            BankingWorkflowState.BANK_OPEN_ATTEMPT_PENDING,
+            provenance=context.last_accepted_provenance,
+        )
+
+    causality = evaluate_attempt_receipt_causality(
+        event.receipt,
+        expected_preceding_provenance=context.last_accepted_provenance,
+        used_attempt_ids=context.used_attempt_receipt_ids,
+        evaluated_monotonic_s=evaluated_monotonic_s,
+    )
+    if not causality.accepted:
+        return _denied(context, causality.blockers)
     return _advanced(
         context,
         BankingWorkflowState.BANK_OPEN_ATTEMPT_PENDING,
         provenance=context.last_accepted_provenance,
+        used_attempt_receipt_ids=context.used_attempt_receipt_ids | {event.receipt.attempt_id},
     )
 
 
@@ -488,14 +545,30 @@ def _handle_deposit_ready_verified(
     event: BankingWorkflowEvent,
     evaluated_monotonic_s: object,
 ) -> BankingWorkflowContext:
-    del evaluated_monotonic_s
     if not isinstance(event, DepositAttempted):
         return _denied(context, (BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,))
     assert context.last_accepted_provenance is not None  # invariant of this state, see __post_init__
+
+    if event.receipt is None:
+        return _advanced(
+            context,
+            BankingWorkflowState.DEPOSIT_ATTEMPT_PENDING,
+            provenance=context.last_accepted_provenance,
+        )
+
+    causality = evaluate_attempt_receipt_causality(
+        event.receipt,
+        expected_preceding_provenance=context.last_accepted_provenance,
+        used_attempt_ids=context.used_attempt_receipt_ids,
+        evaluated_monotonic_s=evaluated_monotonic_s,
+    )
+    if not causality.accepted:
+        return _denied(context, causality.blockers)
     return _advanced(
         context,
         BankingWorkflowState.DEPOSIT_ATTEMPT_PENDING,
         provenance=context.last_accepted_provenance,
+        used_attempt_receipt_ids=context.used_attempt_receipt_ids | {event.receipt.attempt_id},
     )
 
 
