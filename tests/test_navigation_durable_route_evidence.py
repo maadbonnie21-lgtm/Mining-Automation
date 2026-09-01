@@ -3,8 +3,9 @@ from __future__ import annotations
 import ast
 import json
 import os
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Barrier
 
@@ -50,6 +51,8 @@ from mining_automation.navigation.durable_route_evidence import (
     ACQUISITION_FINALIZATION_FILENAME,
     ACQUISITION_PLAN_FILENAME,
     ACQUISITION_STOP_FILENAME,
+    DURABLE_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE,
+    DURABLE_WRITER_NAMESPACE_CONTRACT,
     REVIEW_FINALIZATION_FILENAME,
     REVIEW_STOP_FILENAME,
     DurableAcquisitionFilesystemExpectation,
@@ -453,6 +456,41 @@ def _complete_review(
 
 def _relative_files(root: Path) -> set[str]:
     return {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()}
+
+
+@dataclass(slots=True)
+class _ParentSwapProbe:
+    swapped: bool = False
+    foreign_file: Path | None = None
+    parked_parent: Path | None = None
+
+
+def _swap_owned_parent_during_path_open(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    target_root: Path,
+    parked_parent: Path,
+    matches: Callable[[Path], bool],
+) -> _ParentSwapProbe:
+    """Replace an owned parent in the exact check-to-path-open interval."""
+
+    probe = _ParentSwapProbe()
+    owned_root = target_root.absolute()
+    parked = parked_parent.absolute()
+    original_open = Path.open
+
+    def swapping_open(path: Path, *args: object, **kwargs: object) -> object:
+        candidate = path.absolute()
+        if not probe.swapped and owned_root in candidate.parents and matches(candidate):
+            candidate.parent.rename(parked)
+            candidate.parent.mkdir()
+            probe.swapped = True
+            probe.foreign_file = candidate
+            probe.parked_parent = parked
+        return original_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "open", swapping_open)
+    return probe
 
 
 class _AlternatingPath:
@@ -1237,6 +1275,85 @@ def test_loader_rejects_hardlink_alias_to_foreign_bytes(tmp_path: Path) -> None:
             acquisition_root,
             review_root,
             expectation,
+        )
+
+
+def test_writer_contract_requires_trusted_parent_and_is_not_real_evidence_eligible() -> None:
+    assert DURABLE_WRITER_NAMESPACE_CONTRACT == "trusted_non_hostile_dedicated_parent_namespace_v1"
+    assert DURABLE_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+    assert "DURABLE_WRITER_NAMESPACE_CONTRACT" not in navigation_root.__all__
+    assert "DURABLE_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE" not in navigation_root.__all__
+
+
+def test_acquisition_parent_swap_at_path_open_cannot_finalize_or_verify(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control_root = tmp_path / "control-acquisition"
+    control_receipt, _ = _complete_acquisition(control_root)
+    target_root = (tmp_path / "swapped-acquisition").absolute()
+    transaction, source, detector, clock = _begin_acquisition(target_root)
+    probe = _swap_owned_parent_during_path_open(
+        monkeypatch,
+        target_root=target_root,
+        parked_parent=tmp_path / "parked-acquisition-case-parent",
+        matches=lambda path: path.name == "frame.bin",
+    )
+
+    with pytest.raises(DurableEvidenceError, match="owned durable directory was replaced"):
+        _capture_next(transaction, source, detector, clock, 1)
+
+    assert probe.swapped is True
+    assert probe.foreign_file is not None and probe.foreign_file.is_file()
+    assert probe.parked_parent is not None and probe.parked_parent.is_dir()
+    assert transaction.phase is DurableAcquisitionPhase.STOPPED
+    assert not (target_root / FINALIZED_PACKAGE_FILENAME).exists()
+    assert not (target_root / ACQUISITION_FINALIZATION_FILENAME).exists()
+    with pytest.raises(DurableEvidenceStateError, match="terminal"):
+        transaction.finalize(finalized_at_utc="2026-09-01T00:00:10Z")
+    with pytest.raises(RouteEvidenceIntegrityError):
+        load_durable_acquisition(target_root, control_receipt.expectation)
+
+
+def test_review_parent_swap_at_path_open_cannot_finalize_or_verify(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    acquisition_root = tmp_path / "acquisition"
+    receipt, _ = _complete_acquisition(acquisition_root)
+    _, control_expectation = _complete_review(
+        tmp_path / "control-review",
+        acquisition_root,
+        receipt,
+    )
+    review_root = (tmp_path / "swapped-review").absolute()
+    transaction, acquisition = _begin_review(review_root, acquisition_root, receipt)
+    probe = _swap_owned_parent_during_path_open(
+        monkeypatch,
+        target_root=review_root,
+        parked_parent=tmp_path / "parked-review-truth-parent",
+        matches=lambda path: path.parent.name == "truth" and path.suffix == ".json",
+    )
+
+    with pytest.raises(DurableEvidenceError, match="owned durable directory was replaced"):
+        transaction.record_case_truth(
+            _truths(acquisition)[0],
+            recorded_at_utc="2026-09-01T00:00:21Z",
+        )
+
+    assert probe.swapped is True
+    assert probe.foreign_file is not None and probe.foreign_file.is_file()
+    assert probe.parked_parent is not None and probe.parked_parent.is_dir()
+    assert transaction.phase is DurableReviewPhase.STOPPED
+    assert not (review_root / INDEPENDENT_REVIEW_FILENAME).exists()
+    assert not (review_root / REVIEW_FINALIZATION_FILENAME).exists()
+    with pytest.raises(DurableEvidenceStateError, match="terminal"):
+        transaction.finalize(reviewed_at_utc="2026-09-01T00:00:30Z")
+    with pytest.raises(RouteEvidenceIntegrityError):
+        load_and_verify_durable_synthetic_route_evidence(
+            acquisition_root,
+            review_root,
+            control_expectation,
         )
 
 

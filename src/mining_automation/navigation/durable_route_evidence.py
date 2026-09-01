@@ -4,7 +4,9 @@ Acquisition and independent review intentionally use different roots and
 different mutable capabilities.  A transaction can only create a fresh root;
 it cannot resume, adopt, overwrite, retry, reverse, or remove evidence.  The
 terminal manifest is written last, and strict read-only intake remains the
-authority boundary.
+authority boundary.  The pathname-based writer requires a trusted, non-hostile
+dedicated parent namespace and is not eligible to acquire future real release
+evidence without a separately reviewed handle-anchored writer.
 """
 
 from __future__ import annotations
@@ -80,6 +82,8 @@ __all__ = [
     "ACQUISITION_FINALIZATION_FILENAME",
     "ACQUISITION_PLAN_FILENAME",
     "ACQUISITION_STOP_FILENAME",
+    "DURABLE_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE",
+    "DURABLE_WRITER_NAMESPACE_CONTRACT",
     "REVIEW_FINALIZATION_FILENAME",
     "REVIEW_PLAN_FILENAME",
     "REVIEW_STOP_FILENAME",
@@ -107,6 +111,8 @@ ACQUISITION_STOP_FILENAME: Final[str] = "acquisition-stop.json"
 REVIEW_PLAN_FILENAME: Final[str] = "review-plan.json"
 REVIEW_FINALIZATION_FILENAME: Final[str] = "review-finalization.json"
 REVIEW_STOP_FILENAME: Final[str] = "review-stop.json"
+DURABLE_WRITER_NAMESPACE_CONTRACT: Final[str] = "trusted_non_hostile_dedicated_parent_namespace_v1"
+DURABLE_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE: Final[Literal[False]] = False
 
 _ACQUISITION_REQUEST_SCHEMA: Final[str] = "fixed-route-durable-capture-request-v1"
 _ACQUISITION_CASE_SCHEMA: Final[str] = "fixed-route-durable-owned-case-v1"
@@ -334,7 +340,7 @@ def _intake_root(path: Path, field_name: str) -> tuple[Path, tuple[int, ...]]:
 
 
 class _ExclusiveNamespace:
-    """One invocation's fresh root and directories; existing paths are foreign."""
+    """Fresh pathname namespace beneath a trusted, non-hostile dedicated parent."""
 
     __slots__ = ("_directories", "_files", "_root", "_root_identity")
 
@@ -1365,7 +1371,7 @@ def begin_durable_acquisition(
     *,
     started_monotonic_s: float,
 ) -> DurableAcquisitionTransaction:
-    """Reserve a fresh root around a newly bound passive campaign."""
+    """Reserve a fresh root beneath a trusted, non-hostile dedicated parent."""
 
     root_path = _absolute_path_once(root, "durable acquisition root")
     namespace = _ExclusiveNamespace(root_path)
@@ -1652,7 +1658,7 @@ def begin_durable_review(
     reviewer_id: str,
     started_at_utc: str,
 ) -> DurableReviewTransaction:
-    """Reserve a fresh reviewer root after strict acquisition finalization intake."""
+    """Reserve a fresh trusted-parent review root after strict acquisition intake."""
 
     _identifier(review_id, "review_id")
     _identifier(reviewer_id, "reviewer_id")

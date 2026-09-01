@@ -64,11 +64,24 @@ transaction roots must be disjoint. A transaction root is append-only while bein
 built and immutable after its final manifest is created. No file within either root
 is reopened for mutation.
 
+The writer's parent-directory contract is deliberately narrower than its strict
+reader contract. Acquisition and review roots must live beneath caller-controlled,
+dedicated parent namespaces in which no hostile actor can rename or replace an
+owned directory while the transaction is writing. The current standard-library
+writer creates files by pathname; it does not anchor creation to an already-opened
+directory handle and therefore cannot prevent a parent replacement in the interval
+between its last identity check and exclusive path open. It is not eligible to
+acquire future real release evidence until a separately reviewed handle-relative,
+no-follow writer closes that interval.
+
 ### Exclusive creation and burned identities
 
 Transaction directories and every file within them are created with exclusive
-create semantics. Existing content is never truncated, replaced, merged, repaired,
-or silently reused.
+create semantics. Content already present at the checked target path is never
+truncated, replaced, merged, repaired, or silently reused. This statement does not
+claim that pathname creation is safe against a hostile concurrent parent swap; in
+that unsupported environment a write may land in the replacement namespace before
+the subsequent identity check fails the transaction.
 
 If the requested transaction path already exists, the writer fails without
 opening, deleting, replacing, relabeling, or adopting it. Once any prefix has been
@@ -101,11 +114,18 @@ manifest or turn a partial root into a committed transaction.
 
 ### Fail-closed path and integrity rules
 
-Before creation, review, or consumption, paths are normalized and proven
-to remain beneath their configured physical namespace. Symbolic links, junctions,
-reparse points, hard-linked artifacts, path aliases, overlapping roots, and any
-other indirection that prevents proving unique physical ownership are rejected;
-they are not followed.
+Before creation, review, or consumption, paths are normalized and checked against
+their configured physical namespace. Symbolic links, junctions, reparse points,
+hard-linked artifacts, path aliases, overlapping roots, and other indirection that
+is present when checked are rejected rather than intentionally followed.
+
+Those checks are fail-closed for evidence acceptance, not a hostile-namespace write
+confinement guarantee. A concurrent actor can replace an owned parent after the
+check and before a pathname-based create. The writer rechecks directory and file
+identity after creation, latches `STOPPED`, emits no valid terminal manifest, and
+cannot be finalized or verified, but it cannot promise to undo or prevent bytes
+created in the replacement namespace. The trusted dedicated-parent precondition is
+therefore mandatory for this offline synthetic writer.
 
 Review revalidates the acquisition manifest and every acquisition artifact before
 writing review output. External consumption revalidates the relevant manifest,
@@ -145,6 +165,11 @@ content-addressably reviewable, and offline publication cannot silently acquire
 live or input capability. Storage use increases because partial and superseded
 transactions are retained, and consumers must perform full validation rather than
 trusting filenames or directory presence.
+
+This decision does not establish hostile concurrent writer ownership. The explicit
+trusted-parent precondition and future-real-evidence ineligibility remain release
+blockers until a handle-anchored strategy and its platform-specific tests are
+accepted in a later decision.
 
 The implementation is intentionally navigation-specific. It must not introduce a
 generic transaction engine, general event store, cross-subsystem evidence bus, or
