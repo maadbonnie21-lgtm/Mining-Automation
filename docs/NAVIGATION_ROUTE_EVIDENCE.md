@@ -238,6 +238,71 @@ component reparse checks, resolved containment, path/open-handle identity checks
 rereads, and a second exact-tree comparison. A future production loader would require an approved
 native handle strategy before treating hostile concurrent intake as supported.
 
+## Durable acquisition and review transactions
+
+`navigation.durable_route_evidence` is the navigation-specific, offline-only writer around the
+accepted passive campaign sequencer. It is intentionally not exported by the navigation package
+root or downstream integration boundary.
+
+One acquisition transaction exclusively reserves a previously absent root, constructs and owns
+one private passive sequencer, and writes an append-only prefix:
+
+```text
+campaign-plan.json
+audit/<ordinal>-<case>-request.json
+cases/<ordinal>-<case>/frame.bin
+cases/<ordinal>-<case>/detector-report.json
+audit/<ordinal>-<case>-owned.json
+...
+finalized-package.json                 # exact typed package payload
+acquisition-finalization.json          # successful durable commit marker, last
+```
+
+Every request record is durable before its capture-only source invocation. For each successful
+capture, the exact frame bytes are persisted first, the exact detector report second, and the
+hash-chained owned-case record last. The exact package payload is then exclusively created and a
+strict exact-tree preflight runs. `acquisition-finalization.json` binds the ordered case-record
+digests, acquisition head, journal head, and exact package digest and is the last write. No
+subsequent filesystem mutation or write follows a successful terminal-manifest write; consumers
+independently reload both files through the read-only verifier.
+
+A persistence or passive-contract failure latches the transaction `STOPPED`. The successfully
+written prefix remains in place, optionally with `acquisition-stop.json`, and cannot be reviewed.
+No code path deletes it, adopts it, replaces it, resumes it, retries it in place, or silently starts
+a new source session. An existing root or immutable path is a collision even if its bytes happen
+to match.
+
+Independent review uses a separate, freshly reserved root and has no source, detector, capture,
+navigation, or input method:
+
+```text
+review-plan.json
+truth/<ordinal>-<case>.json
+...
+independent-review.json                # exact typed reviewer-truth payload
+review-finalization.json               # successful durable commit marker, last
+```
+
+Review can begin only after strict acquisition intake against caller-owned pins. Its plan binds the
+exact acquisition finalization, package, route/direction, operator, independent reviewer, ordered
+case artifact hashes, and start time. Truth records must follow exact case order and strict UTC
+chronology and form their own hash chain. Finalization re-intakes the acquisition before writing,
+then exclusively creates the independent-review payload. `review-finalization.json` binds its exact
+bytes and is the last write. Operator acknowledgement and detector output remain zero review
+authority. A mutation after review invalidates the pair and requires a fresh review id; accepted
+truth is never rewritten.
+
+`DurableAcquisitionFilesystemExpectation` and
+`DurableRouteEvidenceFilesystemExpectation` are caller-owned authority pins. They bind the normal
+route/source/build/configuration/environment identities plus acquisition journal/finalization,
+review plan/journal/finalization, independent-review digest, reviewer, and review id. The loader
+checks both roots independently, calls the existing synthetic verifier, then repeats cross-root
+intake checks. A verified report still keeps activation and input false.
+
+Mine-to-bank and bank-to-mine require different campaign, source-session, acquisition-root,
+review-root, package, review, and external-expectation lineages. No reverse, relabel, or shared-root
+operation exists.
+
 ## Fail-closed matrix
 
 | Condition | Result |
@@ -269,6 +334,16 @@ native handle strategy before treating hostile concurrent intake as supported.
 | Negative checkpoint reviewed MATCHED | conformance failure |
 | Reviewer rejects a case | retained conformance failure |
 | Synthetic package asks for real release authority | always false |
+| Existing acquisition/review root or immutable file | collision; foreign bytes untouched |
+| Partial prefix, stop record, or missing terminal manifest | non-reviewable integrity failure |
+| Foreign sentinel inserted before finalization | finalization failure; prefix retained |
+| Stale request/case/review journal predecessor | integrity failure |
+| Acquisition finalization/package mismatch | integrity failure |
+| Review before acquisition finalization | integrity failure before review-root creation |
+| Review truth repeated, skipped, reordered, or rebound | absorbing review STOP |
+| Review id, plan, journal, finalization, or package pin drift | integrity failure |
+| Post-review acquisition or review mutation | integrity failure; fresh review required |
+| Opposite-direction durable package/review reuse | identity/integrity failure |
 
 ## Endpoint proof boundary
 
@@ -311,7 +386,8 @@ PREREGISTERED -> CAPTURING -> FINALIZED -> REVIEWED -> VERIFIED
    or failed attempt is retained and ineligible; it is never silently dropped or replaced.
 4. Persist the full frame first, detector report second, and owned case record last. No detector
    result controls inclusion, retry, or stage advancement.
-5. Finalize only the exact complete case set, writing the package manifest last.
+5. Finalize only the exact complete case set, writing the package payload and then the durable
+   acquisition terminal manifest last.
 6. Give an independent reviewer the finalized package hash and exact immutable bytes. Reviewer
    truth is a new record and cannot mutate acquisition evidence.
 7. Recompute every identity, canonical digest, artifact hash, case expectation, and review binding.
