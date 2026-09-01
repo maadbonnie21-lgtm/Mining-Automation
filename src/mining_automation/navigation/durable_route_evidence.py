@@ -4,7 +4,9 @@ Acquisition and independent review intentionally use different roots and
 different mutable capabilities.  A transaction can only create a fresh root;
 it cannot resume, adopt, overwrite, retry, reverse, or remove evidence.  The
 terminal manifest is written last, and strict read-only intake remains the
-authority boundary.
+authority boundary.  The pathname-based writer requires a trusted, non-hostile
+dedicated parent namespace and is not eligible to acquire future real release
+evidence without a separately reviewed handle-anchored writer.
 """
 
 from __future__ import annotations
@@ -80,6 +82,8 @@ __all__ = [
     "ACQUISITION_FINALIZATION_FILENAME",
     "ACQUISITION_PLAN_FILENAME",
     "ACQUISITION_STOP_FILENAME",
+    "DURABLE_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE",
+    "DURABLE_WRITER_NAMESPACE_CONTRACT",
     "REVIEW_FINALIZATION_FILENAME",
     "REVIEW_PLAN_FILENAME",
     "REVIEW_STOP_FILENAME",
@@ -107,6 +111,8 @@ ACQUISITION_STOP_FILENAME: Final[str] = "acquisition-stop.json"
 REVIEW_PLAN_FILENAME: Final[str] = "review-plan.json"
 REVIEW_FINALIZATION_FILENAME: Final[str] = "review-finalization.json"
 REVIEW_STOP_FILENAME: Final[str] = "review-stop.json"
+DURABLE_WRITER_NAMESPACE_CONTRACT: Final[str] = "trusted_non_hostile_dedicated_parent_namespace_v1"
+DURABLE_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE: Final[Literal[False]] = False
 
 _ACQUISITION_REQUEST_SCHEMA: Final[str] = "fixed-route-durable-capture-request-v1"
 _ACQUISITION_CASE_SCHEMA: Final[str] = "fixed-route-durable-owned-case-v1"
@@ -334,7 +340,7 @@ def _intake_root(path: Path, field_name: str) -> tuple[Path, tuple[int, ...]]:
 
 
 class _ExclusiveNamespace:
-    """One invocation's fresh root and directories; existing paths are foreign."""
+    """Fresh pathname namespace beneath a trusted, non-hostile dedicated parent."""
 
     __slots__ = ("_directories", "_files", "_root", "_root_identity")
 
@@ -363,6 +369,12 @@ class _ExclusiveNamespace:
     @property
     def root(self) -> Path:
         return self._root
+
+    @property
+    def root_identity(self) -> tuple[int, ...]:
+        """Physical identity bound into the terminal manifest before its write."""
+
+        return self._root_identity
 
     def _assert_root(self) -> None:
         current = _lstat(self._root, "durable transaction root")
@@ -623,6 +635,7 @@ def _acquisition_finalization_json(
     package: FinalizedRouteEvidencePackage,
     journal_head_sha256: Sha256Digest,
     case_record_sha256s: tuple[Sha256Digest, ...],
+    transaction_root_identity: tuple[int, ...],
 ) -> dict[str, object]:
     return {
         **_fixed_false(),
@@ -634,6 +647,7 @@ def _acquisition_finalization_json(
         "journal_head_sha256": journal_head_sha256.value,
         "schema": _ACQUISITION_FINALIZATION_SCHEMA,
         "status": "finalized",
+        "transaction_root_identity": list(transaction_root_identity),
     }
 
 
@@ -720,6 +734,7 @@ def _review_finalization_json(
     review_id: str,
     review_plan_sha256: Sha256Digest,
     journal_head_sha256: Sha256Digest,
+    transaction_root_identity: tuple[int, ...],
 ) -> dict[str, object]:
     return {
         **_fixed_false(),
@@ -732,6 +747,7 @@ def _review_finalization_json(
         "review_plan_sha256": review_plan_sha256.value,
         "schema": _REVIEW_FINALIZATION_SCHEMA,
         "status": "finalized",
+        "transaction_root_identity": list(transaction_root_identity),
     }
 
 
@@ -979,6 +995,15 @@ def load_durable_acquisition(
     initial_finalization = _read_owned_file(
         root_path, ACQUISITION_FINALIZATION_FILENAME, _MAX_MANIFEST_BYTES
     )
+    initial_finalization_object = _strict_canonical_object(
+        initial_finalization.payload,
+        "durable acquisition finalization",
+    )
+    transaction_root_identity = _writer_directory_identity(root_signature)
+    if initial_finalization_object.get("transaction_root_identity") != list(
+        transaction_root_identity
+    ):
+        raise RouteEvidenceIntegrityError("durable acquisition transaction root identity differs")
     initial_package = _read_owned_file(root_path, FINALIZED_PACKAGE_FILENAME, _MAX_MANIFEST_BYTES)
     package = _parse_package(initial_package.payload)
     plan_payload = _canonical(package.campaign_plan.to_json_value())
@@ -1046,6 +1071,7 @@ def load_durable_acquisition(
             package,
             journal_head,
             tuple(case_record_sha256s),
+            transaction_root_identity,
         )
     )
     if initial_finalization.payload != finalization_payload:
@@ -1303,6 +1329,7 @@ class DurableAcquisitionTransaction:
                         package,
                         self._journal_head,
                         tuple(self._case_record_sha256s),
+                        self._namespace.root_identity,
                     )
                 )
                 finalization_sha = Sha256Digest.from_bytes(finalization_payload)
@@ -1365,7 +1392,7 @@ def begin_durable_acquisition(
     *,
     started_monotonic_s: float,
 ) -> DurableAcquisitionTransaction:
-    """Reserve a fresh root around a newly bound passive campaign."""
+    """Reserve a fresh root beneath a trusted, non-hostile dedicated parent."""
 
     root_path = _absolute_path_once(root, "durable acquisition root")
     namespace = _ExclusiveNamespace(root_path)
@@ -1602,6 +1629,7 @@ class DurableReviewTransaction:
                         review_id=self._review_id,
                         review_plan_sha256=self._review_plan_sha256,
                         journal_head_sha256=self._journal_head,
+                        transaction_root_identity=self._namespace.root_identity,
                     )
                 )
                 finalization_sha = Sha256Digest.from_bytes(finalization_payload)
@@ -1652,7 +1680,7 @@ def begin_durable_review(
     reviewer_id: str,
     started_at_utc: str,
 ) -> DurableReviewTransaction:
-    """Reserve a fresh reviewer root after strict acquisition finalization intake."""
+    """Reserve a fresh trusted-parent review root after strict acquisition intake."""
 
     _identifier(review_id, "review_id")
     _identifier(reviewer_id, "reviewer_id")
@@ -1744,6 +1772,15 @@ def load_and_verify_durable_synthetic_route_evidence(
     initial_finalization = _read_owned_file(
         root_path, REVIEW_FINALIZATION_FILENAME, _MAX_MANIFEST_BYTES
     )
+    initial_finalization_object = _strict_canonical_object(
+        initial_finalization.payload,
+        "durable review finalization",
+    )
+    transaction_root_identity = _writer_directory_identity(root_signature)
+    if initial_finalization_object.get("transaction_root_identity") != list(
+        transaction_root_identity
+    ):
+        raise RouteEvidenceIntegrityError("durable review transaction root identity differs")
     initial_review = _read_owned_file(root_path, INDEPENDENT_REVIEW_FILENAME, _MAX_MANIFEST_BYTES)
     review = _parse_review(initial_review.payload)
     if review.content_sha256 != owned_expectation.independent_review_sha256:
@@ -1865,6 +1902,7 @@ def load_and_verify_durable_synthetic_route_evidence(
             review_id=owned_expectation.review_id,
             review_plan_sha256=plan_sha,
             journal_head_sha256=journal_head,
+            transaction_root_identity=transaction_root_identity,
         )
     )
     if initial_finalization.payload != expected_finalization:

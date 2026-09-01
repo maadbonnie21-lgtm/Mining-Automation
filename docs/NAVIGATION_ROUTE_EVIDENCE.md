@@ -244,6 +244,28 @@ native handle strategy before treating hostile concurrent intake as supported.
 accepted passive campaign sequencer. It is intentionally not exported by the navigation package
 root or downstream integration boundary.
 
+### Writer ownership boundary
+
+The current writer has the explicit contract
+`trusted_non_hostile_dedicated_parent_namespace_v1` and reports
+`DURABLE_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE=false`. Acquisition and review parents must be
+caller-controlled dedicated namespaces in which no hostile actor can rename or replace an owned
+directory during a write. This is a required precondition, not an implementation convenience.
+
+Files are created with exclusive pathname opens. Static links/reparse points and path replacement
+observed by the pre/post identity checks fail closed, but the writer does not hold a directory
+handle across the last check and create. A hostile actor could replace a parent in that interval;
+the path open may create bytes in the replacement namespace before the post-write identity check
+detects the swap. Detection latches the transaction `STOPPED` and returns no writer receipt.
+
+The terminal manifests bind the physical `transaction_root_identity` captured from the
+writer-owned root. A swap during the terminal open can therefore leave terminal-named bytes in a
+complete replacement clone, but strict intake recomputes the current root identity and rejects the
+clone before content verification. A recreated/copy root is audit bytes, not the same finalized
+transaction. The writer does not undo the misdirected write and does not claim hostile-namespace
+confinement. Future real release-evidence acquisition requires a separately reviewed
+handle-relative, no-follow writer boundary.
+
 One acquisition transaction exclusively reserves a previously absent root, constructs and owns
 one private passive sequencer, and writes an append-only prefix:
 
@@ -334,7 +356,9 @@ operation exists.
 | Negative checkpoint reviewed MATCHED | conformance failure |
 | Reviewer rejects a case | retained conformance failure |
 | Synthetic package asks for real release authority | always false |
-| Existing acquisition/review root or immutable file | collision; foreign bytes untouched |
+| Existing acquisition/review root or immutable file at check/open | collision; existing bytes untouched |
+| Hostile parent swap between identity check and pathname open | unsupported namespace; possible replacement-namespace write, then `STOPPED`; no receipt or verification |
+| Root clone swapped during terminal-manifest open | terminal-named bytes may exist, but bound physical root identity differs; strict intake rejects |
 | Partial prefix, stop record, or missing terminal manifest | non-reviewable integrity failure |
 | Foreign sentinel inserted before finalization | finalization failure; prefix retained |
 | Stale request/case/review journal predecessor | integrity failure |
