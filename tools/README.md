@@ -22,6 +22,18 @@ Rules:
 
 `build_resource_replay_manifest.py` promotes reviewed drafts into the merged replay-schema-v1 format. See `docs/RESOURCE_PERCEPTION.md` for the complete workflow and privacy rules.
 
+`resource_release_campaign.py` owns the fixed constrained-v1 resource release
+campaign. It creates a uniquely owned, resumable session; guides the 15 cases
+in their frozen order; captures and evaluates exactly one frame for the next
+case; seals the complete private evidence set; binds independent reviewer
+truth only after deterministic artifacts are separately prepared and inspected;
+and emits a strictly verifiable manifest-last privacy-safe review package plus
+the exact PR #39 CLOSED/STILL_OPEN ledger. `verify-export` requires the
+independently retained export manifest SHA-256, then rehashes and replays
+that package without private pixels. The live source gate is intentionally
+false in this branch, so `capture-next` fails before opening a Windows backend.
+See `docs/RESOURCE_RELEASE_CAMPAIGN.md`.
+
 - `validate_varrock_east_drift.py` — run the Issue #22 drift-safety and
   reacquisition diagnosis in one command:
 
