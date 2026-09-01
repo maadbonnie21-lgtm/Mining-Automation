@@ -5,16 +5,22 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import Enum, StrEnum
 from math import isfinite
 from pathlib import Path
 from typing import Final, Literal, cast
 
+from ..capture import PixelFormat
 from ..contracts import FrameRef
 from .contracts import (
     Checkpoint,
+    CheckpointDetection,
+    CheckpointDetectorIdentity,
+    CheckpointEvidence,
+    CheckpointEvidenceRole,
     CheckpointMatchKind,
     CheckpointObservation,
+    CheckpointProfile,
     CheckpointRole,
     CheckpointSourceIdentity,
     FrameProvenance,
@@ -31,6 +37,7 @@ from .contracts import (
     RoutePlan,
     RouteProgress,
     RouteStep,
+    Sha256Digest,
 )
 from .machine import observe_checkpoint, prepare_step, start_route
 
@@ -49,7 +56,7 @@ __all__ = [
     "run_navigation_replay",
 ]
 
-NAVIGATION_REPLAY_SCHEMA_VERSION: Final[int] = 1
+NAVIGATION_REPLAY_SCHEMA_VERSION: Final[int] = 2
 SYNTHETIC_FIXTURE_ROLE: Final[str] = "synthetic_navigation_architecture_test_only"
 
 
@@ -677,20 +684,49 @@ def _parse_source(raw: object, path: str) -> CheckpointSourceIdentity:
         {
             "detector_id",
             "detector_version",
+            "profile_id",
+            "profile_version",
+            "profile_sha256",
+            "evidence_role",
             "frame_source_id",
             "capture_session_id",
             "frame_width",
             "frame_height",
+            "pixel_format",
+            "checkpoint_ids",
         },
         path,
     )
-    return CheckpointSourceIdentity(
-        detector_id=_string(mapping["detector_id"], f"{path}.detector_id"),
-        detector_version=_string(mapping["detector_version"], f"{path}.detector_version"),
-        frame_source_id=_string(mapping["frame_source_id"], f"{path}.frame_source_id"),
-        capture_session_id=_string(mapping["capture_session_id"], f"{path}.capture_session_id"),
+    checkpoint_values = _sequence(mapping["checkpoint_ids"], f"{path}.checkpoint_ids")
+    profile = CheckpointProfile(
+        profile_id=_string(mapping["profile_id"], f"{path}.profile_id"),
+        version=_string(mapping["profile_version"], f"{path}.profile_version"),
+        evidence_role=_enum(
+            CheckpointEvidenceRole,
+            mapping["evidence_role"],
+            f"{path}.evidence_role",
+        ),
         frame_width=_integer(mapping["frame_width"], f"{path}.frame_width"),
         frame_height=_integer(mapping["frame_height"], f"{path}.frame_height"),
+        pixel_format=_enum(PixelFormat, mapping["pixel_format"], f"{path}.pixel_format"),
+        checkpoint_ids=tuple(
+            _string(value, f"{path}.checkpoint_ids[{index}]")
+            for index, value in enumerate(checkpoint_values)
+        ),
+    )
+    declared_profile_digest = Sha256Digest(
+        _string(mapping["profile_sha256"], f"{path}.profile_sha256")
+    )
+    if profile.identity.content_sha256 != declared_profile_digest:
+        raise NavigationManifestError(f"{path}.profile_sha256 does not match profile content")
+    return CheckpointSourceIdentity(
+        detector=CheckpointDetectorIdentity(
+            detector_id=_string(mapping["detector_id"], f"{path}.detector_id"),
+            version=_string(mapping["detector_version"], f"{path}.detector_version"),
+        ),
+        profile=profile,
+        frame_source_id=_string(mapping["frame_source_id"], f"{path}.frame_source_id"),
+        capture_session_id=_string(mapping["capture_session_id"], f"{path}.capture_session_id"),
     )
 
 
@@ -736,19 +772,27 @@ def _parse_observation(raw: object, path: str) -> CheckpointObservation:
     candidates = _sequence(mapping["candidate_checkpoint_ids"], f"{path}.candidate_checkpoint_ids")
     return CheckpointObservation(
         route=_parse_route_identity(mapping["route"], f"{path}.route"),
-        provenance=_parse_provenance(mapping["provenance"], f"{path}.provenance"),
-        match=_enum(CheckpointMatchKind, mapping["match"], f"{path}.match"),
-        candidate_checkpoint_ids=tuple(
-            _string(candidate, f"{path}.candidate_checkpoint_ids[{index}]")
-            for index, candidate in enumerate(candidates)
+        evidence=CheckpointEvidence(
+            provenance=_parse_provenance(mapping["provenance"], f"{path}.provenance"),
+            detection=CheckpointDetection(
+                match=_enum(CheckpointMatchKind, mapping["match"], f"{path}.match"),
+                candidate_checkpoint_ids=tuple(
+                    _string(candidate, f"{path}.candidate_checkpoint_ids[{index}]")
+                    for index, candidate in enumerate(candidates)
+                ),
+                confidence=_number(mapping["confidence"], f"{path}.confidence"),
+            ),
         ),
-        confidence=_number(mapping["confidence"], f"{path}.confidence"),
     )
 
 
 def _parse_provenance(raw: object, path: str) -> FrameProvenance:
     mapping = _mapping(raw, path)
-    _exact_keys(mapping, {"source", "frame"}, path)
+    _exact_keys(
+        mapping,
+        {"source", "frame", "pixel_format", "frame_payload_sha256"},
+        path,
+    )
     frame_path = f"{path}.frame"
     frame_mapping = _mapping(mapping["frame"], frame_path)
     _exact_keys(
@@ -765,6 +809,10 @@ def _parse_provenance(raw: object, path: str) -> FrameProvenance:
             ),
             width=_integer(frame_mapping["width"], f"{frame_path}.width"),
             height=_integer(frame_mapping["height"], f"{frame_path}.height"),
+        ),
+        pixel_format=_enum(PixelFormat, mapping["pixel_format"], f"{path}.pixel_format"),
+        frame_payload_sha256=Sha256Digest(
+            _string(mapping["frame_payload_sha256"], f"{path}.frame_payload_sha256")
         ),
     )
 
@@ -852,7 +900,7 @@ def _number(value: object, path: str) -> float:
     return converted
 
 
-def _enum[EnumT: StrEnum](enum_type: type[EnumT], value: object, path: str) -> EnumT:
+def _enum[EnumT: Enum](enum_type: type[EnumT], value: object, path: str) -> EnumT:
     if not isinstance(value, str):
         raise NavigationManifestError(f"{path} must be a string")
     try:

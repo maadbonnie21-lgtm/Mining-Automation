@@ -8,13 +8,19 @@ from pathlib import Path
 
 import pytest
 
+from mining_automation.capture import PixelFormat
 from mining_automation.contracts import FrameRef
 from mining_automation.navigation.cli import main as navigation_cli_main
 from mining_automation.navigation.contracts import (
     ArrivalEvidence,
     Checkpoint,
+    CheckpointDetection,
+    CheckpointDetectorIdentity,
+    CheckpointEvidence,
+    CheckpointEvidenceRole,
     CheckpointMatchKind,
     CheckpointObservation,
+    CheckpointProfile,
     CheckpointRole,
     CheckpointSourceIdentity,
     FrameProvenance,
@@ -32,6 +38,7 @@ from mining_automation.navigation.contracts import (
     RoutePlan,
     RouteProgress,
     RouteStep,
+    Sha256Digest,
 )
 from mining_automation.navigation.machine import observe_checkpoint, prepare_step, start_route
 from mining_automation.navigation.replay import (
@@ -79,21 +86,41 @@ def _plan(direction: RouteDirection = RouteDirection.MINE_TO_BANK) -> RoutePlan:
     )
 
 
-def _source(session_id: str = "synthetic-session") -> CheckpointSourceIdentity:
-    return CheckpointSourceIdentity(
-        detector_id="synthetic-detector",
-        detector_version="synthetic-v1",
-        frame_source_id="synthetic-frame-source",
-        capture_session_id=session_id,
+def _profile(
+    direction: RouteDirection = RouteDirection.MINE_TO_BANK,
+) -> CheckpointProfile:
+    plan = _plan(direction)
+    prefix = "m2b" if direction is RouteDirection.MINE_TO_BANK else "b2m"
+    return CheckpointProfile(
+        profile_id=f"synthetic-{prefix}-profile",
+        version="synthetic-v1",
+        evidence_role=CheckpointEvidenceRole.SYNTHETIC_ARCHITECTURE_TEST_ONLY,
         frame_width=64,
         frame_height=48,
+        pixel_format=PixelFormat.BGRA8888,
+        checkpoint_ids=(
+            *(checkpoint.checkpoint_id for checkpoint in plan.checkpoints),
+            "synthetic-foreign",
+        ),
+    )
+
+
+def _source(
+    session_id: str = "synthetic-session",
+    direction: RouteDirection = RouteDirection.MINE_TO_BANK,
+) -> CheckpointSourceIdentity:
+    return CheckpointSourceIdentity(
+        detector=CheckpointDetectorIdentity("synthetic-detector", "synthetic-v1"),
+        profile=_profile(direction),
+        frame_source_id="synthetic-frame-source",
+        capture_session_id=session_id,
     )
 
 
 def _context(direction: RouteDirection = RouteDirection.MINE_TO_BANK) -> RouteEvaluationContext:
     return RouteEvaluationContext(
         plan=_plan(direction),
-        expected_source=_source(),
+        expected_source=_source(direction=direction),
         policy=NavigationPolicy(max_frame_age_s=0.5, minimum_confidence=0.9),
     )
 
@@ -114,13 +141,19 @@ def _observation(
         candidates = () if checkpoint_id is None else (checkpoint_id,)
     return CheckpointObservation(
         route=context.plan.identity if route is None else route,
-        provenance=FrameProvenance(
-            context.expected_source if source is None else source,
-            FrameRef(frame_id, captured_monotonic_s, 64, 48),
+        evidence=CheckpointEvidence(
+            provenance=FrameProvenance(
+                context.expected_source if source is None else source,
+                FrameRef(frame_id, captured_monotonic_s, 64, 48),
+                PixelFormat.BGRA8888,
+                Sha256Digest.from_bytes(f"synthetic-frame-{frame_id}".encode()),
+            ),
+            detection=CheckpointDetection(
+                match=match,
+                candidate_checkpoint_ids=candidates,
+                confidence=confidence,
+            ),
         ),
-        match=match,
-        candidate_checkpoint_ids=candidates,
-        confidence=confidence,
     )
 
 
@@ -284,9 +317,19 @@ def test_observation_rejects_invalid_confidence(confidence: float) -> None:
 
 def test_frame_provenance_requires_positive_frame_identity_and_exact_geometry() -> None:
     with pytest.raises(ValueError, match="positive captured frame"):
-        FrameProvenance(_source(), FrameRef(0, 1.0, 64, 48))
+        FrameProvenance(
+            _source(),
+            FrameRef(0, 1.0, 64, 48),
+            PixelFormat.BGRA8888,
+            Sha256Digest.from_bytes(b"frame"),
+        )
     with pytest.raises(ValueError, match="geometry"):
-        FrameProvenance(_source(), FrameRef(1, 1.0, 63, 48))
+        FrameProvenance(
+            _source(),
+            FrameRef(1, 1.0, 63, 48),
+            PixelFormat.BGRA8888,
+            Sha256Digest.from_bytes(b"frame"),
+        )
 
 
 def test_public_nested_contracts_fail_with_value_error() -> None:
@@ -784,10 +827,12 @@ def test_direct_progress_history_must_use_the_bound_source() -> None:
             accepted_checkpoint_count=1,
             evidence_boundary_monotonic_s=100.2,
             last_transition_monotonic_s=100.2,
-            last_accepted_provenance=FrameProvenance(
-                _source("foreign-session"),
-                FrameRef(10, 100.0, 64, 48),
-            ),
+                last_accepted_provenance=FrameProvenance(
+                    _source("foreign-session"),
+                    FrameRef(10, 100.0, 64, 48),
+                    PixelFormat.BGRA8888,
+                    Sha256Digest.from_bytes(b"synthetic-frame-10"),
+                ),
         )
 
 
@@ -955,7 +1000,7 @@ def test_manifest_rejects_malformed_or_scope_claiming_data(tmp_path: Path, case:
     if case == "extra_root_key":
         data["real_route_claim"] = True
     elif case == "wrong_schema":
-        data["schema_version"] = 2
+        data["schema_version"] = 999
     elif case == "non_synthetic_role":
         data["fixture_role"] = "production_varrock_route"
     elif case == "boolean_frame_id":

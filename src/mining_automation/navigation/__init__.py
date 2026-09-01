@@ -1,10 +1,24 @@
 """Offline fixed-route checkpoint navigation foundation."""
 
+from .checkpoint_evidence import (
+    CheckpointDetector,
+    CheckpointDetectorContractError,
+    CheckpointDetectorExecutionError,
+    CheckpointEvidenceError,
+    bind_checkpoint_evidence,
+    run_checkpoint_detector,
+)
 from .contracts import (
     ArrivalEvidence,
     Checkpoint,
+    CheckpointDetection,
+    CheckpointDetectorIdentity,
+    CheckpointEvidence,
+    CheckpointEvidenceRole,
     CheckpointMatchKind,
     CheckpointObservation,
+    CheckpointProfile,
+    CheckpointProfileIdentity,
     CheckpointRole,
     CheckpointSourceIdentity,
     FrameProvenance,
@@ -23,14 +37,25 @@ from .contracts import (
     RoutePlan,
     RouteProgress,
     RouteStep,
+    Sha256Digest,
 )
 from .machine import observe_checkpoint, prepare_step, start_route
 
 __all__ = [
     "ArrivalEvidence",
     "Checkpoint",
+    "CheckpointDetection",
+    "CheckpointDetector",
+    "CheckpointDetectorContractError",
+    "CheckpointDetectorExecutionError",
+    "CheckpointDetectorIdentity",
+    "CheckpointEvidence",
+    "CheckpointEvidenceError",
+    "CheckpointEvidenceRole",
     "CheckpointMatchKind",
     "CheckpointObservation",
+    "CheckpointProfile",
+    "CheckpointProfileIdentity",
     "CheckpointRole",
     "CheckpointSourceIdentity",
     "FrameProvenance",
@@ -49,7 +74,10 @@ __all__ = [
     "RoutePlan",
     "RouteProgress",
     "RouteStep",
+    "Sha256Digest",
+    "bind_checkpoint_evidence",
     "observe_checkpoint",
     "prepare_step",
+    "run_checkpoint_detector",
     "start_route",
 ]

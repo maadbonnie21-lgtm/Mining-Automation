@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "fixture_role": "synthetic_navigation_architecture_test_only",
   "case_id": "synthetic_mine_to_bank_happy_path",
   "started_monotonic_s": 9.9,
@@ -33,10 +33,21 @@
     "expected_source": {
       "detector_id": "synthetic-checkpoint-detector",
       "detector_version": "synthetic-v1",
+      "profile_id": "synthetic-m2b-profile",
+      "profile_version": "synthetic-v1",
+      "profile_sha256": "8f08078ae20ace05fb50fa1041bbd526f408a97849434baa41b29318ad658260",
+      "evidence_role": "synthetic_checkpoint_architecture_test_only",
       "frame_source_id": "synthetic-frame-source",
       "capture_session_id": "synthetic-session-m2b",
       "frame_width": 64,
-      "frame_height": 48
+      "frame_height": 48,
+      "pixel_format": "bgra8888",
+      "checkpoint_ids": [
+        "synthetic-mine-departure",
+        "synthetic-m2b-transit",
+        "synthetic-bank-arrival",
+        "synthetic-foreign"
+      ]
     },
     "policy": {"max_frame_age_s": 0.5, "minimum_confidence": 0.9}
   },
@@ -54,12 +65,25 @@
           "source": {
             "detector_id": "synthetic-checkpoint-detector",
             "detector_version": "synthetic-v1",
+            "profile_id": "synthetic-m2b-profile",
+            "profile_version": "synthetic-v1",
+            "profile_sha256": "8f08078ae20ace05fb50fa1041bbd526f408a97849434baa41b29318ad658260",
+            "evidence_role": "synthetic_checkpoint_architecture_test_only",
             "frame_source_id": "synthetic-frame-source",
             "capture_session_id": "synthetic-session-m2b",
             "frame_width": 64,
-            "frame_height": 48
+            "frame_height": 48,
+            "pixel_format": "bgra8888",
+            "checkpoint_ids": [
+              "synthetic-mine-departure",
+              "synthetic-m2b-transit",
+              "synthetic-bank-arrival",
+              "synthetic-foreign"
+            ]
           },
-          "frame": {"frame_id": 1, "captured_monotonic_s": 10.0, "width": 64, "height": 48}
+          "frame": {"frame_id": 1, "captured_monotonic_s": 10.0, "width": 64, "height": 48},
+          "pixel_format": "bgra8888",
+          "frame_payload_sha256": "bcfb002a32e34259a61e68d956257f64a0387a7733731c90a8245bbcdec7c98a"
         },
         "match": "matched",
         "candidate_checkpoint_ids": ["synthetic-mine-departure"],
@@ -99,12 +123,25 @@
           "source": {
             "detector_id": "synthetic-checkpoint-detector",
             "detector_version": "synthetic-v1",
+            "profile_id": "synthetic-m2b-profile",
+            "profile_version": "synthetic-v1",
+            "profile_sha256": "8f08078ae20ace05fb50fa1041bbd526f408a97849434baa41b29318ad658260",
+            "evidence_role": "synthetic_checkpoint_architecture_test_only",
             "frame_source_id": "synthetic-frame-source",
             "capture_session_id": "synthetic-session-m2b",
             "frame_width": 64,
-            "frame_height": 48
+            "frame_height": 48,
+            "pixel_format": "bgra8888",
+            "checkpoint_ids": [
+              "synthetic-mine-departure",
+              "synthetic-m2b-transit",
+              "synthetic-bank-arrival",
+              "synthetic-foreign"
+            ]
           },
-          "frame": {"frame_id": 2, "captured_monotonic_s": 10.3, "width": 64, "height": 48}
+          "frame": {"frame_id": 2, "captured_monotonic_s": 10.3, "width": 64, "height": 48},
+          "pixel_format": "bgra8888",
+          "frame_payload_sha256": "be3fc6925318273fed9eb99fad0f71b0572044845718618032383bf0f28f7eba"
         },
         "match": "matched",
         "candidate_checkpoint_ids": ["synthetic-m2b-transit"],
@@ -144,12 +181,25 @@
           "source": {
             "detector_id": "synthetic-checkpoint-detector",
             "detector_version": "synthetic-v1",
+            "profile_id": "synthetic-m2b-profile",
+            "profile_version": "synthetic-v1",
+            "profile_sha256": "8f08078ae20ace05fb50fa1041bbd526f408a97849434baa41b29318ad658260",
+            "evidence_role": "synthetic_checkpoint_architecture_test_only",
             "frame_source_id": "synthetic-frame-source",
             "capture_session_id": "synthetic-session-m2b",
             "frame_width": 64,
-            "frame_height": 48
+            "frame_height": 48,
+            "pixel_format": "bgra8888",
+            "checkpoint_ids": [
+              "synthetic-mine-departure",
+              "synthetic-m2b-transit",
+              "synthetic-bank-arrival",
+              "synthetic-foreign"
+            ]
           },
-          "frame": {"frame_id": 3, "captured_monotonic_s": 10.6, "width": 64, "height": 48}
+          "frame": {"frame_id": 3, "captured_monotonic_s": 10.6, "width": 64, "height": 48},
+          "pixel_format": "bgra8888",
+          "frame_payload_sha256": "628a922332723fe8e521812b4b0afc717981235f0f6ef9cc464b9322cab9ae76"
         },
         "match": "matched",
         "candidate_checkpoint_ids": ["synthetic-bank-arrival"],

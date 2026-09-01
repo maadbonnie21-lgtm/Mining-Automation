@@ -8,18 +8,27 @@ expected to arrive later through separately validated evidence.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from enum import StrEnum
+from hashlib import sha256
 from math import isfinite
 from typing import Literal
 
+from ..capture.frame import PixelFormat
 from ..contracts import FrameRef
 
 __all__ = [
     "ArrivalEvidence",
     "Checkpoint",
+    "CheckpointDetection",
+    "CheckpointDetectorIdentity",
+    "CheckpointEvidence",
+    "CheckpointEvidenceRole",
     "CheckpointMatchKind",
     "CheckpointObservation",
+    "CheckpointProfile",
+    "CheckpointProfileIdentity",
     "CheckpointRole",
     "CheckpointSourceIdentity",
     "FrameProvenance",
@@ -38,6 +47,7 @@ __all__ = [
     "RoutePlan",
     "RouteProgress",
     "RouteStep",
+    "Sha256Digest",
 ]
 
 
@@ -63,6 +73,110 @@ def _require_identifier(value: object, field_name: str) -> str:
     ):
         raise ValueError(f"{field_name} must be a non-empty, trimmed, printable string")
     return value
+
+
+@dataclass(frozen=True, slots=True)
+class Sha256Digest:
+    """Exact lowercase SHA-256 used by navigation evidence contracts."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.value, str)
+            or len(self.value) != 64
+            or any(character not in "0123456789abcdef" for character in self.value)
+        ):
+            raise ValueError("SHA-256 must be exactly 64 lowercase hexadecimal characters")
+
+    @classmethod
+    def from_bytes(cls, payload: bytes) -> Sha256Digest:
+        if not isinstance(payload, bytes):
+            raise ValueError("SHA-256 payload must be immutable bytes")
+        return cls(sha256(payload).hexdigest())
+
+
+class CheckpointEvidenceRole(StrEnum):
+    """Closed evidence role for this offline-only architecture branch."""
+
+    SYNTHETIC_ARCHITECTURE_TEST_ONLY = "synthetic_checkpoint_architecture_test_only"
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointDetectorIdentity:
+    detector_id: str
+    version: str
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.detector_id, "checkpoint detector id")
+        _require_identifier(self.version, "checkpoint detector version")
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointProfileIdentity:
+    profile_id: str
+    version: str
+    content_sha256: Sha256Digest
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.profile_id, "checkpoint profile id")
+        _require_identifier(self.version, "checkpoint profile version")
+        if not isinstance(self.content_sha256, Sha256Digest):
+            raise ValueError("checkpoint profile content digest must be Sha256Digest")
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointProfile:
+    """Route-independent detector profile with no geometry or input targets."""
+
+    profile_id: str
+    version: str
+    evidence_role: CheckpointEvidenceRole
+    frame_width: int
+    frame_height: int
+    pixel_format: PixelFormat
+    checkpoint_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.profile_id, "checkpoint profile id")
+        _require_identifier(self.version, "checkpoint profile version")
+        if not isinstance(self.evidence_role, CheckpointEvidenceRole):
+            raise ValueError("checkpoint profile evidence role must be CheckpointEvidenceRole")
+        if not _is_integer(self.frame_width) or self.frame_width <= 0:
+            raise ValueError("checkpoint profile frame width must be a positive integer")
+        if not _is_integer(self.frame_height) or self.frame_height <= 0:
+            raise ValueError("checkpoint profile frame height must be a positive integer")
+        if not isinstance(self.pixel_format, PixelFormat):
+            raise ValueError("checkpoint profile pixel format must be PixelFormat")
+        if not isinstance(self.checkpoint_ids, tuple) or not self.checkpoint_ids:
+            raise ValueError("checkpoint profile ids must be a non-empty tuple")
+        for checkpoint_id in self.checkpoint_ids:
+            _require_identifier(checkpoint_id, "checkpoint profile checkpoint id")
+        if len(set(self.checkpoint_ids)) != len(self.checkpoint_ids):
+            raise ValueError("checkpoint profile checkpoint ids must be unique")
+
+    @property
+    def identity(self) -> CheckpointProfileIdentity:
+        canonical = json.dumps(
+            {
+                "checkpoint_ids": self.checkpoint_ids,
+                "evidence_role": self.evidence_role.value,
+                "frame_height": self.frame_height,
+                "frame_width": self.frame_width,
+                "pixel_format": self.pixel_format.value,
+                "profile_id": self.profile_id,
+                "version": self.version,
+            },
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("ascii") + b"\n"
+        return CheckpointProfileIdentity(
+            self.profile_id,
+            self.version,
+            Sha256Digest.from_bytes(canonical),
+        )
 
 
 class RouteDirection(StrEnum):
@@ -254,30 +368,56 @@ class RoutePlan:
 
 @dataclass(frozen=True, slots=True)
 class CheckpointSourceIdentity:
-    """Exact detector and capture stream expected for one navigation run."""
+    """Exact route-independent detector profile and capture stream identity."""
 
-    detector_id: str
-    detector_version: str
+    detector: CheckpointDetectorIdentity
+    profile: CheckpointProfile
     frame_source_id: str
     capture_session_id: str
-    frame_width: int
-    frame_height: int
 
     def __post_init__(self) -> None:
-        _require_identifier(self.detector_id, "detector_id")
-        _require_identifier(self.detector_version, "detector_version")
+        if not isinstance(self.detector, CheckpointDetectorIdentity):
+            raise ValueError("checkpoint source detector must be CheckpointDetectorIdentity")
+        if not isinstance(self.profile, CheckpointProfile):
+            raise ValueError("checkpoint source profile must be CheckpointProfile")
         _require_identifier(self.frame_source_id, "frame_source_id")
         _require_identifier(self.capture_session_id, "capture_session_id")
-        if not _is_integer(self.frame_width) or self.frame_width <= 0:
-            raise ValueError("frame_width must be a positive integer")
-        if not _is_integer(self.frame_height) or self.frame_height <= 0:
-            raise ValueError("frame_height must be a positive integer")
+
+    @property
+    def detector_id(self) -> str:
+        return self.detector.detector_id
+
+    @property
+    def detector_version(self) -> str:
+        return self.detector.version
+
+    @property
+    def profile_identity(self) -> CheckpointProfileIdentity:
+        return self.profile.identity
+
+    @property
+    def evidence_role(self) -> CheckpointEvidenceRole:
+        return self.profile.evidence_role
+
+    @property
+    def frame_width(self) -> int:
+        return self.profile.frame_width
+
+    @property
+    def frame_height(self) -> int:
+        return self.profile.frame_height
+
+    @property
+    def pixel_format(self) -> PixelFormat:
+        return self.profile.pixel_format
 
 
 @dataclass(frozen=True, slots=True)
 class FrameProvenance:
     source: CheckpointSourceIdentity
     frame: FrameRef
+    pixel_format: PixelFormat
+    frame_payload_sha256: Sha256Digest
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, CheckpointSourceIdentity):
@@ -288,28 +428,30 @@ class FrameProvenance:
             raise ValueError("checkpoint frame time must be finite and representable")
         if self.frame.frame_id < 1:
             raise ValueError("checkpoint evidence requires a positive captured frame id")
+        if not isinstance(self.pixel_format, PixelFormat):
+            raise ValueError("checkpoint evidence pixel format must be PixelFormat")
+        if not isinstance(self.frame_payload_sha256, Sha256Digest):
+            raise ValueError("checkpoint frame payload digest must be Sha256Digest")
         if (self.frame.width, self.frame.height) != (
             self.source.frame_width,
             self.source.frame_height,
         ):
             raise ValueError("frame geometry must match its declared checkpoint source")
+        if self.pixel_format is not self.source.pixel_format:
+            raise ValueError("frame pixel format must match its declared checkpoint source")
 
 
 @dataclass(frozen=True, slots=True)
-class CheckpointObservation:
-    route: RouteIdentity
-    provenance: FrameProvenance
+class CheckpointDetection:
+    """Route-free detector classification for one checkpoint profile."""
+
     match: CheckpointMatchKind
     candidate_checkpoint_ids: tuple[str, ...]
     confidence: float
 
     def __post_init__(self) -> None:
-        if not isinstance(self.route, RouteIdentity):
-            raise ValueError("observation route must be a RouteIdentity")
-        if not isinstance(self.provenance, FrameProvenance):
-            raise ValueError("observation provenance must be FrameProvenance")
         if not isinstance(self.match, CheckpointMatchKind):
-            raise ValueError("observation match must be a CheckpointMatchKind")
+            raise ValueError("checkpoint detection match must be CheckpointMatchKind")
         if not isinstance(self.candidate_checkpoint_ids, tuple):
             raise ValueError("candidate_checkpoint_ids must be a tuple")
         for checkpoint_id in self.candidate_checkpoint_ids:
@@ -318,19 +460,73 @@ class CheckpointObservation:
             raise ValueError("candidate checkpoint ids must be unique")
         candidate_count = len(self.candidate_checkpoint_ids)
         if self.match is CheckpointMatchKind.UNKNOWN and candidate_count != 0:
-            raise ValueError("unknown observations cannot name checkpoint candidates")
+            raise ValueError("unknown detections cannot name checkpoint candidates")
         if self.match is CheckpointMatchKind.MATCHED and candidate_count != 1:
-            raise ValueError("matched observations must name exactly one checkpoint")
+            raise ValueError("matched detections must name exactly one checkpoint")
         if self.match is CheckpointMatchKind.AMBIGUOUS and candidate_count < 2:
-            raise ValueError("ambiguous observations must name at least two checkpoints")
+            raise ValueError("ambiguous detections must name at least two checkpoints")
         if not _is_finite_number(self.confidence) or not 0.0 <= self.confidence <= 1.0:
-            raise ValueError("observation confidence must be finite and between 0 and 1")
+            raise ValueError("detection confidence must be finite and between 0 and 1")
 
     @property
     def matched_checkpoint_id(self) -> str | None:
         if self.match is CheckpointMatchKind.MATCHED:
             return self.candidate_checkpoint_ids[0]
         return None
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointEvidence:
+    """Digest-bound, route-free evidence returned by the guarded detector seam."""
+
+    provenance: FrameProvenance
+    detection: CheckpointDetection
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.provenance, FrameProvenance):
+            raise ValueError("checkpoint evidence provenance must be FrameProvenance")
+        if not isinstance(self.detection, CheckpointDetection):
+            raise ValueError("checkpoint evidence detection must be CheckpointDetection")
+        allowed_ids = set(self.provenance.source.profile.checkpoint_ids)
+        if any(
+            checkpoint_id not in allowed_ids
+            for checkpoint_id in self.detection.candidate_checkpoint_ids
+        ):
+            raise ValueError("checkpoint detection names an id outside its profile")
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointObservation:
+    """One route binding around detector-owned checkpoint evidence."""
+
+    route: RouteIdentity
+    evidence: CheckpointEvidence
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.route, RouteIdentity):
+            raise ValueError("observation route must be a RouteIdentity")
+        if not isinstance(self.evidence, CheckpointEvidence):
+            raise ValueError("observation evidence must be CheckpointEvidence")
+
+    @property
+    def provenance(self) -> FrameProvenance:
+        return self.evidence.provenance
+
+    @property
+    def match(self) -> CheckpointMatchKind:
+        return self.evidence.detection.match
+
+    @property
+    def candidate_checkpoint_ids(self) -> tuple[str, ...]:
+        return self.evidence.detection.candidate_checkpoint_ids
+
+    @property
+    def confidence(self) -> float:
+        return self.evidence.detection.confidence
+
+    @property
+    def matched_checkpoint_id(self) -> str | None:
+        return self.evidence.detection.matched_checkpoint_id
 
 
 @dataclass(frozen=True, slots=True)
