@@ -292,9 +292,13 @@ def _validate_stage(
         label=f"{name} stage",
     )
     _strict_exact_string(stage["status"], _STAGE_STATUS[name], label=f"{name} status")
-    current_identifiers = tuple(
-        _strict_nonempty_string(stage[field], label=f"{name} {field}")
-        for field in ("authorization_id", "campaign_id", "dataset_id", "session_id")
+    current_identifiers = (
+        _strict_nonempty_string(
+            stage["authorization_id"], label=f"{name} authorization_id"
+        ),
+        _strict_nonempty_string(stage["campaign_id"], label=f"{name} campaign_id"),
+        _strict_nonempty_string(stage["dataset_id"], label=f"{name} dataset_id"),
+        _strict_nonempty_string(stage["session_id"], label=f"{name} session_id"),
     )
     if identifiers is not None and current_identifiers != identifiers:
         raise InventoryReleaseReceiptUnavailable(f"{name} stage crossed release lineages")
@@ -447,6 +451,7 @@ def _validate_source_owned_record(record: object) -> dict[str, object]:
 
     authorization = stage_values["authorization"]
     campaign = stage_values["campaign"]
+    review = stage_values["review"]
     evaluation = stage_values["terminal_evaluation"]
     source_approval = stage_values["source_approval"]
     identity_approval = stage_values["production_identity_approval"]
