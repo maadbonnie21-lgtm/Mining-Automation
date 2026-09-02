@@ -96,6 +96,11 @@ Sub-workflows may use their own states but must expose deterministic transitions
 
 An input event only means `attempted`. Success requires later evidence from perception/state. Timeouts produce a failure/recovery path, not inferred success.
 
+The offline constrained-v1 perception authority boundary is documented in
+[`V1_VERTICAL_SLICE_PERCEPTION_CONTRACT.md`](V1_VERTICAL_SLICE_PERCEPTION_CONTRACT.md).
+It is a deny-only integration contract and does not activate `WorldState`, the
+controller, navigation, banking, or input.
+
 ## Support envelope
 
 Support is data-driven and explicit. A location cannot be marked production-supported until required detectors, navigation, banking, recovery, integration tests, and real validation satisfy release gates.
