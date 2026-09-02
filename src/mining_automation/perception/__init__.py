@@ -113,6 +113,10 @@ from .resource_release_campaign import (
     verify_review_package,
     write_release_summary,
 )
+from .resource_replay_promotion import (
+    prepare_replay_promotion_proposals,
+    verify_replay_promotion_proposals,
+)
 from .scene_diagnostics import (
     DEFAULT_DIAGNOSTIC_SEARCH_RADIUS,
     MAXIMUM_DIAGNOSTIC_SEARCH_RADIUS,
@@ -233,6 +237,7 @@ __all__ = [
     "load_review_decision",
     "prepare_case_review",
     "prepare_release_followup_inputs",
+    "prepare_replay_promotion_proposals",
     "load_resource_detector_profile",
     "load_resource_fixture_draft",
     "load_varrock_east_iron_profile",
@@ -252,6 +257,7 @@ __all__ = [
     "seal_campaign",
     "verify_review_package",
     "verify_release_followup_inputs",
+    "verify_replay_promotion_proposals",
     "trust_varrock_east_iron_observations",
     "validate_detector",
     "varrock_east_iron_scene_excluded_regions",

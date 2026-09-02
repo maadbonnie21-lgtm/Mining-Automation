@@ -30,6 +30,10 @@ from .resource_release_campaign import (
     verify_review_package,
     write_release_summary,
 )
+from .resource_replay_promotion import (
+    prepare_replay_promotion_proposals,
+    verify_replay_promotion_proposals,
+)
 
 __all__ = ["build_parser", "main"]
 
@@ -120,6 +124,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify_followup.add_argument("--inputs", type=Path, required=True)
     verify_followup.add_argument("--expected-sha256", required=True)
+
+    proposals = subparsers.add_parser(
+        "prepare-replay-proposals",
+        help="prepare deny-only fixture/evaluator proposals from retained failures",
+    )
+    proposals.add_argument("--followup", type=Path, required=True)
+    proposals.add_argument("--expected-followup-sha256", required=True)
+    proposals.add_argument("--package", type=Path, required=True)
+    proposals.add_argument("--expected-package-manifest-sha256", required=True)
+    proposals.add_argument("--output", type=Path, required=True)
+
+    verify_proposals = subparsers.add_parser(
+        "verify-replay-proposals",
+        help="verify deny-only replay proposals against a retained manifest root",
+    )
+    verify_proposals.add_argument("--proposal", type=Path, required=True)
+    verify_proposals.add_argument("--expected-manifest-sha256", required=True)
     return parser
 
 
@@ -342,6 +363,25 @@ def main(argv: list[str] | None = None, *, repository_root: Path | None = None) 
                 verify_release_followup_inputs(
                     arguments.inputs,
                     expected_sha256=arguments.expected_sha256,
+                )
+            )
+        elif arguments.command == "prepare-replay-proposals":
+            _print_json(
+                prepare_replay_promotion_proposals(
+                    arguments.followup,
+                    arguments.package,
+                    arguments.output,
+                    expected_followup_sha256=arguments.expected_followup_sha256,
+                    expected_package_manifest_sha256=(
+                        arguments.expected_package_manifest_sha256
+                    ),
+                )
+            )
+        elif arguments.command == "verify-replay-proposals":
+            _print_json(
+                verify_replay_promotion_proposals(
+                    arguments.proposal,
+                    expected_manifest_sha256=arguments.expected_manifest_sha256,
                 )
             )
         else:  # pragma: no cover - argparse enforces the command set

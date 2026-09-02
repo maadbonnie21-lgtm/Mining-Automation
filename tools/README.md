@@ -33,9 +33,15 @@ independently retained export manifest SHA-256, then rehashes and replays
 that package without private pixels. `prepare-followup` uses the same retained
 root to emit a deterministic, nonactivating replay-candidate queue and C2
 envelope-review input artifact; `verify-followup` requires its separately
-retained SHA-256 and strictly reconstructs its deny-only projections. Neither
-command can approve or promote anything. The live source gate is intentionally
-false in this branch, so `capture-next` fails before opening a Windows backend.
+retained SHA-256 and strictly reconstructs its deny-only projections.
+`prepare-replay-proposals` then requires both retained roots and emits only
+manifest-last, privacy-safe fixture/evaluator proposal inputs for exact
+source-owned replay candidates. It embeds the canonical privacy-safe follow-up
+so `verify-replay-proposals` can reconstruct selection while requiring a
+separately retained proposal-manifest root. None of these commands can adopt a
+fixture, approve an envelope, release perception, activate runtime authority,
+or grant input. The live source gate is intentionally false in this branch, so
+`capture-next` fails before opening a Windows backend.
 See `docs/RESOURCE_RELEASE_CAMPAIGN.md`.
 
 - `validate_varrock_east_drift.py` — run the Issue #22 drift-safety and
