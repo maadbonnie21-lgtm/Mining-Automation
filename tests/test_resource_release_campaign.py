@@ -26,6 +26,7 @@ from mining_automation.capture.testing import FakeCaptureBackend, ManualClock
 from mining_automation.perception import resource_release_campaign as campaign
 from mining_automation.perception import resource_release_campaign_cli as campaign_cli
 from mining_automation.perception import resource_release_decision as release_decision
+from mining_automation.perception import resource_release_endurance as release_endurance
 from mining_automation.perception import resource_replay_promotion as replay_promotion
 from mining_automation.perception.resource import ResourceVisualState
 
@@ -4899,3 +4900,71 @@ def test_hashed_artifact_verifier_rejects_trailing_sidecar_bytes(
 
     with pytest.raises(campaign.CampaignIntegrityError, match="sidecar size"):
         campaign._verify_hashed_artifact(output, expected=digest)
+
+
+def test_resource_release_endurance_uses_complete_public_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (
+        package,
+        followup,
+        proposal,
+        package_sha,
+        followup_sha,
+        proposal_sha,
+    ) = _resource_release_decision_inputs(
+        monkeypatch,
+        tmp_path.parent / "a6-public-chain",
+    )
+    decision = tmp_path / "release-decision.json"
+    decision_result = release_decision.prepare_resource_release_decision(
+        followup,
+        package,
+        decision,
+        expected_followup_sha256=followup_sha,
+        expected_package_manifest_sha256=package_sha,
+        proposal_dir=proposal,
+        expected_proposal_manifest_sha256=proposal_sha,
+    )
+    followup_value = _load_followup(followup)
+    source = cast(dict[str, object], followup_value["source_snapshot"])
+    repository = cast(dict[str, object], source["repository"])
+    expectation = release_endurance.ResourceReleaseChainExpectation(
+        session_id=cast(str, source["session_id"]),
+        repository_head_sha=cast(str, repository["head_sha"]),
+        package_manifest_sha256=package_sha,
+        followup_sha256=followup_sha,
+        proposal_manifest_sha256=proposal_sha,
+        decision_sha256=cast(str, decision_result["sha256"]),
+    )
+    report = tmp_path / "endurance.json"
+
+    written = release_endurance.write_resource_release_endurance_report(
+        package,
+        followup,
+        decision,
+        report,
+        proposal_dir=proposal,
+        expectation=expectation,
+    )
+    verified = release_endurance.verify_resource_release_endurance_report(
+        report,
+        package,
+        followup,
+        decision,
+        proposal_dir=proposal,
+        expectation=expectation,
+        expected_report_sha256=cast(str, written["sha256"]),
+    )
+
+    assert written["status"] == "INTEGRITY_ONLY_NO_AUTHORITY"
+    assert verified["verified"] is True
+    assert verified["verification_rounds"] == 3
+    assert verified["release_eligible"] is False
+    assert verified["promotion_allowed"] is False
+    assert verified["receipt_authority"] is False
+    assert verified["activation_allowed"] is False
+    assert verified["world_state_authority"] is False
+    assert verified["controller_authority"] is False
+    assert verified["input_authority"] is False
