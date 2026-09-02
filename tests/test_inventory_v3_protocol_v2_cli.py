@@ -21,6 +21,7 @@ _LAUNCHER = Path(launcher.__file__).resolve(strict=True)
 _HEAD = "a" * 40
 _DIRECT_IMPORT_TEST_MODULES = (
     "test_inventory_v3_protocol_v2_bridge.py",
+    "test_inventory_v3_protocol_v2_c3_rehearsal.py",
     "test_inventory_v3_protocol_v2_cli.py",
     "test_inventory_v3_protocol_v2_lock_shadows.py",
     "test_inventory_v3_protocol_v2_package_tree.py",
