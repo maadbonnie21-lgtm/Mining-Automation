@@ -107,6 +107,12 @@ are specified in
 That design remains non-executable until both perception release lineages are
 independently approved; it grants no controller or input authority.
 
+The exact source transition from reviewed resource evidence to a nominal
+receipt, then to the future same-cycle join and Issue #14, is frozen in
+[`RESOURCE_RELEASE_TO_FIRST_MINING_SLICE_TRANSITION.md`](RESOURCE_RELEASE_TO_FIRST_MINING_SLICE_TRANSITION.md).
+It is a two-commit, preparatory release protocol and currently grants no
+receipt, positive perception path, controller, or input authority.
+
 ## Support envelope
 
 Support is data-driven and explicit. A location cannot be marked production-supported until required detectors, navigation, banking, recovery, integration tests, and real validation satisfy release gates.
