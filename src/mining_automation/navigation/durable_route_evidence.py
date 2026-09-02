@@ -1171,10 +1171,6 @@ def load_durable_acquisition(
                 )
             size_limits[artifact.relative_path] = artifact.size_bytes
     initial_tree = _assert_exact_tree(root_path, expected_files)
-    if _physical_identity_sha256(root_signature, initial_tree) != (
-        owned_expectation.acquisition_physical_identity_sha256
-    ):
-        raise RouteEvidenceIntegrityError("durable acquisition physical identity differs")
     snapshots = {
         relative: _read_owned_file(root_path, relative, size_limits[relative])
         for relative in sorted(expected_files)
@@ -1224,6 +1220,10 @@ def load_durable_acquisition(
     ):
         raise RouteEvidenceIntegrityError("durable acquisition finalization digest differs")
     _require_package_expectation(package, owned_expectation)
+    if _physical_identity_sha256(root_signature, initial_tree) != (
+        owned_expectation.acquisition_physical_identity_sha256
+    ):
+        raise RouteEvidenceIntegrityError("durable acquisition physical identity differs")
     _assert_stable_intake(root_path, root_signature, initial_tree, snapshots, size_limits)
     return VerifiedDurableAcquisition(
         package=package,
@@ -2061,10 +2061,6 @@ def load_and_verify_durable_synthetic_route_evidence(
     }
     size_limits = {relative: _MAX_MANIFEST_BYTES for relative in expected_files}
     initial_tree = _assert_exact_tree(root_path, expected_files)
-    if _physical_identity_sha256(root_signature, initial_tree) != (
-        owned_expectation.review_physical_identity_sha256
-    ):
-        raise RouteEvidenceIntegrityError("durable review physical identity differs")
     snapshots = {
         relative: _read_owned_file(root_path, relative, size_limits[relative])
         for relative in sorted(expected_files)
@@ -2140,6 +2136,10 @@ def load_and_verify_durable_synthetic_route_evidence(
         owned_expectation.review_finalization_sha256
     ):
         raise RouteEvidenceIntegrityError("durable review finalization digest differs")
+    if _physical_identity_sha256(root_signature, initial_tree) != (
+        owned_expectation.review_physical_identity_sha256
+    ):
+        raise RouteEvidenceIntegrityError("durable review physical identity differs")
     report = verify_synthetic_route_evidence(
         package,
         review,
