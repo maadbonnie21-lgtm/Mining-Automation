@@ -12,8 +12,9 @@ target authority.
 > Windows capture backend. Do not run the real campaign until Tyler explicitly
 > authorizes a separately reviewed enable-only change. Do not create the real
 > session on this readiness head: sessions bind the exact head and cannot be
-> carried across that future gate flip. Sessions created here are test/status
-> evidence only.
+> carried across that future gate flip. The `start` CLI refuses before
+> repository inspection, session creation, or backend access while the source
+> gate is false; direct test-only sessions remain non-release evidence.
 
 ## Frozen observation plan
 

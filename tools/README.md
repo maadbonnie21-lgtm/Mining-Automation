@@ -50,6 +50,12 @@ intentionally false in this branch, so `capture-next` fails before opening a
 Windows backend.
 See `docs/RESOURCE_RELEASE_CAMPAIGN.md`.
 
+The same tool's `prepare-live-readiness` and `verify-live-readiness` commands
+publish and check the A8 metadata-only future execution checklist. The output
+must be outside the repository and verification requires an independently
+retained SHA-256. Preparation cannot create a session or open a backend, and it
+does not authorize capture. See `docs/RESOURCE_RELEASE_LIVE_READINESS.md`.
+
 - `validate_varrock_east_drift.py` — run the Issue #22 drift-safety and
   reacquisition diagnosis in one command:
 
