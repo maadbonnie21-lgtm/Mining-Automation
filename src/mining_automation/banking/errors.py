@@ -16,7 +16,6 @@ __all__ = [
     "BankDetectorContractError",
     "BankDetectorExecutionError",
     "BankingError",
-    "IntegrationBoundaryContractError",
 ]
 
 
@@ -32,13 +31,4 @@ class BankDetectorExecutionError(BankingError):
     """A bank detector raised while processing a frame.
 
     The original exception is retained as ``__cause__`` by the guarded runner.
-    """
-
-
-class IntegrationBoundaryContractError(BankingError):
-    """An external navigation/inventory source violated the integration boundary.
-
-    Raised by :mod:`mining_automation.banking.integration_boundary` when a
-    value claiming to be a future Codex B arrival result or Codex C inventory
-    result does not conform to the minimal shape this package requires.
     """

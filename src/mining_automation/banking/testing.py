@@ -22,9 +22,11 @@ from .contracts import (
     PostDepositInventoryObservation,
     PreDepositInventoryObservation,
 )
+from .perception import BankDetectorMetadata
 
 __all__ = [
     "SYNTHETIC_BANK_CHECKPOINT",
+    "SYNTHETIC_BANK_DETECTOR_METADATA",
     "SYNTHETIC_BANK_PROFILE",
     "SYNTHETIC_DETECTOR_ID",
     "SYNTHETIC_DETECTOR_VERSION",
@@ -40,6 +42,10 @@ __all__ = [
 
 SYNTHETIC_DETECTOR_ID = "synthetic-bank-detector"
 SYNTHETIC_DETECTOR_VERSION = "0.0.0-synthetic"
+SYNTHETIC_BANK_DETECTOR_METADATA = BankDetectorMetadata(
+    SYNTHETIC_DETECTOR_ID,
+    SYNTHETIC_DETECTOR_VERSION,
+)
 
 SYNTHETIC_BANK_CHECKPOINT = BankCheckpointIdentity(
     checkpoint_id="synthetic-checkpoint",

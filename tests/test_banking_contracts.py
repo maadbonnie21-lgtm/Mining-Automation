@@ -28,6 +28,23 @@ from mining_automation.banking.testing import (
 from mining_automation.contracts import FrameRef
 
 
+class _OverloadedInt(int):
+    def __lt__(self, other: object) -> bool:
+        return False
+
+
+class _OverloadedFloat(float):
+    def __lt__(self, other: object) -> bool:
+        return False
+
+
+class _OverloadedString(str):
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    __hash__ = str.__hash__
+
+
 def test_bank_interface_state_members() -> None:
     assert {member.value for member in BankInterfaceState} == {"unknown", "closed", "open"}
 
@@ -100,11 +117,36 @@ def test_bank_evidence_provenance_rejects_non_exact_frame() -> None:
 
 
 @pytest.mark.parametrize(
+    "frame",
+    [
+        FrameRef(_OverloadedInt(1), 0.0, 1, 1),
+        FrameRef(1, _OverloadedFloat(0.0), 1, 1),
+    ],
+)
+def test_bank_evidence_provenance_rejects_overloaded_frame_primitives(
+    frame: FrameRef,
+) -> None:
+    with pytest.raises(ValueError, match="exact numeric primitives"):
+        BankEvidenceProvenance(frame, "cycle", "a" * 64)
+
+
+def test_bank_evidence_provenance_rejects_overloaded_cycle_id() -> None:
+    with pytest.raises(ValueError, match="cycle_id must be a non-empty string"):
+        BankEvidenceProvenance(
+            FrameRef(1, 0.0, 1, 1),
+            _OverloadedString("cycle"),
+            "a" * 64,
+        )
+
+
+@pytest.mark.parametrize(
     "digest",
     ["", "a" * 63, "a" * 65, "g" * 64, ("A" * 64)],
 )
 def test_bank_evidence_provenance_rejects_invalid_digest(digest: str) -> None:
-    with pytest.raises(ValueError, match="frame_sha256 must be a 64-character lowercase hex digest"):
+    with pytest.raises(
+        ValueError, match="frame_sha256 must be a 64-character lowercase hex digest"
+    ):
         BankEvidenceProvenance(
             frame=FrameRef(frame_id=1, captured_monotonic_s=0.0, width=1, height=1),
             cycle_id="cycle",
@@ -118,9 +160,29 @@ def test_bank_observation_accepts_valid_values() -> None:
 
 
 @pytest.mark.parametrize(
+    ("detector_id", "detector_version"),
+    [
+        (_OverloadedString("detector"), "1"),
+        ("detector", _OverloadedString("1")),
+    ],
+)
+def test_bank_observation_rejects_overloaded_detector_strings(
+    detector_id: str, detector_version: str
+) -> None:
+    with pytest.raises(ValueError, match="must be a non-empty string"):
+        build_bank_observation(
+            detector_id=detector_id,
+            detector_version=detector_version,
+        )
+
+
+@pytest.mark.parametrize(
     ("factory", "message"),
     [
-        (lambda: build_bank_observation(interface_state="open"), "interface_state must be an exact"),
+        (
+            lambda: build_bank_observation(interface_state="open"),
+            "interface_state must be an exact",
+        ),
     ],
 )
 def test_bank_observation_rejects_non_exact_interface_state(
@@ -187,7 +249,8 @@ def test_inventory_observation_rejects_non_exact_state() -> None:
 def test_inventory_observation_rejects_non_exact_provenance() -> None:
     with pytest.raises(ValueError, match="provenance must be an exact BankEvidenceProvenance"):
         build_post_deposit_inventory_observation(
-            occupied_slots=0, provenance="not-a-provenance"  # type: ignore[arg-type]
+            occupied_slots=0,
+            provenance="not-a-provenance",  # type: ignore[arg-type]
         )
 
 
@@ -207,9 +270,7 @@ def test_banking_verification_result_verified_requires_no_blockers() -> None:
 
 def test_banking_verification_result_verified_rejects_blockers() -> None:
     with pytest.raises(ValueError, match="a verified result cannot carry blockers"):
-        BankingVerificationResult(
-            verified=True, blockers=(BankingBlocker.BANK_STATE_UNKNOWN,)
-        )
+        BankingVerificationResult(verified=True, blockers=(BankingBlocker.BANK_STATE_UNKNOWN,))
 
 
 def test_banking_verification_result_denied_requires_a_blocker() -> None:

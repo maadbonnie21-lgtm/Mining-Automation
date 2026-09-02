@@ -24,8 +24,11 @@ from mining_automation.banking.attempts import OpenBankAttemptReceipt
 from mining_automation.banking.contracts import BankingBlocker, BankInterfaceState
 from mining_automation.banking.testing import (
     SYNTHETIC_BANK_CHECKPOINT,
+    SYNTHETIC_BANK_DETECTOR_METADATA,
     SYNTHETIC_BANK_PROFILE,
     build_bank_observation,
+    build_deposit_attempt_receipt,
+    build_open_bank_attempt_receipt,
     build_post_deposit_inventory_observation,
     build_pre_deposit_inventory_observation,
     build_provenance,
@@ -75,10 +78,13 @@ def _bank_observed_step(
     profile=SYNTHETIC_BANK_PROFILE,
     width: int | None = None,
     height: int | None = None,
+    captured_monotonic_s: float | None = None,
 ) -> WorkflowStep:
     provenance = build_provenance(
         frame_id=frame_id,
-        captured_monotonic_s=float(frame_id),
+        captured_monotonic_s=(
+            captured_monotonic_s if captured_monotonic_s is not None else float(frame_id)
+        ),
         width=width if width is not None else profile.frame_width,
         height=height if height is not None else profile.frame_height,
     )
@@ -94,7 +100,19 @@ def _bank_observed_step(
 
 
 def _open_attempt_step(evaluated_monotonic_s: float) -> WorkflowStep:
-    return WorkflowStep(OpenBankAttempted(), evaluated_monotonic_s=evaluated_monotonic_s)
+    frame_id = int(evaluated_monotonic_s)
+    receipt = build_open_bank_attempt_receipt(
+        attempt_id="synthetic-replay-open-attempt",
+        issued_monotonic_s=evaluated_monotonic_s,
+        preceding_provenance=build_provenance(
+            frame_id=frame_id,
+            captured_monotonic_s=float(frame_id),
+        ),
+    )
+    return WorkflowStep(
+        OpenBankAttempted(receipt=receipt),
+        evaluated_monotonic_s=evaluated_monotonic_s,
+    )
 
 
 def _open_attempt_with_receipt_step(
@@ -106,17 +124,38 @@ def _open_attempt_with_receipt_step(
 
 
 def _deposit_attempt_step(evaluated_monotonic_s: float) -> WorkflowStep:
-    return WorkflowStep(DepositAttempted(), evaluated_monotonic_s=evaluated_monotonic_s)
+    frame_id = int(evaluated_monotonic_s)
+    receipt = build_deposit_attempt_receipt(
+        attempt_id="synthetic-replay-deposit-attempt",
+        issued_monotonic_s=evaluated_monotonic_s,
+        preceding_provenance=build_provenance(
+            frame_id=frame_id,
+            captured_monotonic_s=float(frame_id),
+        ),
+    )
+    return WorkflowStep(
+        DepositAttempted(receipt=receipt),
+        evaluated_monotonic_s=evaluated_monotonic_s,
+    )
 
 
-def _pre_deposit_inventory_step(occupied_slots: int | None, frame_id: int) -> WorkflowStep:
-    provenance = build_provenance(frame_id=frame_id, captured_monotonic_s=float(frame_id))
+def _pre_deposit_inventory_step(
+    occupied_slots: int | None,
+    frame_id: int,
+    *,
+    captured_monotonic_s: float | None = None,
+    evaluated_monotonic_s: float | None = None,
+) -> WorkflowStep:
+    captured = captured_monotonic_s if captured_monotonic_s is not None else float(frame_id)
+    provenance = build_provenance(frame_id=frame_id, captured_monotonic_s=captured)
     observation = build_pre_deposit_inventory_observation(
         occupied_slots=occupied_slots, provenance=provenance
     )
     return WorkflowStep(
         PreDepositInventoryObservationEvidence(observations=(observation,)),
-        evaluated_monotonic_s=float(frame_id),
+        evaluated_monotonic_s=(
+            evaluated_monotonic_s if evaluated_monotonic_s is not None else float(frame_id)
+        ),
     )
 
 
@@ -238,18 +277,66 @@ PROFILE_CHANGE = WorkflowScenario(
     expected_final_blockers=(BankingBlocker.BANK_PROFILE_MISMATCH,),
 )
 
-BANK_CLOSES_UNEXPECTEDLY_AFTER_OPEN_VERIFIED = WorkflowScenario(
-    scenario_id="bank-closes-unexpectedly-after-open-verified",
+BANK_CLOSES_AFTER_OPEN_VERIFIED = WorkflowScenario(
+    scenario_id="bank-closes-after-open-verified",
     steps=(
         _arrive_step(1),
         _bank_observed_step(BankInterfaceState.OPEN, 2),
-        # A stray re-observation once OPEN is already verified -- e.g. the
-        # bank interface unexpectedly closed mid-visit. The workflow does not
-        # re-verify bank state from BANK_OPEN_VERIFIED; it must deny this,
-        # never silently treat it as a new/different accepted state.
+        # A newer exact CLOSED reading revokes the older OPEN authority.
         _bank_observed_step(BankInterfaceState.CLOSED, 3),
     ),
-    expected_final_state=BankingWorkflowState.BANK_OPEN_VERIFIED,
+    expected_final_state=BankingWorkflowState.BANK_CLOSED_VERIFIED,
+)
+
+BANK_CLOSES_AFTER_DEPOSIT_READY = WorkflowScenario(
+    scenario_id="bank-closes-after-deposit-ready",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.OPEN, 2),
+        _pre_deposit_inventory_step(28, 3),
+        _bank_observed_step(BankInterfaceState.CLOSED, 4),
+        # Inventory alone cannot restore readiness after the newer CLOSED.
+        _pre_deposit_inventory_step(28, 5),
+    ),
+    expected_final_state=BankingWorkflowState.BANK_CLOSED_VERIFIED,
+    expected_final_blockers=(BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,),
+)
+
+BANK_BECOMES_UNKNOWN_AFTER_OPEN_VERIFIED = WorkflowScenario(
+    scenario_id="bank-becomes-unknown-after-open-verified",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.OPEN, 2),
+        _bank_observed_step(BankInterfaceState.UNKNOWN, 3),
+    ),
+    expected_final_state=BankingWorkflowState.ARRIVED_AT_BANK_CHECKPOINT,
+    expected_final_blockers=(BankingBlocker.BANK_STATE_UNKNOWN,),
+)
+
+BANK_CLOSES_DURING_DEPOSIT_PENDING = WorkflowScenario(
+    scenario_id="bank-closes-during-deposit-pending",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.OPEN, 2),
+        _pre_deposit_inventory_step(28, 3),
+        _deposit_attempt_step(3.0),
+        _bank_observed_step(BankInterfaceState.CLOSED, 4),
+    ),
+    expected_final_state=BankingWorkflowState.BANK_CLOSED_VERIFIED,
+)
+
+BLOCKED_DEPOSIT_READY_CANNOT_ACCEPT_ATTEMPT = WorkflowScenario(
+    scenario_id="blocked-deposit-ready-cannot-accept-attempt",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.OPEN, 2),
+        _pre_deposit_inventory_step(28, 3),
+        # The wrong action blocks this otherwise READY snapshot.
+        _open_attempt_step(3.0),
+        # A causally valid deposit receipt cannot erase that denial.
+        _deposit_attempt_step(3.0),
+    ),
+    expected_final_state=BankingWorkflowState.DEPOSIT_READY_VERIFIED,
     expected_final_blockers=(BankingBlocker.UNEXPECTED_EVENT_FOR_STATE,),
 )
 
@@ -300,6 +387,117 @@ DUPLICATE_RECEIPT_AFTER_FAULT = WorkflowScenario(
     expected_final_blockers=(BankingBlocker.ATTEMPT_RECEIPT_DUPLICATE,),
 )
 
+PRE_ATTEMPT_OPEN_OBSERVATION_DELIVERED_AFTER_RECEIPT = WorkflowScenario(
+    scenario_id="pre-attempt-open-observation-delivered-after-receipt",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.CLOSED, 2),
+        _open_attempt_with_receipt_step(
+            OpenBankAttemptReceipt(
+                attempt_id="delayed-pre-attempt-open",
+                issued_monotonic_s=3.0,
+                preceding_provenance=build_provenance(
+                    frame_id=2,
+                    captured_monotonic_s=2.0,
+                ),
+            ),
+            evaluated_monotonic_s=3.0,
+        ),
+        _bank_observed_step(
+            BankInterfaceState.OPEN,
+            3,
+            captured_monotonic_s=2.5,
+            evaluated_monotonic_s=3.0,
+        ),
+    ),
+    expected_final_state=BankingWorkflowState.BANK_OPEN_ATTEMPT_PENDING,
+    expected_final_blockers=(BankingBlocker.POST_ATTEMPT_EVIDENCE_NOT_FRESH,),
+)
+
+PRE_ATTEMPT_EMPTY_INVENTORY_DELIVERED_AFTER_RECEIPT = WorkflowScenario(
+    scenario_id="pre-attempt-empty-inventory-delivered-after-receipt",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.OPEN, 2),
+        _pre_deposit_inventory_step(28, 3),
+        WorkflowStep(
+            DepositAttempted(
+                receipt=build_deposit_attempt_receipt(
+                    attempt_id="delayed-pre-attempt-deposit",
+                    issued_monotonic_s=4.0,
+                    preceding_provenance=build_provenance(
+                        frame_id=3,
+                        captured_monotonic_s=3.0,
+                    ),
+                )
+            ),
+            evaluated_monotonic_s=4.0,
+        ),
+        _post_deposit_inventory_step(
+            0,
+            4,
+            provenance=build_provenance(
+                frame_id=4,
+                captured_monotonic_s=3.5,
+            ),
+            evaluated_monotonic_s=4.0,
+        ),
+    ),
+    expected_final_state=BankingWorkflowState.DEPOSIT_ATTEMPT_PENDING,
+    expected_final_blockers=(BankingBlocker.POST_ATTEMPT_EVIDENCE_NOT_FRESH,),
+)
+
+DELAYED_OPEN_OUTCOME_AFTER_RECEIPT = WorkflowScenario(
+    scenario_id="delayed-open-outcome-after-receipt",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.CLOSED, 2),
+        _open_attempt_step(2.0),
+        _bank_observed_step(
+            BankInterfaceState.OPEN,
+            3,
+            captured_monotonic_s=100.0,
+            evaluated_monotonic_s=100.0,
+        ),
+    ),
+    expected_final_state=BankingWorkflowState.BANK_OPEN_ATTEMPT_PENDING,
+    expected_final_blockers=(BankingBlocker.POST_ATTEMPT_EVIDENCE_STALE,),
+)
+
+DELAYED_EMPTY_INVENTORY_AFTER_RECEIPT = WorkflowScenario(
+    scenario_id="delayed-empty-inventory-after-receipt",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.OPEN, 2),
+        _pre_deposit_inventory_step(28, 3),
+        _deposit_attempt_step(3.0),
+        _post_deposit_inventory_step(
+            0,
+            4,
+            provenance=build_provenance(frame_id=4, captured_monotonic_s=100.0),
+            evaluated_monotonic_s=100.0,
+        ),
+    ),
+    expected_final_state=BankingWorkflowState.DEPOSIT_ATTEMPT_PENDING,
+    expected_final_blockers=(BankingBlocker.POST_ATTEMPT_EVIDENCE_STALE,),
+)
+
+OLD_BANK_OPEN_SUPPORT_WITH_FRESH_INVENTORY = WorkflowScenario(
+    scenario_id="old-bank-open-support-with-fresh-inventory",
+    steps=(
+        _arrive_step(1),
+        _bank_observed_step(BankInterfaceState.OPEN, 2),
+        _pre_deposit_inventory_step(
+            28,
+            3,
+            captured_monotonic_s=100.0,
+            evaluated_monotonic_s=100.0,
+        ),
+    ),
+    expected_final_state=BankingWorkflowState.BANK_OPEN_VERIFIED,
+    expected_final_blockers=(BankingBlocker.SUPPORTING_EVIDENCE_STALE,),
+)
+
 ALL_SCENARIOS = (
     HAPPY_PATH,
     STILL_CLOSED_AFTER_OPEN_ATTEMPT,
@@ -309,9 +507,18 @@ ALL_SCENARIOS = (
     FRAME_GEOMETRY_MISMATCH,
     ORDERING_ERROR,
     PROFILE_CHANGE,
-    BANK_CLOSES_UNEXPECTEDLY_AFTER_OPEN_VERIFIED,
+    BANK_CLOSES_AFTER_OPEN_VERIFIED,
+    BANK_CLOSES_AFTER_DEPOSIT_READY,
+    BANK_BECOMES_UNKNOWN_AFTER_OPEN_VERIFIED,
+    BANK_CLOSES_DURING_DEPOSIT_PENDING,
+    BLOCKED_DEPOSIT_READY_CANNOT_ACCEPT_ATTEMPT,
     INTERRUPTED_TRANSACTION_STRAY_ARRIVAL_DURING_DEPOSIT_PENDING,
     DUPLICATE_RECEIPT_AFTER_FAULT,
+    PRE_ATTEMPT_OPEN_OBSERVATION_DELIVERED_AFTER_RECEIPT,
+    PRE_ATTEMPT_EMPTY_INVENTORY_DELIVERED_AFTER_RECEIPT,
+    DELAYED_OPEN_OUTCOME_AFTER_RECEIPT,
+    DELAYED_EMPTY_INVENTORY_AFTER_RECEIPT,
+    OLD_BANK_OPEN_SUPPORT_WITH_FRESH_INVENTORY,
 )
 
 
@@ -319,6 +526,7 @@ def _replay(scenario: WorkflowScenario) -> BankingWorkflowContext:
     context = initial_banking_workflow_context(
         expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
         expected_profile=SYNTHETIC_BANK_PROFILE,
+        expected_detector=SYNTHETIC_BANK_DETECTOR_METADATA,
     )
     for step in scenario.steps:
         context = advance_banking_workflow(
@@ -355,6 +563,7 @@ def test_happy_path_never_treats_an_attempt_as_success() -> None:
     context = initial_banking_workflow_context(
         expected_checkpoint=SYNTHETIC_BANK_CHECKPOINT,
         expected_profile=SYNTHETIC_BANK_PROFILE,
+        expected_detector=SYNTHETIC_BANK_DETECTOR_METADATA,
     )
     verified_states = {
         BankingWorkflowState.BANK_OPEN_VERIFIED,

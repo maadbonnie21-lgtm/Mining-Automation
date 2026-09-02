@@ -36,10 +36,11 @@ Required semantics (all covered by tests):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from hashlib import sha256
 from math import isfinite
 from typing import Final, Protocol, runtime_checkable
 
-from ..capture import Frame
+from ..capture import Frame, PixelFormat
 from ..contracts import InventoryState
 from .contracts import (
     INVENTORY_CAPACITY,
@@ -49,6 +50,8 @@ from .contracts import (
     BankInterfaceState,
     BankObservation,
     BankProfileIdentity,
+    PostDepositInventoryObservation,
+    PreDepositInventoryObservation,
 )
 from .errors import BankDetectorContractError, BankDetectorExecutionError
 
@@ -72,10 +75,15 @@ BANK_PUBLICATION_CONFIDENCE_FLOOR: Final[float] = 0.8
 
 
 def _finite_float(value: object) -> float | None:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return None
-    converted = float(value)
-    return converted if isfinite(converted) else None
+    if type(value) is int:
+        try:
+            return float(value)
+        except OverflowError:
+            return None
+    if type(value) is float:
+        converted = value
+        return converted if isfinite(converted) else None
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,9 +94,9 @@ class BankDetectorMetadata:
     version: str
 
     def __post_init__(self) -> None:
-        if not isinstance(self.detector_id, str) or not self.detector_id.strip():
+        if type(self.detector_id) is not str or not self.detector_id.strip():
             raise ValueError("detector_id must be a non-empty string")
-        if not isinstance(self.version, str) or not self.version.strip():
+        if type(self.version) is not str or not self.version.strip():
             raise ValueError("detector version must be a non-empty string")
 
 
@@ -119,11 +127,14 @@ def validate_bank_detector(detector: object) -> BankDetectorMetadata:
         metadata = detector.metadata
     except Exception as exc:
         raise BankDetectorContractError("bank detector metadata could not be read") from exc
-    if not isinstance(metadata, BankDetectorMetadata):
+    if type(metadata) is not BankDetectorMetadata:
         raise BankDetectorContractError(
-            "bank detector metadata must be BankDetectorMetadata, "
-            f"got {type(metadata).__name__}"
+            f"bank detector metadata must be BankDetectorMetadata, got {type(metadata).__name__}"
         )
+    try:
+        BankDetectorMetadata.__post_init__(metadata)
+    except ValueError as exc:
+        raise BankDetectorContractError("bank detector metadata is invalid") from exc
     return metadata
 
 
@@ -141,38 +152,119 @@ def run_bank_detector(
     with a genuine observation.
     """
     metadata = validate_bank_detector(detector)
-    if expected_metadata is not None and metadata != expected_metadata:
+    metadata_snapshot = (metadata.detector_id, metadata.version)
+    if expected_metadata is not None and type(expected_metadata) is not BankDetectorMetadata:
+        raise BankDetectorContractError("expected_metadata must be an exact BankDetectorMetadata")
+    if expected_metadata is not None:
+        try:
+            BankDetectorMetadata.__post_init__(expected_metadata)
+        except ValueError as exc:
+            raise BankDetectorContractError("expected bank detector metadata is invalid") from exc
+    if expected_metadata is not None and metadata_snapshot != (
+        expected_metadata.detector_id,
+        expected_metadata.version,
+    ):
         raise BankDetectorContractError(
             "bank detector metadata changed during the evaluation run: "
             f"expected {expected_metadata.detector_id!r}@{expected_metadata.version!r}, "
             f"got {metadata.detector_id!r}@{metadata.version!r}"
         )
-    if not isinstance(frame, Frame):
+    if type(frame) is not Frame:
         raise BankDetectorContractError(
             f"bank detector input must be Frame, got {type(frame).__name__}"
         )
+    try:
+        BankEvidenceProvenance(
+            frame=frame.ref,
+            cycle_id="bank-detector-input-validation",
+            frame_sha256="0" * 64,
+        )
+    except ValueError as exc:
+        raise BankDetectorContractError("bank detector input has invalid frame identity") from exc
+    if type(frame.payload) is not bytes or type(frame.pixel_format) is not PixelFormat:
+        raise BankDetectorContractError("bank detector input has invalid owned payload")
+    expected_payload_size = frame.width * frame.height * frame.pixel_format.bytes_per_pixel
+    if len(frame.payload) != expected_payload_size:
+        raise BankDetectorContractError("bank detector input payload does not match its geometry")
+    input_payload_sha256 = sha256(frame.payload).hexdigest()
+    input_frame_snapshot = (
+        frame.frame_id,
+        frame.captured_monotonic_s,
+        frame.width,
+        frame.height,
+        frame.pixel_format,
+        input_payload_sha256,
+    )
 
-    prefix = f"bank detector {metadata.detector_id!r} version {metadata.version!r} on frame {frame.frame_id}"
+    prefix = (
+        f"bank detector {metadata_snapshot[0]!r} version {metadata_snapshot[1]!r} "
+        f"on frame {input_frame_snapshot[0]}"
+    )
     try:
         observation = detector.observe(frame)
     except Exception as exc:
-        raise BankDetectorExecutionError(
-            f"{prefix} raised {type(exc).__name__}: {exc}"
-        ) from exc
+        raise BankDetectorExecutionError(f"{prefix} raised {type(exc).__name__}: {exc}") from exc
+
+    post_observation_metadata = validate_bank_detector(detector)
+    if (
+        post_observation_metadata.detector_id,
+        post_observation_metadata.version,
+    ) != metadata_snapshot:
+        raise BankDetectorContractError(
+            "bank detector metadata changed while observe was running: "
+            f"started as {metadata_snapshot[0]!r}@{metadata_snapshot[1]!r}, "
+            f"ended as {post_observation_metadata.detector_id!r}@"
+            f"{post_observation_metadata.version!r}"
+        )
+    if type(frame.payload) is not bytes:
+        raise BankDetectorContractError("bank detector mutated its input frame payload")
+    post_observation_identity_snapshot = (
+        frame.frame_id,
+        frame.captured_monotonic_s,
+        frame.width,
+        frame.height,
+        frame.pixel_format,
+    )
+    if post_observation_identity_snapshot != input_frame_snapshot[:5]:
+        raise BankDetectorContractError("bank detector mutated its input frame identity")
+    if sha256(frame.payload).hexdigest() != input_payload_sha256:
+        raise BankDetectorContractError("bank detector mutated its input frame payload")
 
     if type(observation) is not BankObservation:
         raise BankDetectorContractError(
             f"{prefix} must return BankObservation, got {type(observation).__name__}"
         )
-    if observation.provenance.frame != frame.ref:
+    try:
+        BankObservation.__post_init__(observation)
+        BankCheckpointIdentity.__post_init__(observation.identity)
+        BankProfileIdentity.__post_init__(observation.profile)
+        BankEvidenceProvenance.__post_init__(observation.provenance)
+    except ValueError as exc:
+        raise BankDetectorContractError(f"{prefix} returned an invalid BankObservation") from exc
+    observation_frame = observation.provenance.frame
+    if (
+        observation_frame.frame_id != input_frame_snapshot[0]
+        or observation_frame.captured_monotonic_s != input_frame_snapshot[1]
+        or observation_frame.width != input_frame_snapshot[2]
+        or observation_frame.height != input_frame_snapshot[3]
+    ):
         raise BankDetectorContractError(
             f"{prefix} references frame {observation.provenance.frame.frame_id}, "
-            f"expected input frame {frame.frame_id}"
+            f"expected input frame {input_frame_snapshot[0]}"
         )
-    if observation.detector_version != metadata.version:
+    if observation.provenance.frame_sha256 != input_payload_sha256:
+        raise BankDetectorContractError(
+            f"{prefix} output frame_sha256 does not match the input frame payload"
+        )
+    if observation.detector_id != metadata_snapshot[0]:
+        raise BankDetectorContractError(
+            f"{prefix} output detector_id {observation.detector_id!r} "
+            f"does not match metadata detector_id {metadata_snapshot[0]!r}"
+        )
+    if observation.detector_version != metadata_snapshot[1]:
         raise BankDetectorContractError(
             f"{prefix} output detector_version {observation.detector_version!r} "
-            f"does not match metadata version {metadata.version!r}"
+            f"does not match metadata version {metadata_snapshot[1]!r}"
         )
     return observation
 
@@ -213,6 +305,7 @@ def evaluate_bank_observation(
     *,
     expected_checkpoint: BankCheckpointIdentity,
     expected_profile: BankProfileIdentity,
+    expected_detector: BankDetectorMetadata,
     evaluated_monotonic_s: object,
     current_provenance: BankEvidenceProvenance | None = None,
     previous_provenance: BankEvidenceProvenance | None = None,
@@ -247,14 +340,37 @@ def evaluate_bank_observation(
         raise TypeError("expected_checkpoint must be an exact BankCheckpointIdentity")
     if type(expected_profile) is not BankProfileIdentity:
         raise TypeError("expected_profile must be an exact BankProfileIdentity")
+    if type(expected_detector) is not BankDetectorMetadata:
+        raise TypeError("expected_detector must be an exact BankDetectorMetadata")
+    BankCheckpointIdentity.__post_init__(expected_checkpoint)
+    BankProfileIdentity.__post_init__(expected_profile)
+    BankDetectorMetadata.__post_init__(expected_detector)
     if current_provenance is not None and type(current_provenance) is not BankEvidenceProvenance:
         raise TypeError("current_provenance must be an exact BankEvidenceProvenance or None")
+    if previous_provenance is not None and type(previous_provenance) is not BankEvidenceProvenance:
+        raise TypeError("previous_provenance must be an exact BankEvidenceProvenance or None")
+    if current_provenance is not None:
+        BankEvidenceProvenance.__post_init__(current_provenance)
+    if previous_provenance is not None:
+        BankEvidenceProvenance.__post_init__(previous_provenance)
+    minimum_confidence = _finite_float(min_confidence)
+    if minimum_confidence is None or not 0.0 <= minimum_confidence <= 1.0:
+        raise ValueError("min_confidence must be finite and between zero and one")
 
     if observation is None:
         return BankPerceptionResult(
             BankInterfaceState.UNKNOWN, (BankingBlocker.BANK_OBSERVATION_MISSING,)
         )
     if type(observation) is not BankObservation:
+        return BankPerceptionResult(
+            BankInterfaceState.UNKNOWN, (BankingBlocker.BANK_EVIDENCE_TYPE_INVALID,)
+        )
+    try:
+        BankObservation.__post_init__(observation)
+        BankCheckpointIdentity.__post_init__(observation.identity)
+        BankProfileIdentity.__post_init__(observation.profile)
+        BankEvidenceProvenance.__post_init__(observation.provenance)
+    except ValueError:
         return BankPerceptionResult(
             BankInterfaceState.UNKNOWN, (BankingBlocker.BANK_EVIDENCE_TYPE_INVALID,)
         )
@@ -272,6 +388,10 @@ def evaluate_bank_observation(
         or observation.provenance.frame.height != expected_profile.frame_height
     ):
         blockers.append(BankingBlocker.BANK_GEOMETRY_UNSUPPORTED)
+    if observation.detector_id != expected_detector.detector_id:
+        blockers.append(BankingBlocker.BANK_DETECTOR_ID_MISMATCH)
+    if observation.detector_version != expected_detector.version:
+        blockers.append(BankingBlocker.BANK_DETECTOR_VERSION_MISMATCH)
 
     freshness_blocker = _evaluate_freshness(
         observation.provenance,
@@ -283,7 +403,7 @@ def evaluate_bank_observation(
     if freshness_blocker is not None:
         blockers.append(freshness_blocker)
 
-    if observation.confidence < min_confidence:
+    if observation.confidence < minimum_confidence:
         blockers.append(BankingBlocker.BANK_CONFIDENCE_BELOW_FLOOR)
 
     if blockers:
@@ -336,8 +456,9 @@ def evaluate_inventory_observation(
 ) -> InventoryPerceptionResult:
     """Resolve one pre/post-deposit inventory observation for banking use.
 
-    ``observation`` must expose ``.state``, ``.provenance``, ``.detector_id``,
-    and ``.detector_version`` -- the shape shared by
+    ``observation`` must be an exact banking-owned pre- or post-deposit
+    observation. Duck-typed values are rejected even when they expose the
+    same fields as
     :class:`~mining_automation.banking.contracts.PreDepositInventoryObservation`
     and :class:`~mining_automation.banking.contracts.PostDepositInventoryObservation`.
     This function does not implement inventory perception itself; it only
@@ -350,6 +471,17 @@ def evaluate_inventory_observation(
     """
     if current_provenance is not None and type(current_provenance) is not BankEvidenceProvenance:
         raise TypeError("current_provenance must be an exact BankEvidenceProvenance or None")
+    if previous_provenance is not None and type(previous_provenance) is not BankEvidenceProvenance:
+        raise TypeError("previous_provenance must be an exact BankEvidenceProvenance or None")
+    if current_provenance is not None:
+        BankEvidenceProvenance.__post_init__(current_provenance)
+    if previous_provenance is not None:
+        BankEvidenceProvenance.__post_init__(previous_provenance)
+    minimum_confidence = _finite_float(min_confidence)
+    if minimum_confidence is None or not 0.0 <= minimum_confidence <= 1.0:
+        raise ValueError("min_confidence must be finite and between zero and one")
+    if type(expected_capacity) is not int or expected_capacity <= 0:
+        raise ValueError("expected_capacity must be an exact positive int")
 
     if observation is None:
         return InventoryPerceptionResult(
@@ -357,13 +489,28 @@ def evaluate_inventory_observation(
             (BankingBlocker.INVENTORY_EVIDENCE_MISSING,),
         )
 
-    state = getattr(observation, "state", None)
-    provenance = getattr(observation, "provenance", None)
-    if type(state) is not InventoryState or type(provenance) is not BankEvidenceProvenance:
+    if (
+        type(observation) is not PreDepositInventoryObservation
+        and type(observation) is not PostDepositInventoryObservation
+    ):
         return InventoryPerceptionResult(
             _unknown_inventory_state(expected_capacity),
             (BankingBlocker.INVENTORY_EVIDENCE_TYPE_INVALID,),
         )
+    try:
+        if type(observation) is PreDepositInventoryObservation:
+            PreDepositInventoryObservation.__post_init__(observation)
+        else:
+            assert type(observation) is PostDepositInventoryObservation
+            PostDepositInventoryObservation.__post_init__(observation)
+        BankEvidenceProvenance.__post_init__(observation.provenance)
+    except ValueError:
+        return InventoryPerceptionResult(
+            _unknown_inventory_state(expected_capacity),
+            (BankingBlocker.INVENTORY_EVIDENCE_TYPE_INVALID,),
+        )
+    state = observation.state
+    provenance = observation.provenance
 
     blockers: list[BankingBlocker] = []
     if current_provenance is not None and provenance != current_provenance:
@@ -383,11 +530,13 @@ def evaluate_inventory_observation(
         blockers.append(BankingBlocker.INVENTORY_LAYOUT_MISMATCH)
     if state.occupied_slots is None:
         blockers.append(BankingBlocker.INVENTORY_UNKNOWN)
-    elif state.confidence < min_confidence:
+    elif state.confidence < minimum_confidence:
         blockers.append(BankingBlocker.INVENTORY_CONFIDENCE_BELOW_FLOOR)
 
     if blockers:
-        return InventoryPerceptionResult(_unknown_inventory_state(expected_capacity), tuple(blockers))
+        return InventoryPerceptionResult(
+            _unknown_inventory_state(expected_capacity), tuple(blockers)
+        )
     return InventoryPerceptionResult(state, ())
 
 
@@ -403,6 +552,9 @@ def _evaluate_freshness(
     max_age_s: float,
     stale_blocker: BankingBlocker,
 ) -> BankingBlocker | None:
+    maximum_age = _finite_float(max_age_s)
+    if maximum_age is None or maximum_age < 0.0:
+        raise ValueError("max_age_s must be finite and non-negative")
     evaluated = _finite_float(evaluated_monotonic_s)
     if evaluated is None:
         return BankingBlocker.EVALUATION_TIME_INVALID
@@ -412,11 +564,20 @@ def _evaluate_freshness(
     age_s = evaluated - captured
     if age_s < 0.0:
         return BankingBlocker.EVIDENCE_FROM_FUTURE
-    if age_s > max_age_s:
+    if age_s > maximum_age:
         return stale_blocker
-    if (
-        previous_provenance is not None
-        and provenance.frame.frame_id <= previous_provenance.frame.frame_id
-    ):
-        return BankingBlocker.EVIDENCE_ORDERING_REGRESSION
+    if previous_provenance is not None:
+        if provenance.cycle_id != previous_provenance.cycle_id:
+            return BankingBlocker.EVIDENCE_PROVENANCE_MISMATCH
+        current_frame_id = provenance.frame.frame_id
+        previous_frame_id = previous_provenance.frame.frame_id
+        previous_captured = _finite_float(previous_provenance.frame.captured_monotonic_s)
+        if (
+            type(current_frame_id) is not int
+            or type(previous_frame_id) is not int
+            or previous_captured is None
+        ):
+            return BankingBlocker.EVIDENCE_TIMESTAMP_INVALID
+        if current_frame_id <= previous_frame_id or captured <= previous_captured:
+            return BankingBlocker.EVIDENCE_ORDERING_REGRESSION
     return None
