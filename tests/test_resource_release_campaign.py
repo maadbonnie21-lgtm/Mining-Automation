@@ -4790,11 +4790,11 @@ def test_hashed_artifact_sidecar_failure_never_unlinks_replacement(
     real_exclusive_write = campaign._exclusive_write
     identity_calls = 0
 
-    def distinct_identity(value: object) -> tuple[int, int]:
+    def distinct_identity(value: object) -> tuple[int, int, int, int, int]:
         nonlocal identity_calls
         del value
         identity_calls += 1
-        return (1, identity_calls)
+        return (1, identity_calls, identity_calls, identity_calls, identity_calls)
 
     def replace_before_sidecar(
         path: Path,

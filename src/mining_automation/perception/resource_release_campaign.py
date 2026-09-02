@@ -625,13 +625,19 @@ def _strict_json_bytes(payload: bytes, *, label: str) -> dict[str, object]:
     return cast(dict[str, object], decoded)
 
 
-_OwnedFileIdentity = tuple[int, int]
+_OwnedFileIdentity = tuple[int, int, int, int, int]
 
 
 def _identity_from_stat(value: os.stat_result) -> _OwnedFileIdentity | None:
     if value.st_ino <= 0:
         return None
-    return value.st_dev, value.st_ino
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_ctime_ns,
+        value.st_mtime_ns,
+        value.st_size,
+    )
 
 
 def _unlink_if_owned(path: Path, identity: _OwnedFileIdentity | None) -> None:
@@ -659,10 +665,13 @@ def _exclusive_write(path: Path, payload: bytes) -> _OwnedFileIdentity | None:
     identity: _OwnedFileIdentity | None = None
     try:
         with path.open("xb") as output:
-            identity = _identity_from_stat(os.fstat(output.fileno()))
             output.write(payload)
             output.flush()
             os.fsync(output.fileno())
+            # Record identity only after the final write.  Inode/device alone
+            # are insufficient because unlink/recreate can immediately reuse
+            # an inode; cleanup must never remove that concurrent winner.
+            identity = _identity_from_stat(os.fstat(output.fileno()))
     except Exception:
         _unlink_if_owned(path, identity)
         raise
