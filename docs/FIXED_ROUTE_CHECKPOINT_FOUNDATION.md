@@ -146,6 +146,51 @@ transition so concurrent callers cannot fork the head or overwrite STOP. It has 
 or executor. See
 [`NAVIGATION_PASSIVE_CAMPAIGN_READINESS.md`](NAVIGATION_PASSIVE_CAMPAIGN_READINESS.md).
 
+## Two-direction synthetic rehearsal
+
+`navigation.round_trip_rehearsal` composes one exact B1 `mine_to_bank` result and one exact B1
+`bank_to_mine` result into a terminal, display-free report. Each result must reproduce its named
+direction binding and retained source result exactly; swapping directions, route versions,
+checkpoint plans, source/session provenance, or result lineages is an integrity error and produces
+no report. Both named results are validated before either leg outcome is evaluated. When the
+outbound leg stops, the return leg is omitted from the reported evaluation order, but its identity
+and binding cannot be ignored or cross-slotted.
+
+The caller must provide a `SyntheticRoundTripTimelineExpectation` that pins the exact B1 decision
+digest plus both route-session IDs and both session-result digests. The two directions require
+distinct route sessions. The contract asserts only one caller-owned synthetic numeric timeline;
+`real_monotonic_clock_attested`, release authority, activation authority, and input authority are
+all fixed false. Numeric ordering in this rehearsal is therefore not a claim about a real host
+clock or real route capture.
+
+Two independent `ARRIVED` results are not sufficient. The return leg's departure frame must be
+captured strictly after the outbound arrival event was accepted. This prevents a queued bank
+departure frame from being relabeled as evidence of an ordered handoff. The direction-specific
+arrival and departure checkpoint IDs remain separate contracts; only their shared typed bank
+endpoint is required to agree.
+
+Durable evidence conformance, independent reviewer approval, and durable endpoint-arrival proof
+are evaluated before synthetic session causality. Their failure emits the direction-specific
+`*_EVIDENCE_NOT_APPROVED` reason even when the same session also stopped. An accepted but stopped
+or incomplete outbound result emits `MINE_TO_BANK_NOT_ARRIVED`. A nonfresh return departure emits
+`BANK_TO_MINE_DEPARTURE_NOT_FRESH`; a fresh stopped or incomplete return emits
+`BANK_TO_MINE_NOT_ARRIVED`. It retains a proven bank handoff only when the exact return result has a
+fresh completed departure attempt; without such an attempt, the handoff remains absent. Reports
+retain the inner session and navigation failure reasons without relabeling them as success.
+
+The decision, direction bindings, results, timeline, legs, handoff, and mine arrival retain strict
+source anchors. Construction and serialization rebuild those anchors, so internal-token
+replacement or post-construction mutation cannot create a different digest, checkpoint, session,
+stop reason, chronology, or authority claim. Legs, handoff, and arrival are evaluator-owned nested
+projections; only their enclosing report establishes the shared timeline, and no projection grants
+standalone authority. The evaluator has no retry, restart, resume, controller, world-state, or input
+method; retry count and every authority field remain fixed at zero/false.
+
+The accepted bank boundary still records `bank_interface_open_proven=false`, and final mine
+arrival still records `supported_mining_view_proven=false`. This rehearsal proves only synthetic
+two-direction ordering and provenance composition. It is not route evidence and grants no release
+or activation authority.
+
 ## Endpoint proof boundary
 
 Route arrival proves only a fresh match of that direction's terminal checkpoint.

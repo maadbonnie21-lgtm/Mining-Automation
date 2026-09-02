@@ -10,6 +10,7 @@ import pytest
 
 import mining_automation.navigation as navigation_root
 import mining_automation.navigation.release_decision as release_module
+import mining_automation.navigation.round_trip_rehearsal as round_trip_module
 from mining_automation.capture.frame import Frame, PixelFormat
 from mining_automation.contracts import FrameRef
 from mining_automation.navigation import integration_boundary
@@ -57,6 +58,7 @@ from mining_automation.navigation.offline_route_session import (
     OfflineRouteSessionPhase,
     OfflineRouteSessionResult,
     OfflineRouteSessionSequencer,
+    OfflineRouteSessionStopReason,
 )
 from mining_automation.navigation.passive_campaign import (
     PassiveCaptureRequest,
@@ -74,6 +76,12 @@ from mining_automation.navigation.release_decision import (
     ReleaseCheckStatus,
     ReviewerDecisionSummary,
     evaluate_navigation_release_readiness,
+)
+from mining_automation.navigation.round_trip_rehearsal import (
+    SyntheticRoundTripPhase,
+    SyntheticRoundTripStopReason,
+    SyntheticRoundTripTimelineExpectation,
+    evaluate_synthetic_round_trip_rehearsal,
 )
 from mining_automation.navigation.route_evidence import (
     RouteEvidenceCampaignPlan,
@@ -415,12 +423,24 @@ def _session(context: RouteEvaluationContext, suffix: str = "complete") -> Offli
     )
 
 
-def _complete_result(context: RouteEvaluationContext) -> OfflineRouteSessionResult:
-    session = _session(context)
-    sequencer = OfflineRouteSessionSequencer.begin(session, started_monotonic_s=10.0)
+def _complete_result(
+    context: RouteEvaluationContext,
+    *,
+    started_monotonic_s: float = 10.0,
+    first_frame_monotonic_s: float | None = None,
+    session_suffix: str = "complete",
+) -> OfflineRouteSessionResult:
+    session = _session(context, session_suffix)
+    sequencer = OfflineRouteSessionSequencer.begin(
+        session,
+        started_monotonic_s=started_monotonic_s,
+    )
+    first_frame = (
+        started_monotonic_s + 0.1 if first_frame_monotonic_s is None else first_frame_monotonic_s
+    )
     last_result: OfflineRouteSessionResult | None = None
     for index, checkpoint in enumerate(context.plan.checkpoints):
-        captured = 10.1 + (index * 0.3)
+        captured = first_frame + (index * 0.3)
         last_result = sequencer.observe(
             session,
             _observation(
@@ -609,6 +629,7 @@ def _build_pair(
     mine_location_id: str = "synthetic-shared-mine",
     bank_location_id: str = "synthetic-shared-bank",
     bank_to_mine_mine_location_id: str | None = None,
+    mine_to_bank_reject_arrival: bool = False,
     bank_to_mine_reject_arrival: bool = False,
     shared_route_id: str | None = None,
     shared_route_version: str = "1.0.0-synthetic",
@@ -627,6 +648,7 @@ def _build_pair(
             bank_location_id=bank_location_id,
             route_id=shared_route_id,
             route_version=shared_route_version,
+            reject_arrival=mine_to_bank_reject_arrival,
         ),
         bank_to_mine=_build_direction(
             root / "bank-to-mine",
@@ -664,6 +686,219 @@ def _evaluate(pair: _PairEvidence, **overrides: object) -> NavigationReleaseDeci
     }
     arguments.update(overrides)
     return evaluate_navigation_release_readiness(**arguments)  # type: ignore[arg-type]
+
+
+def _pair_with_result(
+    pair: _PairEvidence,
+    direction: RouteDirection,
+    result: OfflineRouteSessionResult,
+) -> _PairEvidence:
+    source = pair.mine_to_bank if direction is RouteDirection.MINE_TO_BANK else pair.bank_to_mine
+    updated = replace(
+        source,
+        causality_expectation=_causality_expectation(
+            source.expectation.route_plan_sha256,
+            result,
+        ),
+        result=result,
+    )
+    return (
+        replace(pair, mine_to_bank=updated)
+        if direction is RouteDirection.MINE_TO_BANK
+        else replace(pair, bank_to_mine=updated)
+    )
+
+
+def _sequential_return_result(
+    pair: _PairEvidence,
+    *,
+    first_frame_monotonic_s: float = 20.1,
+    session_suffix: str = "round-trip-return",
+) -> OfflineRouteSessionResult:
+    return _complete_result(
+        pair.bank_to_mine.result.progress.session.context,
+        started_monotonic_s=first_frame_monotonic_s - 0.1,
+        first_frame_monotonic_s=first_frame_monotonic_s,
+        session_suffix=session_suffix,
+    )
+
+
+def _timeline_expectation(
+    decision: NavigationReleaseDecision,
+    mine_to_bank_result: OfflineRouteSessionResult,
+    bank_to_mine_result: OfflineRouteSessionResult,
+    *,
+    timeline_id: str = "synthetic-round-trip-shared-timeline",
+) -> SyntheticRoundTripTimelineExpectation:
+    return SyntheticRoundTripTimelineExpectation(
+        timeline_id=timeline_id,
+        release_decision_sha256=decision.content_sha256,
+        mine_to_bank_route_session_id=(mine_to_bank_result.progress.session.session_id),
+        mine_to_bank_session_result_sha256=(
+            decision.mine_to_bank.post_attempt_causality.session_result_sha256
+        ),
+        bank_to_mine_route_session_id=(bank_to_mine_result.progress.session.session_id),
+        bank_to_mine_session_result_sha256=(
+            decision.bank_to_mine.post_attempt_causality.session_result_sha256
+        ),
+    )
+
+
+def _round_trip(
+    decision: NavigationReleaseDecision,
+    mine_to_bank_result: OfflineRouteSessionResult,
+    bank_to_mine_result: OfflineRouteSessionResult,
+) -> round_trip_module.SyntheticRoundTripRehearsalReport:
+    return evaluate_synthetic_round_trip_rehearsal(
+        decision,
+        timeline_expectation=_timeline_expectation(
+            decision,
+            mine_to_bank_result,
+            bank_to_mine_result,
+        ),
+        mine_to_bank_result=mine_to_bank_result,
+        bank_to_mine_result=bank_to_mine_result,
+    )
+
+
+def _completed_round_trip(
+    pair: _PairEvidence,
+) -> tuple[
+    _PairEvidence,
+    NavigationReleaseDecision,
+    OfflineRouteSessionResult,
+    round_trip_module.SyntheticRoundTripRehearsalReport,
+]:
+    return_result = _sequential_return_result(pair)
+    evidence = _pair_with_result(pair, RouteDirection.BANK_TO_MINE, return_result)
+    decision = _evaluate(evidence)
+    return (
+        evidence,
+        decision,
+        return_result,
+        _round_trip(decision, evidence.mine_to_bank.result, return_result),
+    )
+
+
+def _stopped_result(
+    context: RouteEvaluationContext,
+    case: str,
+) -> OfflineRouteSessionResult:
+    session = _session(context, f"round-trip-{case}")
+    sequencer = OfflineRouteSessionSequencer.begin(session, started_monotonic_s=30.0)
+    departure_id = context.plan.checkpoints[0].checkpoint_id
+    observation = _observation(
+        context,
+        departure_id,
+        frame_id=301,
+        captured_monotonic_s=30.1,
+    )
+    if case == "wrong-direction":
+        wrong_direction = (
+            RouteDirection.BANK_TO_MINE
+            if context.plan.identity.direction is RouteDirection.MINE_TO_BANK
+            else RouteDirection.MINE_TO_BANK
+        )
+        observation = replace(
+            observation,
+            route=RouteIdentity(
+                context.plan.identity.route_id,
+                context.plan.identity.version,
+                wrong_direction,
+            ),
+        )
+        return sequencer.observe(session, observation, evaluated_monotonic_s=30.15)
+    if case == "wrong-version":
+        observation = replace(
+            observation,
+            route=RouteIdentity(
+                context.plan.identity.route_id,
+                "foreign-route-version",
+                context.plan.identity.direction,
+            ),
+        )
+        return sequencer.observe(session, observation, evaluated_monotonic_s=30.15)
+    if case == "wrong-checkpoint":
+        return sequencer.observe(
+            session,
+            _observation(
+                context,
+                context.plan.checkpoints[1].checkpoint_id,
+                frame_id=301,
+                captured_monotonic_s=30.1,
+            ),
+            evaluated_monotonic_s=30.15,
+        )
+    if case == "stale":
+        return sequencer.observe(session, observation, evaluated_monotonic_s=31.0)
+    if case == "mixed-session":
+        foreign_source = replace(
+            observation.provenance.source,
+            capture_session_id="synthetic-round-trip-foreign-capture-session",
+        )
+        observation = replace(
+            observation,
+            evidence=replace(
+                observation.evidence,
+                provenance=replace(observation.provenance, source=foreign_source),
+            ),
+        )
+        return sequencer.observe(session, observation, evaluated_monotonic_s=30.15)
+
+    sequencer.observe(session, observation, evaluated_monotonic_s=30.15)
+    if case == "duplicate-checkpoint":
+        return sequencer.observe(
+            session,
+            _observation(
+                context,
+                departure_id,
+                frame_id=302,
+                captured_monotonic_s=30.2,
+            ),
+            evaluated_monotonic_s=30.25,
+        )
+    prepared = sequencer.prepare_step(
+        session,
+        attempt_id=f"{session.session_id}-attempt-1",
+        evaluated_monotonic_s=30.2,
+    )
+    assert prepared.navigation_transition is not None
+    proposal = prepared.navigation_transition.step_proposal
+    assert proposal is not None
+    if case == "late-receipt":
+        return sequencer.record_attempt(
+            session,
+            _receipt(proposal, post_attempt_monotonic_s=30.3),
+            evaluated_monotonic_s=31.0,
+        )
+    sequencer.record_attempt(
+        session,
+        _receipt(proposal, post_attempt_monotonic_s=30.3),
+        evaluated_monotonic_s=30.35,
+    )
+    if case == "reordered-checkpoint":
+        return sequencer.observe(
+            session,
+            _observation(
+                context,
+                departure_id,
+                frame_id=302,
+                captured_monotonic_s=30.4,
+            ),
+            evaluated_monotonic_s=30.45,
+        )
+    if case == "mid-route-skip":
+        return sequencer.observe(
+            session,
+            _observation(
+                context,
+                context.plan.checkpoints[-1].checkpoint_id,
+                frame_id=302,
+                captured_monotonic_s=30.4,
+            ),
+            evaluated_monotonic_s=30.45,
+        )
+    raise AssertionError(f"unknown stopped-result case: {case}")
 
 
 @pytest.fixture(scope="module")
@@ -1610,6 +1845,665 @@ def test_mutated_fixed_authority_causal_expectation_is_rejected(
         replace(direction, _factory_token=release_module._FACTORY_TOKEN)
 
 
+def test_exact_round_trip_rehearsal_is_deterministic_ordered_and_narrow(
+    pair: _PairEvidence,
+) -> None:
+    return_result = _sequential_return_result(pair)
+    sequential_pair = _pair_with_result(pair, RouteDirection.BANK_TO_MINE, return_result)
+    decision = _evaluate(sequential_pair)
+
+    first = _round_trip(
+        decision,
+        sequential_pair.mine_to_bank.result,
+        return_result,
+    )
+    second = _round_trip(
+        decision,
+        sequential_pair.mine_to_bank.result,
+        return_result,
+    )
+
+    assert first == second
+    assert first.phase is SyntheticRoundTripPhase.COMPLETED
+    assert first.stop_reason is None
+    assert first.evaluated_leg_order == (
+        RouteDirection.MINE_TO_BANK,
+        RouteDirection.BANK_TO_MINE,
+    )
+    assert first.to_json_value() == second.to_json_value()
+    assert first.canonical_bytes == second.canonical_bytes
+    assert first.content_sha256 == second.content_sha256
+    assert json.loads(first.canonical_bytes) == first.to_json_value()
+    assert first.release_decision_sha256 == decision.content_sha256
+    assert first.bank_handoff is not None
+    assert first.bank_handoff.endpoint == decision.mine_to_bank.route_plan.destination
+    assert first.bank_handoff.endpoint == decision.bank_to_mine.route_plan.origin
+    assert first.bank_handoff.arrival_checkpoint_id != first.bank_handoff.departure_checkpoint_id
+    assert (
+        first.bank_handoff.departure_captured_monotonic_s
+        > first.bank_handoff.arrival_accepted_monotonic_s
+    )
+    assert first.bank_handoff.bank_interface_open_proven is False
+    assert first.bank_handoff.downstream_handoff_eligible is False
+    assert first.mine_arrival is not None
+    assert first.mine_arrival.endpoint == decision.bank_to_mine.route_plan.destination
+    assert first.mine_arrival.endpoint == decision.mine_to_bank.route_plan.origin
+    assert first.mine_arrival.explicit_route_arrival_bound is True
+    assert first.mine_arrival.supported_mining_view_proven is False
+    assert first.mine_arrival.downstream_handoff_eligible is False
+    assert first.retry_count == 0
+    assert first.automatic_retry_enabled is False
+    assert first.release_eligible is False
+    assert first.live_navigation_enabled is False
+    assert first.world_state_activation_allowed is False
+    assert first.controller_activation_allowed is False
+    assert first.activation_allowed is False
+    assert first.input_authority is False
+    _assert_fixed_false_fields(
+        first.to_json_value(),
+        {
+            "activation_allowed",
+            "automatic_retry_enabled",
+            "bank_interface_open_proven",
+            "controller_activation_allowed",
+            "downstream_handoff_eligible",
+            "input_authority",
+            "live_navigation_enabled",
+            "release_eligible",
+            "supported_mining_view_proven",
+            "world_state_activation_allowed",
+        },
+    )
+
+
+@pytest.mark.parametrize("boundary_delta", (-0.01, 0.0))
+def test_two_independent_arrivals_do_not_form_a_round_trip_without_fresh_handoff(
+    pair: _PairEvidence,
+    boundary_delta: float,
+) -> None:
+    accepted_arrival = pair.mine_to_bank.result.progress.last_event_monotonic_s
+    return_result = _sequential_return_result(
+        pair,
+        first_frame_monotonic_s=accepted_arrival + boundary_delta,
+        session_suffix=f"nonfresh-return-{boundary_delta}",
+    )
+    assert return_result.progress.phase is OfflineRouteSessionPhase.ARRIVED
+    evidence = _pair_with_result(pair, RouteDirection.BANK_TO_MINE, return_result)
+    decision = _evaluate(evidence)
+
+    report = _round_trip(
+        decision,
+        evidence.mine_to_bank.result,
+        return_result,
+    )
+
+    assert report.phase is SyntheticRoundTripPhase.STOPPED
+    assert report.stop_reason is (SyntheticRoundTripStopReason.BANK_TO_MINE_DEPARTURE_NOT_FRESH)
+    assert report.mine_to_bank.synthetic_causality_conforms is True
+    assert report.bank_to_mine is not None
+    assert report.bank_to_mine.synthetic_causality_conforms is True
+    assert report.bank_handoff is None
+    assert report.mine_arrival is None
+    assert report.automatic_retry_enabled is False
+
+
+def test_crossed_foreign_or_cross_slotted_round_trip_results_have_no_report(
+    pair: _PairEvidence,
+) -> None:
+    return_result = _sequential_return_result(pair)
+    evidence = _pair_with_result(pair, RouteDirection.BANK_TO_MINE, return_result)
+    decision = _evaluate(evidence)
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="malformed or cross-bound"):
+        evaluate_synthetic_round_trip_rehearsal(
+            decision,
+            timeline_expectation=_timeline_expectation(
+                decision,
+                return_result,
+                evidence.mine_to_bank.result,
+            ),
+            mine_to_bank_result=return_result,
+            bank_to_mine_result=evidence.mine_to_bank.result,
+        )
+
+    foreign_outbound = _complete_result(
+        evidence.mine_to_bank.result.progress.session.context,
+        started_monotonic_s=40.0,
+        session_suffix="foreign-outbound-session",
+    )
+    with pytest.raises(RouteEvidenceIntegrityError, match="malformed or cross-bound"):
+        evaluate_synthetic_round_trip_rehearsal(
+            decision,
+            timeline_expectation=_timeline_expectation(
+                decision,
+                foreign_outbound,
+                return_result,
+            ),
+            mine_to_bank_result=foreign_outbound,
+            bank_to_mine_result=return_result,
+        )
+
+    crossed_decision = _evaluate(evidence)
+    object.__setattr__(
+        crossed_decision,
+        "mine_to_bank",
+        crossed_decision.bank_to_mine,
+    )
+    with pytest.raises(RouteEvidenceIntegrityError, match="decision is malformed"):
+        evaluate_synthetic_round_trip_rehearsal(
+            crossed_decision,
+            timeline_expectation=_timeline_expectation(
+                decision,
+                evidence.mine_to_bank.result,
+                return_result,
+            ),
+            mine_to_bank_result=evidence.mine_to_bank.result,
+            bank_to_mine_result=return_result,
+        )
+
+
+@pytest.mark.parametrize(
+    ("case", "failure_reason"),
+    (
+        ("wrong-direction", NavigationFailureReason.DIRECTION_MISMATCH),
+        ("wrong-version", NavigationFailureReason.ROUTE_VERSION_MISMATCH),
+        ("wrong-checkpoint", NavigationFailureReason.SKIPPED_CHECKPOINT),
+        ("mid-route-skip", NavigationFailureReason.SKIPPED_CHECKPOINT),
+        ("duplicate-checkpoint", NavigationFailureReason.STEP_EVIDENCE_NOT_CONSUMED),
+        ("reordered-checkpoint", NavigationFailureReason.OUT_OF_ORDER_CHECKPOINT),
+        ("stale", NavigationFailureReason.STALE_FRAME),
+        ("mixed-session", NavigationFailureReason.PROVENANCE_MISMATCH),
+        ("late-receipt", NavigationFailureReason.STALE_ATTEMPT_RECEIPT),
+    ),
+)
+def test_exact_failed_checkpoint_or_late_outcome_reason_is_retained_and_stops(
+    pair: _PairEvidence,
+    case: str,
+    failure_reason: NavigationFailureReason,
+) -> None:
+    result = _stopped_result(pair.mine_to_bank.result.progress.session.context, case)
+    assert result.progress.phase is OfflineRouteSessionPhase.STOPPED
+    assert result.progress.navigation.failure_reason is failure_reason
+    evidence = _pair_with_result(pair, RouteDirection.MINE_TO_BANK, result)
+    decision = _evaluate(evidence)
+
+    report = _round_trip(
+        decision,
+        result,
+        evidence.bank_to_mine.result,
+    )
+
+    assert report.phase is SyntheticRoundTripPhase.STOPPED
+    assert report.stop_reason is SyntheticRoundTripStopReason.MINE_TO_BANK_NOT_ARRIVED
+    assert report.mine_to_bank.terminal_phase is OfflineRouteSessionPhase.STOPPED
+    assert report.mine_to_bank.session_stop_reason is not None
+    assert report.mine_to_bank.navigation_failure_reason is failure_reason
+    assert report.bank_to_mine is None
+    assert report.evaluated_leg_order == (RouteDirection.MINE_TO_BANK,)
+    assert report.bank_handoff is None
+    assert report.mine_arrival is None
+    assert report.automatic_retry_enabled is False
+
+
+def test_interrupted_leg_stops_without_consuming_or_resurrecting_the_other_leg(
+    pair: _PairEvidence,
+) -> None:
+    interrupted_outbound = _interrupted_result(pair.mine_to_bank.result.progress.session.context)
+    outbound_evidence = _pair_with_result(
+        pair,
+        RouteDirection.MINE_TO_BANK,
+        interrupted_outbound,
+    )
+    outbound_decision = _evaluate(outbound_evidence)
+    outbound_report = _round_trip(
+        outbound_decision,
+        interrupted_outbound,
+        outbound_evidence.bank_to_mine.result,
+    )
+    assert outbound_report.stop_reason is (SyntheticRoundTripStopReason.MINE_TO_BANK_NOT_ARRIVED)
+    assert outbound_report.mine_to_bank.session_stop_reason is (
+        OfflineRouteSessionStopReason.INTERRUPTED
+    )
+    assert outbound_report.bank_to_mine is None
+
+    interrupted_return = _interrupted_result(pair.bank_to_mine.result.progress.session.context)
+    return_evidence = _pair_with_result(
+        pair,
+        RouteDirection.BANK_TO_MINE,
+        interrupted_return,
+    )
+    return_decision = _evaluate(return_evidence)
+    return_report = _round_trip(
+        return_decision,
+        return_evidence.mine_to_bank.result,
+        interrupted_return,
+    )
+    assert return_report.stop_reason is SyntheticRoundTripStopReason.BANK_TO_MINE_NOT_ARRIVED
+    assert return_report.bank_to_mine is not None
+    assert return_report.bank_to_mine.session_stop_reason is (
+        OfflineRouteSessionStopReason.INTERRUPTED
+    )
+    assert return_report.bank_handoff is None
+    assert return_report.mine_arrival is None
+
+
+def test_stopped_round_trip_has_no_retry_surface_and_requires_a_fresh_b1_decision(
+    pair: _PairEvidence,
+) -> None:
+    interrupted = _interrupted_result(pair.mine_to_bank.result.progress.session.context)
+    evidence = _pair_with_result(pair, RouteDirection.MINE_TO_BANK, interrupted)
+    decision = _evaluate(evidence)
+    report = _round_trip(
+        decision,
+        interrupted,
+        evidence.bank_to_mine.result,
+    )
+
+    assert report.phase is SyntheticRoundTripPhase.STOPPED
+    assert report.retry_count == 0
+    assert report.automatic_retry_enabled is False
+    assert {"retry", "restart", "resume"}.isdisjoint(dir(report))
+    assert {"retry", "restart", "resume"}.isdisjoint(round_trip_module.__all__)
+    with pytest.raises(RouteEvidenceIntegrityError, match="malformed or cross-bound"):
+        evaluate_synthetic_round_trip_rehearsal(
+            decision,
+            timeline_expectation=_timeline_expectation(
+                decision,
+                pair.mine_to_bank.result,
+                evidence.bank_to_mine.result,
+            ),
+            mine_to_bank_result=pair.mine_to_bank.result,
+            bank_to_mine_result=evidence.bank_to_mine.result,
+        )
+
+
+@pytest.mark.parametrize(
+    ("rejected_direction", "expected_reason", "invalid_relabel"),
+    (
+        (
+            RouteDirection.MINE_TO_BANK,
+            SyntheticRoundTripStopReason.MINE_TO_BANK_EVIDENCE_NOT_APPROVED,
+            SyntheticRoundTripStopReason.MINE_TO_BANK_NOT_ARRIVED,
+        ),
+        (
+            RouteDirection.BANK_TO_MINE,
+            SyntheticRoundTripStopReason.BANK_TO_MINE_EVIDENCE_NOT_APPROVED,
+            SyntheticRoundTripStopReason.BANK_TO_MINE_NOT_ARRIVED,
+        ),
+    ),
+)
+def test_rejected_durable_evidence_stops_before_causality_and_cannot_be_relabelled(
+    tmp_path: Path,
+    rejected_direction: RouteDirection,
+    expected_reason: SyntheticRoundTripStopReason,
+    invalid_relabel: SyntheticRoundTripStopReason,
+) -> None:
+    evidence = _build_pair(
+        tmp_path / rejected_direction.value,
+        mine_to_bank_reject_arrival=(rejected_direction is RouteDirection.MINE_TO_BANK),
+        bank_to_mine_reject_arrival=(rejected_direction is RouteDirection.BANK_TO_MINE),
+    )
+    rejected_source = (
+        evidence.mine_to_bank
+        if rejected_direction is RouteDirection.MINE_TO_BANK
+        else evidence.bank_to_mine
+    )
+    rejected_result = _interrupted_result(rejected_source.result.progress.session.context)
+    evidence = _pair_with_result(evidence, rejected_direction, rejected_result)
+    decision = _evaluate(evidence)
+    report = _round_trip(
+        decision,
+        evidence.mine_to_bank.result,
+        evidence.bank_to_mine.result,
+    )
+
+    assert report.phase is SyntheticRoundTripPhase.STOPPED
+    assert report.stop_reason is expected_reason
+    if rejected_direction is RouteDirection.MINE_TO_BANK:
+        assert report.mine_to_bank.durable_evidence_accepted is False
+        assert report.mine_to_bank.synthetic_causality_conforms is False
+        assert report.bank_to_mine is None
+    else:
+        assert report.mine_to_bank.accepted_for_round_trip is True
+        assert report.bank_to_mine is not None
+        assert report.bank_to_mine.durable_evidence_accepted is False
+        assert report.bank_to_mine.synthetic_causality_conforms is False
+    assert report.bank_handoff is None
+    assert report.mine_arrival is None
+    with pytest.raises(RouteEvidenceIntegrityError):
+        replace(
+            report,
+            stop_reason=invalid_relabel,
+            _factory_token=round_trip_module._FACTORY_TOKEN,
+        )
+
+
+def test_round_trip_timeline_pins_both_exact_results_and_has_no_authority(
+    pair: _PairEvidence,
+) -> None:
+    evidence, decision, return_result, _ = _completed_round_trip(pair)
+    timeline = _timeline_expectation(
+        decision,
+        evidence.mine_to_bank.result,
+        return_result,
+    )
+    mismatches = (
+        replace(timeline, release_decision_sha256=_digest("foreign-release-decision")),
+        replace(
+            timeline,
+            mine_to_bank_route_session_id="synthetic-foreign-outbound-route-session",
+        ),
+        replace(
+            timeline,
+            mine_to_bank_session_result_sha256=_digest("foreign-outbound-result"),
+        ),
+        replace(
+            timeline,
+            bank_to_mine_route_session_id="synthetic-foreign-return-route-session",
+        ),
+        replace(
+            timeline,
+            bank_to_mine_session_result_sha256=_digest("foreign-return-result"),
+        ),
+        replace(
+            timeline,
+            mine_to_bank_route_session_id=timeline.bank_to_mine_route_session_id,
+            bank_to_mine_route_session_id=timeline.mine_to_bank_route_session_id,
+        ),
+    )
+    for mismatch in mismatches:
+        with pytest.raises(RouteEvidenceIntegrityError, match="timeline differs"):
+            evaluate_synthetic_round_trip_rehearsal(
+                decision,
+                timeline_expectation=mismatch,
+                mine_to_bank_result=evidence.mine_to_bank.result,
+                bank_to_mine_result=return_result,
+            )
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="distinct route sessions"):
+        replace(
+            timeline,
+            bank_to_mine_route_session_id=timeline.mine_to_bank_route_session_id,
+        )
+
+    object.__setattr__(timeline, "release_authority", True)
+    with pytest.raises(RouteEvidenceIntegrityError, match="timeline expectation is malformed"):
+        evaluate_synthetic_round_trip_rehearsal(
+            decision,
+            timeline_expectation=timeline,
+            mine_to_bank_result=evidence.mine_to_bank.result,
+            bank_to_mine_result=return_result,
+        )
+
+
+def test_mutated_returned_timeline_cannot_be_serialized(
+    pair: _PairEvidence,
+) -> None:
+    _, _, _, report = _completed_round_trip(pair)
+
+    object.__setattr__(report.timeline, "timeline_id", "mutated-after-evaluation")
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="timeline differs from its source"):
+        report.to_json_value()
+
+
+@pytest.mark.parametrize("root_name", ("acquisition_root", "review_root"))
+def test_round_trip_rejects_post_construction_b1_storage_path_reauthoring(
+    pair: _PairEvidence,
+    tmp_path: Path,
+    root_name: str,
+) -> None:
+    return_result = _sequential_return_result(pair)
+    evidence = _pair_with_result(pair, RouteDirection.BANK_TO_MINE, return_result)
+    decision = _evaluate(evidence)
+    root = getattr(decision.mine_to_bank, root_name)
+    object.__setattr__(
+        root,
+        "storage_path",
+        str((tmp_path / f"never-evaluated-{root_name}").resolve()),
+    )
+    timeline = _timeline_expectation(
+        decision,
+        evidence.mine_to_bank.result,
+        return_result,
+    )
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="decision differs from its sources"):
+        evaluate_synthetic_round_trip_rehearsal(
+            decision,
+            timeline_expectation=timeline,
+            mine_to_bank_result=evidence.mine_to_bank.result,
+            bank_to_mine_result=return_result,
+        )
+
+
+def test_stopped_outbound_still_requires_the_exact_named_return_result(
+    pair: _PairEvidence,
+) -> None:
+    interrupted = _interrupted_result(pair.mine_to_bank.result.progress.session.context)
+    evidence = _pair_with_result(pair, RouteDirection.MINE_TO_BANK, interrupted)
+    decision = _evaluate(evidence)
+    timeline = _timeline_expectation(
+        decision,
+        interrupted,
+        evidence.bank_to_mine.result,
+    )
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="malformed or cross-bound"):
+        evaluate_synthetic_round_trip_rehearsal(
+            decision,
+            timeline_expectation=timeline,
+            mine_to_bank_result=interrupted,
+            bank_to_mine_result=interrupted,
+        )
+
+
+def test_evaluator_owned_projections_cannot_be_forged_with_the_internal_token(
+    pair: _PairEvidence,
+) -> None:
+    _, _, _, report = _completed_round_trip(pair)
+    assert report.bank_handoff is not None
+    assert report.mine_arrival is not None
+
+    with pytest.raises(RouteEvidenceIntegrityError):
+        replace(
+            report,
+            release_decision_sha256=_digest("forged-round-trip-decision"),
+            _factory_token=round_trip_module._FACTORY_TOKEN,
+        )
+    with pytest.raises(RouteEvidenceIntegrityError):
+        replace(
+            report,
+            _source_timeline=replace(report.timeline, timeline_id="forged-source-timeline"),
+            _factory_token=round_trip_module._FACTORY_TOKEN,
+        )
+    assert report.bank_to_mine is not None
+    with pytest.raises(RouteEvidenceIntegrityError):
+        replace(
+            report.mine_to_bank,
+            _source_result=report.bank_to_mine._source_result,
+            _factory_token=round_trip_module._FACTORY_TOKEN,
+        )
+
+    handoff_mutations: tuple[dict[str, object], ...] = (
+        {"mine_to_bank_finalized_package_sha256": _digest("forged-package")},
+        {"bank_to_mine_route_session_id": "forged-return-route-session"},
+        {"arrival_checkpoint_id": "forged-bank-arrival-checkpoint"},
+        {"departure_checkpoint_id": "forged-bank-departure-checkpoint"},
+    )
+    for mutation in handoff_mutations:
+        with pytest.raises(RouteEvidenceIntegrityError):
+            replace(
+                report.bank_handoff,
+                **mutation,
+                _factory_token=round_trip_module._FACTORY_TOKEN,
+            )
+    with pytest.raises(RouteEvidenceIntegrityError):
+        replace(
+            report.bank_handoff,
+            _source_bank_to_mine_leg=report.mine_to_bank,
+            _factory_token=round_trip_module._FACTORY_TOKEN,
+        )
+
+    arrival_mutations: tuple[dict[str, object], ...] = (
+        {"finalized_package_sha256": _digest("forged-return-package")},
+        {"route_session_id": "forged-return-arrival-session"},
+        {"checkpoint_id": "forged-mine-arrival-checkpoint"},
+    )
+    for mutation in arrival_mutations:
+        with pytest.raises(RouteEvidenceIntegrityError):
+            replace(
+                report.mine_arrival,
+                **mutation,
+                _factory_token=round_trip_module._FACTORY_TOKEN,
+            )
+    with pytest.raises(RouteEvidenceIntegrityError):
+        replace(
+            report.mine_arrival,
+            _source_bank_to_mine_leg=report.mine_to_bank,
+            _factory_token=round_trip_module._FACTORY_TOKEN,
+        )
+
+
+def test_standalone_handoff_sources_must_share_the_same_bank_endpoint(
+    tmp_path: Path,
+) -> None:
+    first_pair = _build_pair(tmp_path / "first", bank_location_id="synthetic-bank-first")
+    second_pair = _build_pair(tmp_path / "second", bank_location_id="synthetic-bank-second")
+    _, _, _, first_report = _completed_round_trip(first_pair)
+    _, _, _, second_report = _completed_round_trip(second_pair)
+    first_handoff = first_report.bank_handoff
+    second_handoff = second_report.bank_handoff
+    second_return_leg = second_report.bank_to_mine
+    assert first_handoff is not None
+    assert second_handoff is not None
+    assert second_return_leg is not None
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="lacks exact accepted source evidence"):
+        replace(
+            first_handoff,
+            bank_to_mine_route=second_handoff.bank_to_mine_route,
+            bank_to_mine_route_session_id=(second_handoff.bank_to_mine_route_session_id),
+            bank_to_mine_finalized_package_sha256=(
+                second_handoff.bank_to_mine_finalized_package_sha256
+            ),
+            bank_to_mine_reviewer_truth_sha256=(second_handoff.bank_to_mine_reviewer_truth_sha256),
+            departure_checkpoint_id=second_handoff.departure_checkpoint_id,
+            departure_frame_id=second_handoff.departure_frame_id,
+            departure_captured_monotonic_s=(second_handoff.departure_captured_monotonic_s),
+            departure_frame_payload_sha256=(second_handoff.departure_frame_payload_sha256),
+            _source_bank_to_mine_leg=second_return_leg,
+            _factory_token=round_trip_module._FACTORY_TOKEN,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "mutated_value"),
+    (
+        ("retry_count", 1),
+        ("input_authority", True),
+        ("release_eligible", True),
+        ("phase", SyntheticRoundTripPhase.STOPPED),
+        (
+            "evaluated_leg_order",
+            (RouteDirection.BANK_TO_MINE, RouteDirection.MINE_TO_BANK),
+        ),
+    ),
+)
+def test_post_construction_report_mutation_cannot_be_serialized(
+    pair: _PairEvidence,
+    field_name: str,
+    mutated_value: object,
+) -> None:
+    _, _, _, report = _completed_round_trip(pair)
+    object.__setattr__(report, field_name, mutated_value)
+
+    with pytest.raises(RouteEvidenceIntegrityError):
+        report.to_json_value()
+
+
+@pytest.mark.parametrize(
+    ("projection_name", "field_name", "mutated_value"),
+    (
+        ("mine_to_bank", "route_session_id", "mutated-outbound-session"),
+        ("bank_handoff", "input_authority", True),
+        ("mine_arrival", "checkpoint_id", "mutated-mine-arrival"),
+    ),
+)
+def test_post_construction_nested_projection_mutation_cannot_be_serialized(
+    pair: _PairEvidence,
+    projection_name: str,
+    field_name: str,
+    mutated_value: object,
+) -> None:
+    _, _, _, report = _completed_round_trip(pair)
+    projection = getattr(report, projection_name)
+    assert projection is not None
+    object.__setattr__(projection, field_name, mutated_value)
+
+    with pytest.raises(RouteEvidenceIntegrityError):
+        report.to_json_value()
+
+
+def test_return_stop_reason_and_handoff_shape_are_recomputed_from_source_time(
+    pair: _PairEvidence,
+) -> None:
+    late_outbound = _complete_result(
+        pair.mine_to_bank.result.progress.session.context,
+        started_monotonic_s=40.0,
+        session_suffix="late-outbound-for-precedence",
+    )
+    early_failed_return = _stopped_result(
+        pair.bank_to_mine.result.progress.session.context,
+        "mid-route-skip",
+    )
+    nonfresh_evidence = _pair_with_result(pair, RouteDirection.MINE_TO_BANK, late_outbound)
+    nonfresh_evidence = _pair_with_result(
+        nonfresh_evidence,
+        RouteDirection.BANK_TO_MINE,
+        early_failed_return,
+    )
+    nonfresh_decision = _evaluate(nonfresh_evidence)
+    nonfresh_report = _round_trip(
+        nonfresh_decision,
+        late_outbound,
+        early_failed_return,
+    )
+    assert nonfresh_report.stop_reason is (
+        SyntheticRoundTripStopReason.BANK_TO_MINE_DEPARTURE_NOT_FRESH
+    )
+    with pytest.raises(RouteEvidenceIntegrityError, match="bypassed nonfresh precedence"):
+        replace(
+            nonfresh_report,
+            stop_reason=SyntheticRoundTripStopReason.BANK_TO_MINE_NOT_ARRIVED,
+            _factory_token=round_trip_module._FACTORY_TOKEN,
+        )
+
+    fresh_failed_return = _stopped_result(
+        pair.bank_to_mine.result.progress.session.context,
+        "mid-route-skip",
+    )
+    fresh_evidence = _pair_with_result(
+        pair,
+        RouteDirection.BANK_TO_MINE,
+        fresh_failed_return,
+    )
+    fresh_decision = _evaluate(fresh_evidence)
+    fresh_report = _round_trip(
+        fresh_decision,
+        fresh_evidence.mine_to_bank.result,
+        fresh_failed_return,
+    )
+    assert fresh_report.stop_reason is SyntheticRoundTripStopReason.BANK_TO_MINE_NOT_ARRIVED
+    assert fresh_report.bank_handoff is not None
+    with pytest.raises(RouteEvidenceIntegrityError, match="omitted its bank handoff"):
+        replace(
+            fresh_report,
+            bank_handoff=None,
+            _factory_token=round_trip_module._FACTORY_TOKEN,
+        )
+
+
 def test_release_boundary_is_not_root_exported_or_input_capable() -> None:
     exported = set(navigation_root.__all__)
     integration_exports = set(integration_boundary.__all__)
@@ -1617,10 +2511,11 @@ def test_release_boundary_is_not_root_exported_or_input_capable() -> None:
     assert "evaluate_navigation_release_readiness" not in exported
     assert "NavigationReleaseDecision" not in integration_exports
     assert "evaluate_navigation_release_readiness" not in integration_exports
+    assert "SyntheticRoundTripRehearsalReport" not in exported
+    assert "evaluate_synthetic_round_trip_rehearsal" not in exported
+    assert "SyntheticRoundTripRehearsalReport" not in integration_exports
+    assert "evaluate_synthetic_round_trip_rehearsal" not in integration_exports
 
-    source_path = Path(release_module.__file__ or "")
-    tree = ast.parse(source_path.read_text(encoding="utf-8"))
-    imported_modules, imported_names = _imports(tree)
     forbidden_module_parts = {
         "pyautogui",
         "pynput",
@@ -1633,9 +2528,13 @@ def test_release_boundary_is_not_root_exported_or_input_capable() -> None:
         "banking",
         "input",
     }
-    assert all(
-        forbidden not in module.lstrip(".").split(".")
-        for module in imported_modules
-        for forbidden in forbidden_module_parts
-    )
-    assert {"MiningController", "WorldState"}.isdisjoint(imported_names)
+    for module_under_test in (release_module, round_trip_module):
+        source_path = Path(module_under_test.__file__ or "")
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        imported_modules, imported_names = _imports(tree)
+        assert all(
+            forbidden not in module.lstrip(".").split(".")
+            for module in imported_modules
+            for forbidden in forbidden_module_parts
+        )
+        assert {"MiningController", "WorldState"}.isdisjoint(imported_names)
