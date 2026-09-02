@@ -778,6 +778,8 @@ class DirectionProductionBinding:
     checks: tuple[DirectionReleaseCheck, ...]
     _source_evidence: _VerifiedDurableRouteEvidence = field(repr=False)
     _source_post_attempt_result: OfflineRouteSessionResult = field(repr=False)
+    _source_acquisition_storage_path: str = field(repr=False)
+    _source_review_storage_path: str = field(repr=False)
     _factory_token: InitVar[object | None] = None
     real_route_evidence_satisfied: Literal[False] = field(default=False, init=False)
     release_eligible: Literal[False] = field(default=False, init=False)
@@ -791,6 +793,13 @@ class DirectionProductionBinding:
             raise RouteEvidenceIntegrityError("direction source evidence is invalid")
         if type(self._source_post_attempt_result) is not OfflineRouteSessionResult:
             raise RouteEvidenceIntegrityError("direction source session result is invalid")
+        if (
+            type(self._source_acquisition_storage_path) is not str
+            or not self._source_acquisition_storage_path
+            or type(self._source_review_storage_path) is not str
+            or not self._source_review_storage_path
+        ):
+            raise RouteEvidenceIntegrityError("direction source storage paths are invalid")
         if type(self.route_plan) is not RoutePlan:
             raise RouteEvidenceIntegrityError("direction binding route plan is invalid")
         if type(self.expectation) is not DurableRouteEvidenceFilesystemExpectation:
@@ -882,6 +891,11 @@ class DirectionProductionBinding:
             or self.review_root.role is not DurableRootRole.REVIEW
         ):
             raise RouteEvidenceIntegrityError("direction durable root roles differ")
+        if (
+            self.acquisition_root.storage_path != self._source_acquisition_storage_path
+            or self.review_root.storage_path != self._source_review_storage_path
+        ):
+            raise RouteEvidenceIntegrityError("direction durable root paths differ from sources")
         if (
             self.acquisition_root.physical_root_identity
             != source.acquisition_filesystem_identity.root_identity
@@ -1322,6 +1336,8 @@ def _direction_binding(
         ),
         _source_evidence=verified,
         _source_post_attempt_result=result,
+        _source_acquisition_storage_path=acquisition_root.storage_path,
+        _source_review_storage_path=review_root.storage_path,
         _factory_token=_FACTORY_TOKEN,
     )
 
@@ -1654,6 +1670,57 @@ def _owned_result(value: OfflineRouteSessionResult) -> OfflineRouteSessionResult
         raise RouteEvidenceIntegrityError("post-attempt session result is malformed") from exc
     if first != second:
         raise RouteEvidenceIntegrityError("post-attempt session result changed during snapshot")
+    return second
+
+
+def _copy_direction_production_binding(
+    value: DirectionProductionBinding,
+) -> DirectionProductionBinding:
+    """Rebuild one evaluator-owned direction from its retained strict sources."""
+
+    if type(value) is not DirectionProductionBinding:
+        raise TypeError("direction production binding has the wrong type")
+    acquisition_path = _absolute_path_once(
+        value._source_acquisition_storage_path,
+        "direction acquisition storage path",
+    )
+    review_path = _absolute_path_once(
+        value._source_review_storage_path,
+        "direction review storage path",
+    )
+    return _direction_binding(
+        value._source_evidence,
+        acquisition_path,
+        review_path,
+        _owned_causality_expectation(value.post_attempt_expectation),
+        _owned_result(value._source_post_attempt_result),
+    )
+
+
+def _snapshot_navigation_release_decision(
+    value: NavigationReleaseDecision,
+) -> NavigationReleaseDecision:
+    """Detach and revalidate a complete B1 decision for offline composition."""
+
+    def copy_once(candidate: NavigationReleaseDecision) -> NavigationReleaseDecision:
+        if type(candidate) is not NavigationReleaseDecision:
+            raise TypeError("navigation release decision has the wrong type")
+        return NavigationReleaseDecision(
+            mine_to_bank=_copy_direction_production_binding(candidate.mine_to_bank),
+            bank_to_mine=_copy_direction_production_binding(candidate.bank_to_mine),
+            pair_checks=_pair_checks(),
+            _factory_token=_FACTORY_TOKEN,
+        )
+
+    try:
+        first = copy_once(value)
+        second = copy_once(value)
+    except (AttributeError, OSError, TypeError, ValueError) as exc:
+        raise RouteEvidenceIntegrityError("navigation release decision is malformed") from exc
+    if first != second:
+        raise RouteEvidenceIntegrityError("navigation release decision changed during snapshot")
+    if second != value:
+        raise RouteEvidenceIntegrityError("navigation release decision differs from its sources")
     return second
 
 
