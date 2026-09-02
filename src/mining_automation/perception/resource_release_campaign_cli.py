@@ -34,6 +34,10 @@ from .resource_release_decision import (
     prepare_resource_release_decision,
     verify_resource_release_decision,
 )
+from .resource_release_live_readiness import (
+    prepare_resource_release_live_readiness,
+    verify_resource_release_live_readiness,
+)
 from .resource_replay_promotion import (
     prepare_replay_promotion_proposals,
     verify_replay_promotion_proposals,
@@ -164,6 +168,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify_decision.add_argument("--decision", type=Path, required=True)
     verify_decision.add_argument("--expected-sha256", required=True)
+
+    live_readiness = subparsers.add_parser(
+        "prepare-live-readiness",
+        help="publish the offline, non-authorizing live-campaign readiness manifest",
+    )
+    live_readiness.add_argument("--output", type=Path, required=True)
+
+    verify_live_readiness = subparsers.add_parser(
+        "verify-live-readiness",
+        help="verify readiness against its independently retained SHA-256",
+    )
+    verify_live_readiness.add_argument("--manifest", type=Path, required=True)
+    verify_live_readiness.add_argument("--expected-sha256", required=True)
     return parser
 
 
@@ -263,6 +280,11 @@ def main(argv: list[str] | None = None, *, repository_root: Path | None = None) 
     repository_path = Path.cwd() if repository_root is None else Path(repository_root)
     try:
         if arguments.command == "start":
+            if LIVE_RESOURCE_CAMPAIGN_AUTHORIZED is not True:
+                raise CampaignError(
+                    "LIVE RESOURCE CAMPAIGN NOT YET AUTHORIZED; "
+                    "no session or backend was created"
+                )
             repository = read_repository_provenance(repository_path)
             session = create_campaign(
                 _private_campaign_root(repository_path),
@@ -428,6 +450,21 @@ def main(argv: list[str] | None = None, *, repository_root: Path | None = None) 
                 verify_resource_release_decision(
                     arguments.decision,
                     expected_sha256=arguments.expected_sha256,
+                )
+            )
+        elif arguments.command == "prepare-live-readiness":
+            _print_json(
+                prepare_resource_release_live_readiness(
+                    arguments.output,
+                    repository_root=repository_path,
+                )
+            )
+        elif arguments.command == "verify-live-readiness":
+            _print_json(
+                verify_resource_release_live_readiness(
+                    arguments.manifest,
+                    expected_sha256=arguments.expected_sha256,
+                    repository_root=repository_path,
                 )
             )
         else:  # pragma: no cover - argparse enforces the command set
