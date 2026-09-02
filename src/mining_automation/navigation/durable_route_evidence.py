@@ -13,14 +13,14 @@ from __future__ import annotations
 
 import os
 import stat
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from threading import RLock
 from types import MappingProxyType
-from typing import Final, Literal, NoReturn, SupportsIndex
+from typing import Final, Literal, NoReturn, Protocol, SupportsIndex
 
 from .checkpoint_evidence import CheckpointDetector
 from .contracts import (
@@ -118,10 +118,11 @@ _ACQUISITION_REQUEST_SCHEMA: Final[str] = "fixed-route-durable-capture-request-v
 _ACQUISITION_CASE_SCHEMA: Final[str] = "fixed-route-durable-owned-case-v1"
 _ACQUISITION_FINALIZATION_SCHEMA: Final[str] = "fixed-route-durable-acquisition-finalization-v1"
 _ACQUISITION_STOP_SCHEMA: Final[str] = "fixed-route-durable-acquisition-stop-v1"
-_REVIEW_PLAN_SCHEMA: Final[str] = "fixed-route-durable-review-plan-v1"
+_REVIEW_PLAN_SCHEMA: Final[str] = "fixed-route-durable-review-plan-v2"
 _REVIEW_TRUTH_SCHEMA: Final[str] = "fixed-route-durable-review-truth-v1"
 _REVIEW_FINALIZATION_SCHEMA: Final[str] = "fixed-route-durable-review-finalization-v1"
 _REVIEW_STOP_SCHEMA: Final[str] = "fixed-route-durable-review-stop-v1"
+_PHYSICAL_IDENTITY_SCHEMA: Final[str] = "fixed-route-durable-physical-tree-identity-v2"
 _MAX_MANIFEST_BYTES: Final[int] = 16 * 1024 * 1024
 _MAX_ARTIFACT_BYTES: Final[int] = 512 * 1024 * 1024
 _FACTORY_TOKEN: Final[object] = object()
@@ -137,6 +138,39 @@ class DurableEvidenceCollisionError(DurableEvidenceError):
 
 class DurableEvidenceStateError(DurableEvidenceError):
     """An operation was attempted after the durable head stopped or finalized."""
+
+
+class _DurableNamespace(Protocol):
+    """Navigation-private append-only namespace used by the transaction state machines."""
+
+    @property
+    def root(self) -> Path: ...
+
+    @property
+    def root_identity(self) -> tuple[int, ...]: ...
+
+    def mkdir(self, relative_path: str) -> None: ...
+
+    def mkdir_child(self, parent: str, child: str) -> str: ...
+
+    def write(
+        self,
+        relative_path: str,
+        payload: bytes,
+        *,
+        max_bytes: int = _MAX_MANIFEST_BYTES,
+    ) -> Sha256Digest: ...
+
+    def read_owned(self, relative_path: str, max_bytes: int) -> bytes: ...
+
+    def assert_exact_tree(self, expected_files: set[str]) -> None: ...
+
+    def physical_identity_sha256(self, expected_files: set[str]) -> Sha256Digest: ...
+
+    def close(self) -> None: ...
+
+
+_NamespaceFactory = Callable[[Path], _DurableNamespace]
 
 
 class DurableAcquisitionPhase(StrEnum):
@@ -160,6 +194,7 @@ class DurableAcquisitionFilesystemExpectation(RouteEvidenceLoadExpectation):
 
     acquisition_journal_head_sha256: Sha256Digest
     acquisition_finalization_sha256: Sha256Digest
+    acquisition_physical_identity_sha256: Sha256Digest
 
     def __post_init__(self) -> None:
         super(DurableAcquisitionFilesystemExpectation, self).__post_init__()
@@ -167,6 +202,8 @@ class DurableAcquisitionFilesystemExpectation(RouteEvidenceLoadExpectation):
             raise ValueError("durable acquisition journal head must be Sha256Digest")
         if not isinstance(self.acquisition_finalization_sha256, Sha256Digest):
             raise ValueError("durable acquisition finalization must be Sha256Digest")
+        if not isinstance(self.acquisition_physical_identity_sha256, Sha256Digest):
+            raise ValueError("durable acquisition physical identity must be Sha256Digest")
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +216,8 @@ class DurableRouteEvidenceFilesystemExpectation(RouteEvidenceFilesystemExpectati
     review_plan_sha256: Sha256Digest
     review_journal_head_sha256: Sha256Digest
     review_finalization_sha256: Sha256Digest
+    acquisition_physical_identity_sha256: Sha256Digest
+    review_physical_identity_sha256: Sha256Digest
 
     def __post_init__(self) -> None:
         super(DurableRouteEvidenceFilesystemExpectation, self).__post_init__()
@@ -188,6 +227,8 @@ class DurableRouteEvidenceFilesystemExpectation(RouteEvidenceFilesystemExpectati
             (self.review_plan_sha256, "review plan"),
             (self.review_journal_head_sha256, "review journal head"),
             (self.review_finalization_sha256, "review finalization"),
+            (self.acquisition_physical_identity_sha256, "acquisition physical identity"),
+            (self.review_physical_identity_sha256, "review physical identity"),
         ):
             if not isinstance(value, Sha256Digest):
                 raise ValueError(f"durable expectation {name} must be Sha256Digest")
@@ -241,6 +282,7 @@ class DurableReviewReceipt:
     review_plan_sha256: Sha256Digest
     review_journal_head_sha256: Sha256Digest
     review_finalization_sha256: Sha256Digest
+    review_physical_identity_sha256: Sha256Digest
     report: RouteEvidenceVerificationReport
     activation_allowed: Literal[False] = field(default=False, init=False)
     input_authority: Literal[False] = field(default=False, init=False)
@@ -255,6 +297,7 @@ class DurableReviewReceipt:
                 self.review_plan_sha256,
                 self.review_journal_head_sha256,
                 self.review_finalization_sha256,
+                self.review_physical_identity_sha256,
             )
         ):
             raise ValueError("review receipt digests must be Sha256Digest")
@@ -284,6 +327,57 @@ def _writer_directory_identity(signature: tuple[int, ...]) -> tuple[int, ...]:
         signature[7],
         signature[8],
     )
+
+
+def _physical_object_identity(
+    signature: tuple[int, ...],
+    *,
+    is_directory: bool,
+) -> tuple[int, ...]:
+    """Stable physical fields captured only after the append-only tree is complete."""
+
+    stable = (
+        signature[0],
+        signature[1],
+        signature[2],
+        signature[3],
+        signature[7],
+        signature[8],
+    )
+    if is_directory:
+        return stable
+    # POSIX filesystems may immediately reuse an unlinked file's inode.  A
+    # completed regular file's status-change epoch distinguishes that new
+    # object without depending on asynchronously updated directory times.
+    return (*stable, signature[6])
+
+
+def _physical_identity_sha256(
+    root_signature: tuple[int, ...],
+    tree: Mapping[str, _TreeEntry],
+) -> Sha256Digest:
+    payload = canonical_route_evidence_bytes(
+        {
+            "entries": [
+                {
+                    "is_directory": entry.is_directory,
+                    "physical_identity": list(
+                        _physical_object_identity(
+                            entry.signature,
+                            is_directory=entry.is_directory,
+                        )
+                    ),
+                    "relative_path": relative,
+                }
+                for relative, entry in sorted(tree.items())
+            ],
+            "root_physical_identity": list(
+                _physical_object_identity(root_signature, is_directory=True)
+            ),
+            "schema": _PHYSICAL_IDENTITY_SCHEMA,
+        }
+    )
+    return Sha256Digest.from_bytes(payload)
 
 
 def _absolute_path_once(value: str | os.PathLike[str], field_name: str) -> Path:
@@ -522,6 +616,38 @@ class _ExclusiveNamespace:
         self._assert_root()
         return Sha256Digest.from_bytes(payload)
 
+    def read_owned(self, relative_path: str, max_bytes: int) -> bytes:
+        """Read one invocation-owned file while retaining the pathname contract."""
+
+        self._assert_root()
+        snapshot = _read_owned_file(self._root, relative_path, max_bytes)
+        self._assert_root()
+        return snapshot.payload
+
+    def assert_exact_tree(self, expected_files: set[str]) -> None:
+        """Require the exact invocation-owned prefix before terminal publication."""
+
+        self._assert_root()
+        _assert_exact_tree(self._root, expected_files)
+        self._assert_root()
+
+    def physical_identity_sha256(self, expected_files: set[str]) -> Sha256Digest:
+        """Pin the complete post-terminal physical tree for strict later intake."""
+
+        self._assert_root()
+        initial_tree = _assert_exact_tree(self._root, expected_files)
+        initial_root = _stat_signature(_lstat(self._root, "durable transaction root"))
+        initial = _physical_identity_sha256(initial_root, initial_tree)
+        final_tree = _assert_exact_tree(self._root, expected_files)
+        final_root = _stat_signature(_lstat(self._root, "durable transaction root"))
+        if _physical_identity_sha256(final_root, final_tree) != initial:
+            raise DurableEvidenceError("durable physical identity changed while it was pinned")
+        self._assert_root()
+        return initial
+
+    def close(self) -> None:
+        """The pathname writer owns no retained operating-system handles."""
+
 
 def _canonical(value: Mapping[str, object]) -> bytes:
     return canonical_route_evidence_bytes(value)
@@ -684,6 +810,9 @@ def _review_plan_json(
         **_identity_json(package.campaign_plan),
         "acquisition_finalization_sha256": acquisition.acquisition_finalization_sha256.value,
         "acquisition_journal_head_sha256": acquisition.acquisition_journal_head_sha256.value,
+        "acquisition_physical_identity_sha256": (
+            acquisition.acquisition_physical_identity_sha256.value
+        ),
         "case_bindings": [
             {
                 "case_id": owned.case_id,
@@ -812,6 +941,7 @@ def _acquisition_expectation_from_package(
     *,
     journal_head_sha256: Sha256Digest,
     finalization_sha256: Sha256Digest,
+    physical_identity_sha256: Sha256Digest,
 ) -> DurableAcquisitionFilesystemExpectation:
     plan = package.campaign_plan
     return DurableAcquisitionFilesystemExpectation(
@@ -842,6 +972,7 @@ def _acquisition_expectation_from_package(
         support_envelope_sha256=Sha256Digest(plan.support_envelope_sha256.value),
         acquisition_journal_head_sha256=journal_head_sha256,
         acquisition_finalization_sha256=finalization_sha256,
+        acquisition_physical_identity_sha256=physical_identity_sha256,
     )
 
 
@@ -878,6 +1009,9 @@ def _snapshot_acquisition_expectation(
         support_envelope_sha256=Sha256Digest(value.support_envelope_sha256.value),
         acquisition_journal_head_sha256=Sha256Digest(value.acquisition_journal_head_sha256.value),
         acquisition_finalization_sha256=Sha256Digest(value.acquisition_finalization_sha256.value),
+        acquisition_physical_identity_sha256=Sha256Digest(
+            value.acquisition_physical_identity_sha256.value
+        ),
     )
 
 
@@ -906,6 +1040,7 @@ def _snapshot_full_expectation(
         support_envelope_sha256=value.support_envelope_sha256,
         acquisition_journal_head_sha256=value.acquisition_journal_head_sha256,
         acquisition_finalization_sha256=value.acquisition_finalization_sha256,
+        acquisition_physical_identity_sha256=value.acquisition_physical_identity_sha256,
     )
     owned = _snapshot_acquisition_expectation(acquisition)
     return DurableRouteEvidenceFilesystemExpectation(
@@ -930,10 +1065,12 @@ def _snapshot_full_expectation(
         reviewer_id=value.reviewer_id,
         acquisition_journal_head_sha256=owned.acquisition_journal_head_sha256,
         acquisition_finalization_sha256=owned.acquisition_finalization_sha256,
+        acquisition_physical_identity_sha256=owned.acquisition_physical_identity_sha256,
         review_id=value.review_id,
         review_plan_sha256=Sha256Digest(value.review_plan_sha256.value),
         review_journal_head_sha256=Sha256Digest(value.review_journal_head_sha256.value),
         review_finalization_sha256=Sha256Digest(value.review_finalization_sha256.value),
+        review_physical_identity_sha256=Sha256Digest(value.review_physical_identity_sha256.value),
     )
 
 
@@ -1083,6 +1220,10 @@ def load_durable_acquisition(
     ):
         raise RouteEvidenceIntegrityError("durable acquisition finalization digest differs")
     _require_package_expectation(package, owned_expectation)
+    if _physical_identity_sha256(root_signature, initial_tree) != (
+        owned_expectation.acquisition_physical_identity_sha256
+    ):
+        raise RouteEvidenceIntegrityError("durable acquisition physical identity differs")
     _assert_stable_intake(root_path, root_signature, initial_tree, snapshots, size_limits)
     return VerifiedDurableAcquisition(
         package=package,
@@ -1135,7 +1276,7 @@ class DurableAcquisitionTransaction:
 
     def __init__(
         self,
-        namespace: _ExclusiveNamespace,
+        namespace: _DurableNamespace,
         sequencer: PassiveCampaignSequencer,
         *,
         _factory_token: object | None = None,
@@ -1190,6 +1331,11 @@ class DurableAcquisitionTransaction:
         except BaseException:
             # The existing partial prefix is itself non-reviewable audit evidence.
             pass
+        finally:
+            try:
+                self._namespace.close()
+            except BaseException:
+                pass
 
     def _require_open(self) -> None:
         if self._phase in {DurableAcquisitionPhase.FINALIZED, DurableAcquisitionPhase.STOPPED}:
@@ -1315,12 +1461,8 @@ class DurableAcquisitionTransaction:
                 finalization = self._sequencer.finalize(finalized_at_utc=finalized_at_utc)
                 package = finalization.package
                 for relative, payload in finalization.artifact_payloads:
-                    snapshot = _read_owned_file(
-                        self._namespace.root,
-                        relative,
-                        len(payload),
-                    )
-                    if snapshot.payload != payload:
+                    persisted = self._namespace.read_owned(relative, len(payload))
+                    if persisted != payload:
                         raise DurableEvidenceError(
                             f"persisted artifact differs before finalization: {relative}"
                         )
@@ -1333,12 +1475,6 @@ class DurableAcquisitionTransaction:
                     )
                 )
                 finalization_sha = Sha256Digest.from_bytes(finalization_payload)
-                expectation = _acquisition_expectation_from_package(
-                    package,
-                    journal_head_sha256=self._journal_head,
-                    finalization_sha256=finalization_sha,
-                )
-                receipt = DurableAcquisitionReceipt(expectation)
                 package_payload = _canonical(package.to_json_value())
                 self._namespace.write(FINALIZED_PACKAGE_FILENAME, package_payload)
                 expected_before_terminal_manifest = {
@@ -1355,15 +1491,26 @@ class DurableAcquisitionTransaction:
                         )
                     ),
                 }
-                _assert_exact_tree(
-                    self._namespace.root,
-                    expected_before_terminal_manifest,
-                )
+                self._namespace.assert_exact_tree(expected_before_terminal_manifest)
                 terminal_manifest_started = True
                 self._namespace.write(
                     ACQUISITION_FINALIZATION_FILENAME,
                     finalization_payload,
                 )
+                finalized_files = {
+                    ACQUISITION_FINALIZATION_FILENAME,
+                    *expected_before_terminal_manifest,
+                }
+                self._namespace.assert_exact_tree(finalized_files)
+                physical_identity_sha256 = self._namespace.physical_identity_sha256(finalized_files)
+                expectation = _acquisition_expectation_from_package(
+                    package,
+                    journal_head_sha256=self._journal_head,
+                    finalization_sha256=finalization_sha,
+                    physical_identity_sha256=physical_identity_sha256,
+                )
+                receipt = DurableAcquisitionReceipt(expectation)
+                self._namespace.close()
                 self._phase = DurableAcquisitionPhase.FINALIZED
                 return receipt
             except PassiveCampaignFinalizationError:
@@ -1375,6 +1522,10 @@ class DurableAcquisitionTransaction:
             except BaseException:
                 if terminal_manifest_started:
                     self._phase = DurableAcquisitionPhase.STOPPED
+                    try:
+                        self._namespace.close()
+                    except BaseException:
+                        pass
                 else:
                     self._write_stop(
                         "durable-finalization-persistence-failed",
@@ -1395,7 +1546,30 @@ def begin_durable_acquisition(
     """Reserve a fresh root beneath a trusted, non-hostile dedicated parent."""
 
     root_path = _absolute_path_once(root, "durable acquisition root")
-    namespace = _ExclusiveNamespace(root_path)
+    return _begin_durable_acquisition_with_namespace_factory(
+        root_path,
+        plan,
+        source,
+        detector,
+        clock,
+        started_monotonic_s=started_monotonic_s,
+        namespace_factory=_ExclusiveNamespace,
+    )
+
+
+def _begin_durable_acquisition_with_namespace_factory(
+    root_path: Path,
+    plan: RouteEvidenceCampaignPlan,
+    source: PassiveCaptureSource,
+    detector: CheckpointDetector,
+    clock: PassiveMonotonicClock,
+    *,
+    started_monotonic_s: float,
+    namespace_factory: _NamespaceFactory,
+) -> DurableAcquisitionTransaction:
+    """Initialize one transaction with a navigation-owned namespace implementation."""
+
+    namespace = namespace_factory(root_path)
     try:
         namespace.mkdir("audit")
         namespace.mkdir("cases")
@@ -1413,6 +1587,10 @@ def begin_durable_acquisition(
         )
     except BaseException:
         # Keep the invocation-owned prefix as non-reviewable audit evidence.
+        try:
+            namespace.close()
+        except BaseException:
+            pass
         raise
     return DurableAcquisitionTransaction(
         namespace,
@@ -1443,7 +1621,7 @@ class DurableReviewTransaction:
 
     def __init__(
         self,
-        namespace: _ExclusiveNamespace,
+        namespace: _DurableNamespace,
         acquisition_root: Path,
         acquisition: VerifiedDurableAcquisition,
         *,
@@ -1512,6 +1690,11 @@ class DurableReviewTransaction:
             self._namespace.write(REVIEW_STOP_FILENAME, payload)
         except BaseException:
             pass
+        finally:
+            try:
+                self._namespace.close()
+            except BaseException:
+                pass
 
     def record_case_truth(
         self,
@@ -1633,15 +1816,6 @@ class DurableReviewTransaction:
                     )
                 )
                 finalization_sha = Sha256Digest.from_bytes(finalization_payload)
-                receipt = DurableReviewReceipt(
-                    review_id=self._review_id,
-                    reviewer_id=self._reviewer_id,
-                    independent_review_sha256=review.content_sha256,
-                    review_plan_sha256=self._review_plan_sha256,
-                    review_journal_head_sha256=self._journal_head,
-                    review_finalization_sha256=finalization_sha,
-                    report=report,
-                )
                 review_payload = _canonical(review.to_json_value())
                 self._namespace.write(INDEPENDENT_REVIEW_FILENAME, review_payload)
                 expected_before_terminal_manifest = {
@@ -1649,20 +1823,38 @@ class DurableReviewTransaction:
                     INDEPENDENT_REVIEW_FILENAME,
                     *(_truth_path(owned) for owned in self._package.cases),
                 }
-                _assert_exact_tree(
-                    self._namespace.root,
-                    expected_before_terminal_manifest,
-                )
+                self._namespace.assert_exact_tree(expected_before_terminal_manifest)
                 terminal_manifest_started = True
                 self._namespace.write(
                     REVIEW_FINALIZATION_FILENAME,
                     finalization_payload,
                 )
+                finalized_files = {
+                    REVIEW_FINALIZATION_FILENAME,
+                    *expected_before_terminal_manifest,
+                }
+                self._namespace.assert_exact_tree(finalized_files)
+                physical_identity_sha256 = self._namespace.physical_identity_sha256(finalized_files)
+                receipt = DurableReviewReceipt(
+                    review_id=self._review_id,
+                    reviewer_id=self._reviewer_id,
+                    independent_review_sha256=review.content_sha256,
+                    review_plan_sha256=self._review_plan_sha256,
+                    review_journal_head_sha256=self._journal_head,
+                    review_finalization_sha256=finalization_sha,
+                    review_physical_identity_sha256=physical_identity_sha256,
+                    report=report,
+                )
+                self._namespace.close()
                 self._phase = DurableReviewPhase.FINALIZED
                 return receipt
             except BaseException:
                 if terminal_manifest_started:
                     self._phase = DurableReviewPhase.STOPPED
+                    try:
+                        self._namespace.close()
+                    except BaseException:
+                        pass
                 else:
                     self._write_stop(
                         "review-finalization-persistence-failed",
@@ -1682,11 +1874,34 @@ def begin_durable_review(
 ) -> DurableReviewTransaction:
     """Reserve a fresh trusted-parent review root after strict acquisition intake."""
 
+    review_path = _absolute_path_once(root, "durable review root")
+    return _begin_durable_review_with_namespace_factory(
+        review_path,
+        acquisition_root,
+        acquisition_expectation,
+        review_id=review_id,
+        reviewer_id=reviewer_id,
+        started_at_utc=started_at_utc,
+        namespace_factory=_ExclusiveNamespace,
+    )
+
+
+def _begin_durable_review_with_namespace_factory(
+    review_path: Path,
+    acquisition_root: str | os.PathLike[str],
+    acquisition_expectation: DurableAcquisitionFilesystemExpectation,
+    *,
+    review_id: str,
+    reviewer_id: str,
+    started_at_utc: str,
+    namespace_factory: _NamespaceFactory,
+) -> DurableReviewTransaction:
+    """Initialize one independent review with a navigation-owned namespace."""
+
     _identifier(review_id, "review_id")
     _identifier(reviewer_id, "reviewer_id")
     started_at = _utc(started_at_utc, "review started_at_utc")
     acquisition_path = _absolute_path_once(acquisition_root, "durable acquisition root")
-    review_path = _absolute_path_once(root, "durable review root")
     acquisition = load_durable_acquisition(acquisition_path, acquisition_expectation)
     package = acquisition.package
     if reviewer_id.casefold() == package.campaign_plan.operator_id.casefold():
@@ -1712,9 +1927,16 @@ def begin_durable_review(
             started_at_utc=started_at_utc,
         )
     )
-    namespace = _ExclusiveNamespace(review_path)
-    namespace.mkdir("truth")
-    plan_sha = namespace.write(REVIEW_PLAN_FILENAME, plan_payload)
+    namespace = namespace_factory(review_path)
+    try:
+        namespace.mkdir("truth")
+        plan_sha = namespace.write(REVIEW_PLAN_FILENAME, plan_payload)
+    except BaseException:
+        try:
+            namespace.close()
+        except BaseException:
+            pass
+        raise
     return DurableReviewTransaction(
         namespace,
         acquisition_path,
@@ -1757,6 +1979,9 @@ def load_and_verify_durable_synthetic_route_evidence(
         support_envelope_sha256=owned_expectation.support_envelope_sha256,
         acquisition_journal_head_sha256=(owned_expectation.acquisition_journal_head_sha256),
         acquisition_finalization_sha256=(owned_expectation.acquisition_finalization_sha256),
+        acquisition_physical_identity_sha256=(
+            owned_expectation.acquisition_physical_identity_sha256
+        ),
     )
     acquisition = load_durable_acquisition(acquisition_path, acquisition_expectation)
     package = acquisition.package
@@ -1911,6 +2136,10 @@ def load_and_verify_durable_synthetic_route_evidence(
         owned_expectation.review_finalization_sha256
     ):
         raise RouteEvidenceIntegrityError("durable review finalization digest differs")
+    if _physical_identity_sha256(root_signature, initial_tree) != (
+        owned_expectation.review_physical_identity_sha256
+    ):
+        raise RouteEvidenceIntegrityError("durable review physical identity differs")
     report = verify_synthetic_route_evidence(
         package,
         review,
