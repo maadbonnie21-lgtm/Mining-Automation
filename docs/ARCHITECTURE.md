@@ -101,6 +101,12 @@ The offline constrained-v1 perception authority boundary is documented in
 It is a deny-only integration contract and does not activate `WorldState`, the
 controller, navigation, banking, or input.
 
+The future perception-only owned-frame join and its required regression matrix
+are specified in
+[`FIRST_MINING_SLICE_SAME_CYCLE_ASSEMBLY_DESIGN.md`](FIRST_MINING_SLICE_SAME_CYCLE_ASSEMBLY_DESIGN.md).
+That design remains non-executable until both perception release lineages are
+independently approved; it grants no controller or input authority.
+
 ## Support envelope
 
 Support is data-driven and explicit. A location cannot be marked production-supported until required detectors, navigation, banking, recovery, integration tests, and real validation satisfy release gates.
