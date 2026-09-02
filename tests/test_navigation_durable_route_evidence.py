@@ -1726,6 +1726,10 @@ def test_same_content_acquisition_replacement_after_review_begin_invalidates_rev
     identical = target.read_bytes()
     target.unlink()
     target.write_bytes(identical)
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="physical identity differs"):
+        load_durable_acquisition(acquisition_root, receipt.expectation)
+
     for ordinal, truth in enumerate(_truths(acquisition), start=1):
         transaction.record_case_truth(
             truth,

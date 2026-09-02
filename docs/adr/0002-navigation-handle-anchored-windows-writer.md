@@ -76,10 +76,12 @@ from a saved pathname.
 After the terminal write, while the owned handles are still retained, the writer computes a
 schema-tagged SHA-256 over the root and every expected directory/file physical identity. The
 identity uses stable mode, device, inode/file ID, link count, file attributes, and reparse tag and
-includes the terminal manifest itself; volatile timestamps and content fields are excluded. The
-required digest is returned only in the caller-owned acquisition/review receipt. Strict intake
-recomputes it from the exact tree before accepting content, so exact-byte file replacement and
-cloned child-directory replacement fail even when all content digests still match. Receipt
+includes the terminal manifest itself. Physical-identity schema v2 additionally binds the
+completed regular-file status-change/creation epoch so immediate POSIX inode reuse cannot alias a
+new object; volatile directory and modification timestamps and content fields remain excluded.
+The required digest is returned only in the caller-owned acquisition/review receipt. Strict
+intake recomputes it from the exact tree before accepting content, so exact-byte file replacement
+and cloned child-directory replacement fail even when all content digests still match. Receipt
 construction follows the pin and precedes handle cleanup; failure in either step returns no
 receipt.
 

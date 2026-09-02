@@ -122,7 +122,7 @@ _REVIEW_PLAN_SCHEMA: Final[str] = "fixed-route-durable-review-plan-v2"
 _REVIEW_TRUTH_SCHEMA: Final[str] = "fixed-route-durable-review-truth-v1"
 _REVIEW_FINALIZATION_SCHEMA: Final[str] = "fixed-route-durable-review-finalization-v1"
 _REVIEW_STOP_SCHEMA: Final[str] = "fixed-route-durable-review-stop-v1"
-_PHYSICAL_IDENTITY_SCHEMA: Final[str] = "fixed-route-durable-physical-tree-identity-v1"
+_PHYSICAL_IDENTITY_SCHEMA: Final[str] = "fixed-route-durable-physical-tree-identity-v2"
 _MAX_MANIFEST_BYTES: Final[int] = 16 * 1024 * 1024
 _MAX_ARTIFACT_BYTES: Final[int] = 512 * 1024 * 1024
 _FACTORY_TOKEN: Final[object] = object()
@@ -329,10 +329,14 @@ def _writer_directory_identity(signature: tuple[int, ...]) -> tuple[int, ...]:
     )
 
 
-def _physical_object_identity(signature: tuple[int, ...]) -> tuple[int, ...]:
+def _physical_object_identity(
+    signature: tuple[int, ...],
+    *,
+    is_directory: bool,
+) -> tuple[int, ...]:
     """Stable physical fields captured only after the append-only tree is complete."""
 
-    return (
+    stable = (
         signature[0],
         signature[1],
         signature[2],
@@ -340,6 +344,12 @@ def _physical_object_identity(signature: tuple[int, ...]) -> tuple[int, ...]:
         signature[7],
         signature[8],
     )
+    if is_directory:
+        return stable
+    # POSIX filesystems may immediately reuse an unlinked file's inode.  A
+    # completed regular file's status-change epoch distinguishes that new
+    # object without depending on asynchronously updated directory times.
+    return (*stable, signature[6])
 
 
 def _physical_identity_sha256(
@@ -351,12 +361,19 @@ def _physical_identity_sha256(
             "entries": [
                 {
                     "is_directory": entry.is_directory,
-                    "physical_identity": list(_physical_object_identity(entry.signature)),
+                    "physical_identity": list(
+                        _physical_object_identity(
+                            entry.signature,
+                            is_directory=entry.is_directory,
+                        )
+                    ),
                     "relative_path": relative,
                 }
                 for relative, entry in sorted(tree.items())
             ],
-            "root_physical_identity": list(_physical_object_identity(root_signature)),
+            "root_physical_identity": list(
+                _physical_object_identity(root_signature, is_directory=True)
+            ),
             "schema": _PHYSICAL_IDENTITY_SCHEMA,
         }
     )

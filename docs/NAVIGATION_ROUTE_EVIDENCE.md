@@ -273,7 +273,9 @@ Successful acquisition/review receipts also carry required external
 `acquisition_physical_identity_sha256` and `review_physical_identity_sha256` pins. Each digest is
 computed only after the terminal manifest and exact-tree check and covers the root plus every
 expected directory/file—including the terminal file—using stable mode, device, inode/file ID,
-link-count, file-attribute, and reparse-tag fields. Volatile timestamps and content metadata are
+link-count, file-attribute, and reparse-tag fields. Physical-identity schema v2 also binds each
+completed regular file's status-change/creation epoch so immediate POSIX inode reuse cannot make a
+new file look like the receipted object. Volatile directory and modification timestamps remain
 excluded; content/size remain independently digest-bound. Strict intake recomputes the complete
 physical digest before content authority is returned, so an exact-byte file replacement or cloned
 child directory is still rejected. Receipt construction occurs after this pin succeeds and before
