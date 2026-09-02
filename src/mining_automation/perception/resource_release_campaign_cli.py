@@ -30,6 +30,10 @@ from .resource_release_campaign import (
     verify_review_package,
     write_release_summary,
 )
+from .resource_release_decision import (
+    prepare_resource_release_decision,
+    verify_resource_release_decision,
+)
 from .resource_replay_promotion import (
     prepare_replay_promotion_proposals,
     verify_replay_promotion_proposals,
@@ -141,6 +145,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify_proposals.add_argument("--proposal", type=Path, required=True)
     verify_proposals.add_argument("--expected-manifest-sha256", required=True)
+
+    decision = subparsers.add_parser(
+        "prepare-release-decision-readiness",
+        help="prepare a deny-only C2 envelope/source-release review packet",
+    )
+    decision.add_argument("--followup", type=Path, required=True)
+    decision.add_argument("--expected-followup-sha256", required=True)
+    decision.add_argument("--package", type=Path, required=True)
+    decision.add_argument("--expected-package-manifest-sha256", required=True)
+    decision.add_argument("--proposal", type=Path)
+    decision.add_argument("--expected-proposal-manifest-sha256")
+    decision.add_argument("--output", type=Path, required=True)
+
+    verify_decision = subparsers.add_parser(
+        "verify-release-review-packet",
+        help="verify a deny-only C2 review packet against a retained root",
+    )
+    verify_decision.add_argument("--decision", type=Path, required=True)
+    verify_decision.add_argument("--expected-sha256", required=True)
     return parser
 
 
@@ -382,6 +405,29 @@ def main(argv: list[str] | None = None, *, repository_root: Path | None = None) 
                 verify_replay_promotion_proposals(
                     arguments.proposal,
                     expected_manifest_sha256=arguments.expected_manifest_sha256,
+                )
+            )
+        elif arguments.command == "prepare-release-decision-readiness":
+            _print_json(
+                prepare_resource_release_decision(
+                    arguments.followup,
+                    arguments.package,
+                    arguments.output,
+                    expected_followup_sha256=arguments.expected_followup_sha256,
+                    expected_package_manifest_sha256=(
+                        arguments.expected_package_manifest_sha256
+                    ),
+                    proposal_dir=arguments.proposal,
+                    expected_proposal_manifest_sha256=(
+                        arguments.expected_proposal_manifest_sha256
+                    ),
+                )
+            )
+        elif arguments.command == "verify-release-review-packet":
+            _print_json(
+                verify_resource_release_decision(
+                    arguments.decision,
+                    expected_sha256=arguments.expected_sha256,
                 )
             )
         else:  # pragma: no cover - argparse enforces the command set

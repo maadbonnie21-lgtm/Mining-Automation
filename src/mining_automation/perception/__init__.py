@@ -113,6 +113,10 @@ from .resource_release_campaign import (
     verify_review_package,
     write_release_summary,
 )
+from .resource_release_decision import (
+    prepare_resource_release_decision,
+    verify_resource_release_decision,
+)
 from .resource_replay_promotion import (
     prepare_replay_promotion_proposals,
     verify_replay_promotion_proposals,
@@ -238,6 +242,7 @@ __all__ = [
     "prepare_case_review",
     "prepare_release_followup_inputs",
     "prepare_replay_promotion_proposals",
+    "prepare_resource_release_decision",
     "load_resource_detector_profile",
     "load_resource_fixture_draft",
     "load_varrock_east_iron_profile",
@@ -258,6 +263,7 @@ __all__ = [
     "verify_review_package",
     "verify_release_followup_inputs",
     "verify_replay_promotion_proposals",
+    "verify_resource_release_decision",
     "trust_varrock_east_iron_observations",
     "validate_detector",
     "varrock_east_iron_scene_excluded_regions",

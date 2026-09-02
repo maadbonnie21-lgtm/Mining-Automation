@@ -288,6 +288,52 @@ unchanged production detector, and checks reviewer truth plus every deny-only
 policy field. A later reviewed source commit must still decide how to encode the
 regression and bind its final fixture/evaluator Git hashes.
 
+Prepare the C2 final-envelope/source-release **decision-readiness packet** from
+the original independently rooted review package, its exact canonical follow-up,
+and the conditional replay-proposal root:
+
+```powershell
+python tools/resource_release_campaign.py prepare-release-decision-readiness `
+  --package <review-package-directory> `
+  --expected-package-manifest-sha256 <retained-package-manifest-sha256> `
+  --followup <followup-inputs.json> `
+  --expected-followup-sha256 <retained-followup-sha256> `
+  --proposal <proposal-directory> `
+  --expected-proposal-manifest-sha256 <retained-proposal-manifest-sha256> `
+  --output <new-release-decision.json>
+```
+
+The proposal arguments are omitted together only when the rooted follow-up has
+no retained failures. Any retained replayable, metadata-only, or non-release
+failure requires the exact A2 proposal root so the complete partition remains
+visible. Preparation independently verifies the original package, recomputes
+the package-to-follow-up projection byte for byte, verifies the proposal when
+required, and writes one canonical JSON artifact plus adjacent SHA-256 sidecar.
+
+Verify the packet with its independently retained digest:
+
+```powershell
+python tools/resource_release_campaign.py verify-release-review-packet `
+  --decision <release-decision.json> `
+  --expected-sha256 <retained-release-decision-sha256>
+```
+
+The packet records the exact detector/profile/schema/location, candidate DPI
+and client geometry, capture environment, all immutable evidence roots,
+retained-failure partitions, and the exact source Git-blob bindings still
+required. Renderer identity remains explicitly unresolved because capture did
+not observe it. PR #49 exact `86090c93046ce584652f11fce1c49d59b5988754`
+is recorded only as the accepted offline, nonactivating A1 packaging
+checkpoint; that acceptance does not approve the evidence boundary, client
+envelope, or detector release.
+
+The included source release record is always `PROPOSED_NOT_GRANTED`. There is
+no CLI renderer, DPI, geometry, approval, adoption, policy, or authority
+override. `release_eligible`, activation, WorldState, controller, and input
+authority remain false even when all objective C1 inputs are present. A
+separate lead-reviewed source commit must close renderer/envelope review, bind
+any permanent replay fixture/evaluator Git blobs, and grant the final record.
+
 ## Fail-closed invariants
 
 - Production perception is the sole scene and resource authority.

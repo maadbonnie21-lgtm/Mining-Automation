@@ -625,19 +625,62 @@ def _strict_json_bytes(payload: bytes, *, label: str) -> dict[str, object]:
     return cast(dict[str, object], decoded)
 
 
-def _exclusive_write(path: Path, payload: bytes) -> None:
+_OwnedFileIdentity = tuple[int, int, int, int, int]
+
+
+def _identity_from_stat(value: os.stat_result) -> _OwnedFileIdentity | None:
+    if value.st_ino <= 0:
+        return None
+    creation_ns = getattr(value, "st_birthtime_ns", None)
+    if type(creation_ns) is not int:
+        creation_ns = value.st_ctime_ns
+    return (
+        value.st_dev,
+        value.st_ino,
+        creation_ns,
+        value.st_mtime_ns,
+        value.st_size,
+    )
+
+
+def _unlink_if_owned(path: Path, identity: _OwnedFileIdentity | None) -> None:
+    if not _path_is_owned(path, identity):
+        return
+
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _path_is_owned(path: Path, identity: _OwnedFileIdentity | None) -> bool:
+    if identity is None or path.is_symlink():
+        return False
+    try:
+        current = _identity_from_stat(path.stat(follow_symlinks=False))
+    except OSError:
+        return False
+    return current == identity
+
+
+def _exclusive_write(path: Path, payload: bytes) -> _OwnedFileIdentity | None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    owned = False
+    identity: _OwnedFileIdentity | None = None
     try:
         with path.open("xb") as output:
-            owned = True
             output.write(payload)
             output.flush()
             os.fsync(output.fileno())
+            # Record identity only after the final write.  Inode/device alone
+            # are insufficient because unlink/recreate can immediately reuse
+            # an inode. Use stable creation time where the platform exposes it
+            # (Windows finalizes legacy ctime while closing), otherwise ctime;
+            # cleanup must never remove a concurrent winner.
+            identity = _identity_from_stat(os.fstat(output.fileno()))
     except Exception:
-        if owned:
-            path.unlink(missing_ok=True)
+        _unlink_if_owned(path, identity)
         raise
+    return identity
 
 
 def _artifact_sidecar(path: Path) -> Path:
@@ -647,12 +690,28 @@ def _artifact_sidecar(path: Path) -> Path:
 def _write_hashed_artifact(path: Path, payload: bytes) -> str:
     digest = _sha256(payload)
     sidecar = _artifact_sidecar(path)
-    _exclusive_write(path, payload)
+    identity = _exclusive_write(path, payload)
     try:
-        _exclusive_write(sidecar, f"{digest}\n".encode("ascii"))
+        sidecar_payload = f"{digest}\n".encode("ascii")
+        sidecar_identity = _exclusive_write(sidecar, sidecar_payload)
     except Exception:
-        path.unlink(missing_ok=True)
+        _unlink_if_owned(path, identity)
         raise
+    try:
+        publication_valid = (
+            _path_is_owned(path, identity)
+            and _path_is_owned(sidecar, sidecar_identity)
+            and path.read_bytes() == payload
+            and sidecar.read_bytes() == sidecar_payload
+        )
+    except OSError:
+        publication_valid = False
+    if not publication_valid:
+        _unlink_if_owned(sidecar, sidecar_identity)
+        _unlink_if_owned(path, identity)
+        raise CampaignIntegrityError(
+            f"campaign artifact changed during exclusive publication: {path}"
+        )
     return digest
 
 
@@ -673,7 +732,7 @@ def _verify_hashed_artifact(
                 else source.read(maximum_bytes + 1)
             )
         with sidecar.open("rb") as source:
-            sidecar_payload = source.read(66)
+            sidecar_payload = source.read(67)
     except OSError as exc:
         raise CampaignIntegrityError(f"missing campaign artifact: {path}") from exc
     if maximum_bytes is not None and len(payload) > maximum_bytes:
