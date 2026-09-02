@@ -113,6 +113,12 @@ receipt, then to the future same-cycle join and Issue #14, is frozen in
 It is a two-commit, preparatory release protocol and currently grants no
 receipt, positive perception path, controller, or input authority.
 
+The future mining-only temporal boundary after that join is specified in
+[`MINING_ONLY_ATTEMPT_REOBSERVE_VERIFY_CONTRACT.md`](MINING_ONLY_ATTEMPT_REOBSERVE_VERIFY_CONTRACT.md).
+It separates one proposed resource, one attempted-event receipt, and one fresh
+post-attempt perception cycle; it is currently replay-contract preparation only
+and grants no interaction or input authority.
+
 ## Support envelope
 
 Support is data-driven and explicit. A location cannot be marked production-supported until required detectors, navigation, banking, recovery, integration tests, and real validation satisfy release gates.
