@@ -451,7 +451,6 @@ def _validate_source_owned_record(record: object) -> dict[str, object]:
 
     authorization = stage_values["authorization"]
     campaign = stage_values["campaign"]
-    review = stage_values["review"]
     evaluation = stage_values["terminal_evaluation"]
     source_approval = stage_values["source_approval"]
     identity_approval = stage_values["production_identity_approval"]
