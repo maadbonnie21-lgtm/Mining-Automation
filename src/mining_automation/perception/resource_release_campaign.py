@@ -631,10 +631,13 @@ _OwnedFileIdentity = tuple[int, int, int, int, int]
 def _identity_from_stat(value: os.stat_result) -> _OwnedFileIdentity | None:
     if value.st_ino <= 0:
         return None
+    creation_ns = getattr(value, "st_birthtime_ns", None)
+    if type(creation_ns) is not int:
+        creation_ns = value.st_ctime_ns
     return (
         value.st_dev,
         value.st_ino,
-        value.st_ctime_ns,
+        creation_ns,
         value.st_mtime_ns,
         value.st_size,
     )
@@ -670,7 +673,9 @@ def _exclusive_write(path: Path, payload: bytes) -> _OwnedFileIdentity | None:
             os.fsync(output.fileno())
             # Record identity only after the final write.  Inode/device alone
             # are insufficient because unlink/recreate can immediately reuse
-            # an inode; cleanup must never remove that concurrent winner.
+            # an inode. Use stable creation time where the platform exposes it
+            # (Windows finalizes legacy ctime while closing), otherwise ctime;
+            # cleanup must never remove a concurrent winner.
             identity = _identity_from_stat(os.fstat(output.fileno()))
     except Exception:
         _unlink_if_owned(path, identity)
