@@ -4845,6 +4845,50 @@ def test_hashed_artifact_success_path_detects_and_preserves_replacement(
     assert not output.with_name(f"{output.name}.sha256").exists()
 
 
+def test_owned_identity_prefers_stable_birthtime_over_windows_legacy_ctime() -> None:
+    before_close = SimpleNamespace(
+        st_dev=1,
+        st_ino=2,
+        st_birthtime_ns=3,
+        st_ctime_ns=40,
+        st_mtime_ns=5,
+        st_size=6,
+    )
+    after_close = SimpleNamespace(
+        st_dev=1,
+        st_ino=2,
+        st_birthtime_ns=3,
+        st_ctime_ns=41,
+        st_mtime_ns=5,
+        st_size=6,
+    )
+
+    assert campaign._identity_from_stat(before_close) == (
+        campaign._identity_from_stat(after_close)
+    )
+
+
+def test_owned_identity_uses_ctime_when_birthtime_is_unavailable() -> None:
+    first = SimpleNamespace(
+        st_dev=1,
+        st_ino=2,
+        st_ctime_ns=3,
+        st_mtime_ns=4,
+        st_size=5,
+    )
+    replacement = SimpleNamespace(
+        st_dev=1,
+        st_ino=2,
+        st_ctime_ns=6,
+        st_mtime_ns=4,
+        st_size=5,
+    )
+
+    assert campaign._identity_from_stat(first) != campaign._identity_from_stat(
+        replacement
+    )
+
+
 def test_hashed_artifact_verifier_rejects_trailing_sidecar_bytes(
     tmp_path: Path,
 ) -> None:
