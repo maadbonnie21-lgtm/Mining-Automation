@@ -1,0 +1,8 @@
+# A8 live-readiness binds these exact working-tree bytes with SHA-256.
+# Pin their checkout line endings so one Git tree produces identical source
+# digests on Windows and Linux while Git blob identity remains unchanged.
+src/mining_automation/perception/resource_release_campaign.py text eol=crlf
+src/mining_automation/perception/profiles/varrock_east_iron_v1.json text eol=crlf
+src/mining_automation/perception/resource_release_live_readiness.py text eol=crlf
+src/mining_automation/perception/resource_release_campaign_cli.py text eol=crlf
+tools/resource_release_campaign.py text eol=crlf
