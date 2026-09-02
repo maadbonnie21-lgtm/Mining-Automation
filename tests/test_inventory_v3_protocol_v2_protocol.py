@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from shutil import copytree
 from tempfile import TemporaryDirectory
 from time import sleep
 from types import SimpleNamespace
@@ -746,6 +747,89 @@ def test_capture_progress_must_match_exact_frozen_success_before_pixels(
     assert all(phase not in {"sensitive", "review"} for phase, _kind in events)
 
 
+@pytest.mark.parametrize("mutation", ("missing", "duplicated", "reordered"))
+def test_source_case_record_mutation_rejects_before_sensitive_reads_or_advancement(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+    mutation: str,
+) -> None:
+    temporary = TemporaryDirectory(prefix="v2-source-case-attack-")
+    request.addfinalizer(temporary.cleanup)
+    temporary_root = Path(temporary.name)
+    root = temporary_root / "r"
+    root.mkdir()
+    attempt_base = temporary_root / "a"
+    protocol, authorization, source = _prepare_copy_integrity_campaign(
+        root,
+        attempt_base,
+        monkeypatch,
+    )
+    session_path = source.paths.source_campaign_root / v2._SESSION_REPORT_NAME
+    session = json.loads(session_path.read_bytes())
+    captures = session["captures"]
+    owned_attempts = session["owned_attempts"]
+    assert isinstance(captures, list)
+    assert isinstance(owned_attempts, list)
+    assert len(captures) == len(owned_attempts) == len(v2.REQUIRED_STAGES)
+    if mutation == "missing":
+        captures.pop()
+        owned_attempts.pop()
+    elif mutation == "duplicated":
+        captures[1] = captures[0]
+        owned_attempts[1] = owned_attempts[0]
+    else:
+        captures[0], captures[1] = captures[1], captures[0]
+        owned_attempts[0], owned_attempts[1] = owned_attempts[1], owned_attempts[0]
+    _write_canonical(session_path, session)
+
+    attempt_before = {
+        path.relative_to(source.paths.attempt_root).as_posix(): path.read_bytes()
+        for path in source.paths.attempt_root.rglob("*")
+        if path.is_file()
+    }
+    events: list[tuple[str, str]] = []
+    pixel_reads: list[Path] = []
+    evaluator_called = False
+    original_read_bytes = Path.read_bytes
+
+    def audited_read_bytes(path: Path) -> bytes:
+        if path.suffix == ".bgra":
+            pixel_reads.append(path)
+        return original_read_bytes(path)
+
+    def forbidden_evaluator(*args: object, **kwargs: object) -> object:
+        nonlocal evaluator_called
+        del args, kwargs
+        evaluator_called = True
+        raise AssertionError("malformed source cases must not reach the evaluator")
+
+    monkeypatch.setattr(Path, "read_bytes", audited_read_bytes)
+    monkeypatch.setattr(
+        "mining_automation.perception.inventory.positive_v3_independent_validation."
+        "evaluate_frozen_v3_independent_validation",
+        forbidden_evaluator,
+    )
+
+    with pytest.raises(v2.InventoryV3ProtocolV2Error):
+        v2.preflight_source_metadata(
+            protocol,
+            authorization,
+            attempt_base=attempt_base,
+            access_hook=lambda phase, kind, _path: events.append((phase, kind)),
+        )
+
+    assert pixel_reads == []
+    assert evaluator_called is False
+    assert all(phase not in {"sensitive", "review"} for phase, _kind in events)
+    assert {
+        path.relative_to(source.paths.attempt_root).as_posix(): path.read_bytes()
+        for path in source.paths.attempt_root.rglob("*")
+        if path.is_file()
+    } == attempt_before
+    assert not source.paths.workspace_root.exists()
+    assert not source.paths.result_root.exists()
+
+
 def test_acquisition_nested_metadata_rejects_before_pixel_open(
     monkeypatch: pytest.MonkeyPatch,
     request: pytest.FixtureRequest,
@@ -810,6 +894,101 @@ def test_acquisition_nested_metadata_rejects_before_pixel_open(
 
     assert pixel_reads == []
     assert ("sensitive", "validation_pixels_opened") not in events
+
+
+def test_post_finalization_acquisition_mutation_is_terminal_before_review(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    temporary = TemporaryDirectory(prefix="v2-post-finalization-attack-")
+    request.addfinalizer(temporary.cleanup)
+    temporary_root = Path(temporary.name)
+    root = temporary_root / "r"
+    root.mkdir()
+    attempt_base = temporary_root / "a"
+    protocol, _, source = _prepare_copy_integrity_campaign(
+        root,
+        attempt_base,
+        monkeypatch,
+    )
+    acquisition = v2.finalize_acquisition(
+        root,
+        expected_head=protocol.evaluator_head_sha,
+        attempt_base=attempt_base,
+    )
+    real_reserve = v2._reserve_attempt
+    mutation_done = False
+
+    def reserve_then_mutate(
+        paths: v2.ProtocolV2Paths,
+        binding_protocol: v2.ProtocolV2LockBinding,
+        operation: str,
+        binding: Mapping[str, object],
+    ) -> str:
+        nonlocal mutation_done
+        digest = real_reserve(paths, binding_protocol, operation, binding)
+        if operation == "prepare-review-intake":
+            manifest_path = acquisition.root / v2._CAMPAIGN_MANIFEST_NAME
+            manifest = json.loads(manifest_path.read_bytes())
+            cases = manifest["cases"]
+            assert isinstance(cases, list)
+            first_case = cases[0]
+            assert isinstance(first_case, dict)
+            first_case["operator_stage_label"] = "foreign-post-finalization-label"
+            _coherently_rebind_json_member(
+                acquisition.root,
+                v2._CAMPAIGN_MANIFEST_NAME,
+                manifest,
+            )
+            mutation_done = True
+        return digest
+
+    monkeypatch.setattr(v2, "_reserve_attempt", reserve_then_mutate)
+    events: list[tuple[str, str]] = []
+    with pytest.raises(v2.InventoryV3ProtocolV2Error):
+        v2.prepare_reviewer_intake(
+            root,
+            expected_head=protocol.evaluator_head_sha,
+            attempt_base=attempt_base,
+            access_hook=lambda phase, kind, _path: events.append((phase, kind)),
+        )
+
+    assert mutation_done is True
+    operation = "prepare-review-intake"
+    terminal = json.loads(
+        (source.paths.attempt_root / f"{operation}-terminal.json").read_bytes()
+    )
+    assert terminal["status"] == "failed-terminal"
+    assert terminal["contract_id"] == "CASE_EVIDENCE_INELIGIBLE"
+    assert terminal["retry_allowed"] is False
+    assert all(phase not in {"sensitive", "review"} for phase, _kind in events)
+    assert not (
+        source.paths.review_intake_root / "package" / v2._REVIEW_TEMPLATE_NAME
+    ).exists()
+    assert not (source.paths.review_intake_root / "submission").exists()
+    assert not (
+        source.paths.attempt_root / "record-review-submission-reserved.json"
+    ).exists()
+
+    provider_called = False
+
+    def forbidden_provider(_template: Mapping[str, object]) -> Mapping[str, object]:
+        nonlocal provider_called
+        provider_called = True
+        raise AssertionError("terminal acquisition mutation must block reviewer truth")
+
+    with pytest.raises(v2.InventoryV3ProtocolV2Error):
+        v2.record_reviewer_submission(
+            root,
+            expected_head=protocol.evaluator_head_sha,
+            reviewer="reviewer-b",
+            truth_provider=forbidden_provider,
+            attempt_base=attempt_base,
+        )
+    assert provider_called is False
+    assert not (
+        source.paths.attempt_root / "record-review-submission-reserved.json"
+    ).exists()
 
 
 def test_reviewer_template_extra_hint_rejects_before_review_pixels(
@@ -1253,6 +1432,141 @@ def test_acquisition_to_reviewed_copy_mutation_never_gets_success_terminal(
     assert terminal["status"] == "failed-terminal"
     assert terminal["contract_id"] == "CASE_EVIDENCE_INELIGIBLE"
     assert terminal["status"] != "passed-terminal"
+
+
+def test_foreign_reviewed_package_transplant_rejects_before_evaluator_or_result(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    temporary = TemporaryDirectory(prefix="v2-foreign-reviewed-attack-")
+    request.addfinalizer(temporary.cleanup)
+    temporary_root = Path(temporary.name)
+    root = temporary_root / "r"
+    root.mkdir()
+    attempt_base = temporary_root / "a"
+    protocol, _, source = _prepare_copy_integrity_campaign(
+        root,
+        attempt_base,
+        monkeypatch,
+    )
+    v2.finalize_acquisition(
+        root,
+        expected_head=protocol.evaluator_head_sha,
+        attempt_base=attempt_base,
+    )
+    v2.prepare_reviewer_intake(
+        root,
+        expected_head=protocol.evaluator_head_sha,
+        attempt_base=attempt_base,
+    )
+    occupied_slots = (0, 1, 5, 27, 28, None, None)
+    visibilities = (
+        "inventory-visible",
+        "inventory-visible",
+        "inventory-visible",
+        "inventory-visible",
+        "inventory-visible",
+        "wrong-tab-visible",
+        "inventory-obstructed",
+    )
+
+    def review_provider(template: Mapping[str, object]) -> Mapping[str, object]:
+        raw_cases = template.get("cases")
+        assert isinstance(raw_cases, list)
+        sleep(0.001)
+        cases = []
+        for index, (raw_case, occupied, visibility) in enumerate(
+            zip(raw_cases, occupied_slots, visibilities, strict=True),
+            start=1,
+        ):
+            assert isinstance(raw_case, dict)
+            cases.append(
+                {
+                    "review_case_id": raw_case["review_case_id"],
+                    "truth": {
+                        "decision": "approved",
+                        "drag_visible": False,
+                        "hover_visible": False,
+                        "occupied_slots": occupied,
+                        "ordinary_iron_only": index in range(2, 6),
+                        "quantity_text_visible": False,
+                        "review_note": None,
+                        "selected_item_visible": False,
+                        "visibility": visibility,
+                    },
+                }
+            )
+        return {
+            "cases": cases,
+            "reviewed_at_utc": v2._format_utc(datetime.now(UTC)),
+            "reviewer": "reviewer-b",
+        }
+
+    v2.record_reviewer_submission(
+        root,
+        expected_head=protocol.evaluator_head_sha,
+        reviewer="reviewer-b",
+        truth_provider=review_provider,
+        attempt_base=attempt_base,
+    )
+    v2.publish_reviewed_package(
+        root,
+        expected_head=protocol.evaluator_head_sha,
+        attempt_base=attempt_base,
+    )
+    original_tree_payload = (
+        source.paths.reviewed_package_root / v2._PACKAGE_TREE_NAME
+    ).read_bytes()
+    foreign_root = temporary_root / "foreign-reviewed-package"
+    copytree(source.paths.reviewed_package_root, foreign_root)
+    foreign_record_path = foreign_root / "protocol-v2-reviewed-package.json"
+    foreign_record = json.loads(foreign_record_path.read_bytes())
+    foreign_record["authorization_id"] = "3" * 64
+    foreign_tree_sha = _coherently_rebind_json_member(
+        foreign_root,
+        "protocol-v2-reviewed-package.json",
+        foreign_record,
+    )
+    assert foreign_tree_sha != _sha256(original_tree_payload)
+    foreign_snapshot = v2._read_verified_tree(
+        foreign_root,
+        v2._reviewed_package_roles(),
+        expected_tree_sha256=foreign_tree_sha,
+    )
+    foreign_snapshot.recheck()
+    copytree(foreign_root, source.paths.reviewed_package_root, dirs_exist_ok=True)
+
+    evaluator_called = False
+
+    def forbidden_evaluator(*args: object, **kwargs: object) -> object:
+        nonlocal evaluator_called
+        del args, kwargs
+        evaluator_called = True
+        raise AssertionError("foreign reviewed package must not reach the evaluator")
+
+    monkeypatch.setattr(
+        "mining_automation.perception.inventory.positive_v3_independent_validation."
+        "evaluate_frozen_v3_independent_validation",
+        forbidden_evaluator,
+    )
+    events: list[tuple[str, str]] = []
+    with pytest.raises(
+        v2.InventoryV3ProtocolV2Error,
+        match="publish-reviewed-package successful lineage record differs",
+    ):
+        v2.evaluate_locked_protocol_v2(
+            root,
+            expected_head=protocol.evaluator_head_sha,
+            attempt_base=attempt_base,
+            access_hook=lambda phase, kind, _path: events.append((phase, kind)),
+        )
+
+    assert evaluator_called is False
+    assert all(phase != "sensitive" for phase, _kind in events)
+    assert not (
+        source.paths.attempt_root / "evaluate-locked-candidate-reserved.json"
+    ).exists()
+    assert not source.paths.result_root.exists()
 
 
 def test_partial_or_foreign_source_tree_fails_before_any_pixel_open(

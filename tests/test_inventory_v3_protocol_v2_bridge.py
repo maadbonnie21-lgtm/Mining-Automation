@@ -501,13 +501,13 @@ def _review_provider(
     return provide
 
 
-def _run_to_terminal_evaluation(
+def _run_to_published_review(
     root: Path,
     attempt_base: Path,
     protocol: protocol_v2.ProtocolV2LockBinding,
     *,
     counts: tuple[int | None, ...],
-) -> protocol_v2.TerminalEvaluation:
+) -> None:
     protocol_v2.finalize_acquisition(
         root,
         expected_head=protocol.evaluator_head_sha,
@@ -530,6 +530,21 @@ def _run_to_terminal_evaluation(
         expected_head=protocol.evaluator_head_sha,
         attempt_base=attempt_base,
     )
+
+
+def _run_to_terminal_evaluation(
+    root: Path,
+    attempt_base: Path,
+    protocol: protocol_v2.ProtocolV2LockBinding,
+    *,
+    counts: tuple[int | None, ...],
+) -> protocol_v2.TerminalEvaluation:
+    _run_to_published_review(
+        root,
+        attempt_base,
+        protocol,
+        counts=counts,
+    )
     sleep(0.002)
     return protocol_v2.evaluate_locked_protocol_v2(
         root,
@@ -538,17 +553,15 @@ def _run_to_terminal_evaluation(
     )
 
 
-def _coherently_replace_reviewed_truth_with_c2_pass(
+def _coherently_rewrite_reviewed_truth(
     source: protocol_v2.SourceMetadataBinding,
+    *,
+    mutate_review: Callable[[dict[str, object]], None],
+    reviewed_record_updates: Mapping[str, object] | None = None,
 ) -> None:
     reviewed_root = source.paths.reviewed_package_root
     review = _read_mapping(reviewed_root / protocol_v2._REVIEWER_TRUTH_NAME)
-    cases = review["cases"]
-    assert isinstance(cases, list)
-    case_two = cases[1]
-    assert isinstance(case_two, dict)
-    assert case_two["occupied_slots"] == 2
-    case_two["occupied_slots"] = 1
+    mutate_review(review)
     _, review_sha = _write_document(
         reviewed_root / protocol_v2._REVIEWER_TRUTH_NAME,
         review,
@@ -567,6 +580,7 @@ def _coherently_replace_reviewed_truth_with_c2_pass(
     reviewed_record = _read_mapping(reviewed_record_path)
     reviewed_record["reviewer_truth_sha256"] = review_sha
     reviewed_record["validation_package_sha256"] = package_sha
+    reviewed_record.update(reviewed_record_updates or {})
     _write_document(reviewed_record_path, reviewed_record)
 
     rebound_paths = {
@@ -600,6 +614,100 @@ def _coherently_replace_reviewed_truth_with_c2_pass(
     terminal = _read_mapping(terminal_path)
     terminal["output_sha256"] = tree_sha
     _write_document(terminal_path, terminal)
+
+
+def _coherently_replace_reviewed_truth_with_c2_pass(
+    source: protocol_v2.SourceMetadataBinding,
+) -> None:
+    def replace_case_two(review: dict[str, object]) -> None:
+        cases = review["cases"]
+        assert isinstance(cases, list)
+        case_two = cases[1]
+        assert isinstance(case_two, dict)
+        assert case_two["occupied_slots"] == 2
+        case_two["occupied_slots"] = 1
+
+    _coherently_rewrite_reviewed_truth(
+        source,
+        mutate_review=replace_case_two,
+    )
+
+
+def _coherently_rebind_reviewed_reviewer(
+    source: protocol_v2.SourceMetadataBinding,
+    *,
+    replacement: str,
+) -> None:
+    def replace_reviewer(review: dict[str, object]) -> None:
+        assert review["reviewer"] == "reviewer-b"
+        review["reviewer"] = replacement
+
+    _coherently_rewrite_reviewed_truth(
+        source,
+        mutate_review=replace_reviewer,
+        reviewed_record_updates={"reviewer": replacement},
+    )
+
+
+def _assert_rewritten_review_projection_rejected(
+    repository_root: Path,
+    attempt_base: Path,
+    protocol: protocol_v2.ProtocolV2LockBinding,
+    source: protocol_v2.SourceMetadataBinding,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    submission_before: Mapping[str, bytes],
+) -> None:
+    evaluator_calls = 0
+
+    def forbidden_evaluator(*args: object, **kwargs: object) -> object:
+        nonlocal evaluator_calls
+        del args, kwargs
+        evaluator_calls += 1
+        raise AssertionError("rewritten truth must not reach the frozen evaluator")
+
+    monkeypatch.setattr(
+        frozen,
+        "evaluate_frozen_v3_independent_validation",
+        forbidden_evaluator,
+    )
+    events: list[tuple[str, str]] = []
+    sleep(0.002)
+    with pytest.raises(
+        protocol_v2.InventoryV3ProtocolV2Error,
+        match="not the deterministic original submission projection",
+    ):
+        protocol_v2.evaluate_locked_protocol_v2(
+            repository_root,
+            expected_head=protocol.evaluator_head_sha,
+            attempt_base=attempt_base,
+            access_hook=lambda phase, kind, _path: events.append((phase, kind)),
+        )
+
+    submission_root = source.paths.review_intake_root / "submission"
+    assert _snapshot_regular_files(submission_root) == submission_before
+    assert evaluator_calls == 0
+    assert events.count(("sensitive", "reviewer_truth_opened")) == 1
+    assert ("sensitive", "validation_pixels_opened") not in events
+    reservation = _read_mapping(
+        source.paths.attempt_root / "evaluate-locked-candidate-reserved.json"
+    )
+    terminal = _read_mapping(
+        source.paths.attempt_root / "evaluate-locked-candidate-terminal.json"
+    )
+    failure_root = source.paths.attempt_root / "evaluate-locked-candidate-failure"
+    private_failure = _read_mapping(failure_root / "private-failure.json")
+    public_failure = _read_mapping(failure_root / "public-failure-receipt.json")
+    assert reservation["status"] == "reserved-irrevocably"
+    assert terminal["status"] == "failed-terminal"
+    assert terminal["contract_id"] == "ATTEMPT_INTEGRITY_FAILURE"
+    assert terminal["retry_allowed"] is False
+    assert private_failure["contract_id"] == "ATTEMPT_INTEGRITY_FAILURE"
+    assert private_failure["terminal_status"] == "failed-terminal-permanent"
+    assert public_failure["contract_id"] == "ATTEMPT_INTEGRITY_FAILURE"
+    assert public_failure["terminal_status"] == "failed-permanent"
+    assert _snapshot_regular_files(source.paths.result_root) == {}
+    assert not source.paths.approval_request_root.exists()
 
 
 def test_bridge_is_accepted_by_complete_frozen_v1_package_parser(
@@ -892,78 +1000,76 @@ def test_evaluator_rejects_coherent_truth_replacement_against_original_submissio
             attempt_base,
             monkeypatch,
         )
-        protocol_v2.finalize_acquisition(
+        _run_to_published_review(
             repository_root,
-            expected_head=protocol.evaluator_head_sha,
-            attempt_base=attempt_base,
+            attempt_base,
+            protocol,
+            counts=(0, 2, 5, 27, 28, None, None),
         )
-        protocol_v2.prepare_reviewer_intake(
-            repository_root,
-            expected_head=protocol.evaluator_head_sha,
-            attempt_base=attempt_base,
+        submission_before = _snapshot_regular_files(
+            source.paths.review_intake_root / "submission"
         )
-        protocol_v2.record_reviewer_submission(
-            repository_root,
-            expected_head=protocol.evaluator_head_sha,
-            reviewer="reviewer-b",
-            truth_provider=_review_provider((0, 2, 5, 27, 28, None, None)),
-            attempt_base=attempt_base,
-        )
-        protocol_v2.publish_reviewed_package(
-            repository_root,
-            expected_head=protocol.evaluator_head_sha,
-            attempt_base=attempt_base,
-        )
-        submission_path = (
-            source.paths.review_intake_root
-            / "submission"
-            / protocol_v2._REVIEW_SUBMISSION_NAME
-        )
-        original_submission = submission_path.read_bytes()
         _coherently_replace_reviewed_truth_with_c2_pass(source)
-        evaluator_called = False
-
-        def forbidden_evaluator(*args: object, **kwargs: object) -> object:
-            nonlocal evaluator_called
-            del args, kwargs
-            evaluator_called = True
-            raise AssertionError("replacement truth must not reach the frozen evaluator")
-
-        monkeypatch.setattr(
-            frozen,
-            "evaluate_frozen_v3_independent_validation",
-            forbidden_evaluator,
+        _assert_rewritten_review_projection_rejected(
+            repository_root,
+            attempt_base,
+            protocol,
+            source,
+            monkeypatch,
+            submission_before=submission_before,
         )
-        events: list[tuple[str, str]] = []
-        sleep(0.002)
-        with pytest.raises(
-            protocol_v2.InventoryV3ProtocolV2Error,
-            match="not the deterministic original submission projection",
-        ):
-            protocol_v2.evaluate_locked_protocol_v2(
-                repository_root,
-                expected_head=protocol.evaluator_head_sha,
-                attempt_base=attempt_base,
-                access_hook=lambda phase, kind, _path: events.append((phase, kind)),
-            )
 
-        assert submission_path.read_bytes() == original_submission
-        assert evaluator_called is False
-        assert events.count(("sensitive", "reviewer_truth_opened")) == 1
-        assert ("sensitive", "validation_pixels_opened") not in events
-        reservation = _read_mapping(
-            source.paths.attempt_root / "evaluate-locked-candidate-reserved.json"
+
+def test_evaluator_rejects_coherent_reviewer_identity_rebinding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_root = v1_support._ROOT.resolve(strict=True)
+    with TemporaryDirectory(prefix="v2i-", dir=repository_root) as temporary:
+        sandbox_root = Path(temporary)
+        attempt_base = sandbox_root / "a"
+        protocol, _, source = _install_full_lifecycle_seams(
+            sandbox_root,
+            attempt_base,
+            monkeypatch,
         )
-        assert reservation["status"] == "reserved-irrevocably"
-        terminal = _read_mapping(
-            source.paths.attempt_root / "evaluate-locked-candidate-terminal.json"
+        _run_to_published_review(
+            repository_root,
+            attempt_base,
+            protocol,
+            counts=_PASS_COUNTS,
         )
-        assert terminal["status"] == "failed-terminal"
-        assert terminal["contract_id"] == "ATTEMPT_INTEGRITY_FAILURE"
-        assert terminal["retry_allowed"] is False
-        assert not (
-            source.paths.result_root / "frozen-evaluator-private-report.json"
-        ).exists()
+        submission_root = source.paths.review_intake_root / "submission"
+        submission_before = _snapshot_regular_files(submission_root)
+        submission = _read_mapping(submission_root / protocol_v2._REVIEW_SUBMISSION_NAME)
+        assert submission["reviewer"] == "reviewer-b"
+
+        _coherently_rebind_reviewed_reviewer(source, replacement="reviewer-c")
+        reviewed_root = source.paths.reviewed_package_root
+        review = _read_mapping(reviewed_root / protocol_v2._REVIEWER_TRUTH_NAME)
+        reviewed_record = _read_mapping(
+            reviewed_root / "protocol-v2-reviewed-package.json"
+        )
+        assert review["reviewer"] == reviewed_record["reviewer"] == "reviewer-c"
+        rebound_snapshot = protocol_v2._read_verified_tree(
+            reviewed_root,
+            protocol_v2._reviewed_package_roles(),
+        )
+        rebound_snapshot.recheck()
+        publish_terminal = _read_mapping(
+            source.paths.attempt_root / "publish-reviewed-package-terminal.json"
+        )
+        assert publish_terminal["output_sha256"] == _sha256(
+            (reviewed_root / protocol_v2._PACKAGE_TREE_NAME).read_bytes()
+        )
+
+        _assert_rewritten_review_projection_rejected(
+            repository_root,
+            attempt_base,
+            protocol,
+            source,
+            monkeypatch,
+            submission_before=submission_before,
+        )
 
 
 def test_full_v2_synthetic_conformance_failure_is_terminal_and_cannot_propose(
@@ -1031,6 +1137,254 @@ def test_full_v2_synthetic_conformance_failure_is_terminal_and_cannot_propose(
                 attempt_base=attempt_base,
             )
         assert not source.paths.approval_request_root.exists()
+
+    assert registry_path.read_bytes() == registry_before
+    assert registry_sidecar_path.read_bytes() == registry_sidecar_before
+
+
+def _snapshot_regular_files(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _snapshot_evaluator_ledger(source: protocol_v2.SourceMetadataBinding) -> dict[str, bytes]:
+    return {
+        path.name: path.read_bytes()
+        for path in sorted(source.paths.attempt_root.iterdir())
+        if path.is_file() and path.name.startswith("evaluate-locked-candidate-")
+    }
+
+
+def test_terminal_pass_replay_never_reinvokes_evaluator_or_changes_first_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_root = v1_support._ROOT.resolve(strict=True)
+    with TemporaryDirectory(prefix="v2p-", dir=repository_root) as temporary:
+        sandbox_root = Path(temporary)
+        attempt_base = sandbox_root / "a"
+        protocol, _, source = _install_full_lifecycle_seams(
+            sandbox_root,
+            attempt_base,
+            monkeypatch,
+        )
+        original_evaluator = frozen.evaluate_frozen_v3_independent_validation
+        evaluator_calls = 0
+
+        def counted_evaluator(*args: object, **kwargs: object) -> object:
+            nonlocal evaluator_calls
+            evaluator_calls += 1
+            return original_evaluator(*args, **kwargs)
+
+        monkeypatch.setattr(
+            frozen,
+            "evaluate_frozen_v3_independent_validation",
+            counted_evaluator,
+        )
+        terminal = _run_to_terminal_evaluation(
+            repository_root,
+            attempt_base,
+            protocol,
+            counts=_PASS_COUNTS,
+        )
+
+        assert terminal.detector_conformance_passed is True
+        assert evaluator_calls == 1
+        result_before = _snapshot_regular_files(source.paths.result_root)
+        ledger_before = _snapshot_evaluator_ledger(source)
+        assert terminal.result_tree_sha256 == _sha256(
+            result_before[protocol_v2._PACKAGE_TREE_NAME]
+        )
+        assert set(ledger_before) == {
+            "evaluate-locked-candidate-reserved.json",
+            "evaluate-locked-candidate-reserved.json.sha256",
+            "evaluate-locked-candidate-terminal.json",
+            "evaluate-locked-candidate-terminal.json.sha256",
+        }
+
+        with pytest.raises(protocol_v2.InventoryV3ProtocolV2Error):
+            protocol_v2.evaluate_locked_protocol_v2(
+                repository_root,
+                expected_head=protocol.evaluator_head_sha,
+                attempt_base=attempt_base,
+            )
+
+        assert evaluator_calls == 1
+        assert _snapshot_regular_files(source.paths.result_root) == result_before
+        assert _snapshot_evaluator_ledger(source) == ledger_before
+
+
+def test_evaluator_exception_is_permanent_and_replay_preserves_failure_receipts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_root = v1_support._ROOT.resolve(strict=True)
+    with TemporaryDirectory(prefix="v2e-", dir=repository_root) as temporary:
+        sandbox_root = Path(temporary)
+        attempt_base = sandbox_root / "a"
+        protocol, _, source = _install_full_lifecycle_seams(
+            sandbox_root,
+            attempt_base,
+            monkeypatch,
+        )
+        evaluator_calls = 0
+
+        def exploding_evaluator(*args: object, **kwargs: object) -> object:
+            nonlocal evaluator_calls
+            del args, kwargs
+            evaluator_calls += 1
+            raise RuntimeError("synthetic frozen evaluator exception")
+
+        monkeypatch.setattr(
+            frozen,
+            "evaluate_frozen_v3_independent_validation",
+            exploding_evaluator,
+        )
+
+        with pytest.raises(RuntimeError, match="synthetic frozen evaluator exception"):
+            _run_to_terminal_evaluation(
+                repository_root,
+                attempt_base,
+                protocol,
+                counts=_PASS_COUNTS,
+            )
+
+        assert evaluator_calls == 1
+        failure_root = (
+            source.paths.attempt_root / "evaluate-locked-candidate-failure"
+        )
+        private_failure = _read_mapping(failure_root / "private-failure.json")
+        public_failure = _read_mapping(failure_root / "public-failure-receipt.json")
+        evaluator_terminal = _read_mapping(
+            source.paths.attempt_root / "evaluate-locked-candidate-terminal.json"
+        )
+        assert private_failure["contract_id"] == "ATTEMPT_INTEGRITY_FAILURE"
+        assert private_failure["error_type"] == "RuntimeError"
+        assert private_failure["terminal_status"] == "failed-terminal-permanent"
+        assert private_failure["retry_allowed"] is False
+        assert private_failure["activation_allowed"] is False
+        assert private_failure["promotion_allowed"] is False
+        assert public_failure["contract_id"] == "ATTEMPT_INTEGRITY_FAILURE"
+        assert public_failure["terminal_status"] == "failed-permanent"
+        assert public_failure["retry_allowed"] is False
+        assert public_failure["activation_allowed"] is False
+        assert public_failure["promotion_allowed"] is False
+        assert evaluator_terminal["status"] == "failed-terminal"
+        assert evaluator_terminal["contract_id"] == "ATTEMPT_INTEGRITY_FAILURE"
+        assert evaluator_terminal["retry_allowed"] is False
+        assert evaluator_terminal["output_sha256"] == _sha256(
+            (failure_root / protocol_v2._PACKAGE_TREE_NAME).read_bytes()
+        )
+        assert not (
+            source.paths.result_root / "protocol-v2-terminal-result.json"
+        ).exists()
+        assert not (
+            source.paths.result_root / "frozen-evaluator-private-report.json"
+        ).exists()
+        assert not source.paths.approval_request_root.exists()
+
+        result_before = _snapshot_regular_files(source.paths.result_root)
+        failure_before = _snapshot_regular_files(failure_root)
+        ledger_before = _snapshot_evaluator_ledger(source)
+        with pytest.raises(protocol_v2.InventoryV3ProtocolV2Error):
+            protocol_v2.evaluate_locked_protocol_v2(
+                repository_root,
+                expected_head=protocol.evaluator_head_sha,
+                attempt_base=attempt_base,
+            )
+
+        assert evaluator_calls == 1
+        assert _snapshot_regular_files(source.paths.result_root) == result_before
+        assert _snapshot_regular_files(failure_root) == failure_before
+        assert _snapshot_evaluator_ledger(source) == ledger_before
+        assert not source.paths.approval_request_root.exists()
+
+
+def test_post_pass_result_tree_rebind_cannot_produce_approval_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_root = v1_support._ROOT.resolve(strict=True)
+    registry_path = repository_root.joinpath(*protocol_v2._APPROVAL_REGISTRY_PATH.parts)
+    registry_sidecar_path = repository_root.joinpath(
+        *protocol_v2._APPROVAL_REGISTRY_SIDECAR_PATH.parts
+    )
+    registry_before = registry_path.read_bytes()
+    registry_sidecar_before = registry_sidecar_path.read_bytes()
+
+    with TemporaryDirectory(prefix="v2b-", dir=repository_root) as temporary:
+        sandbox_root = Path(temporary)
+        attempt_base = sandbox_root / "a"
+        protocol, _, source = _install_full_lifecycle_seams(
+            sandbox_root,
+            attempt_base,
+            monkeypatch,
+        )
+        terminal = _run_to_terminal_evaluation(
+            repository_root,
+            attempt_base,
+            protocol,
+            counts=_PASS_COUNTS,
+        )
+        evaluator_terminal_path = (
+            source.paths.attempt_root / "evaluate-locked-candidate-terminal.json"
+        )
+        evaluator_terminal_before = evaluator_terminal_path.read_bytes()
+        evaluator_ledger_before = _snapshot_evaluator_ledger(source)
+        evaluator_terminal = json.loads(evaluator_terminal_before)
+        assert evaluator_terminal["output_sha256"] == terminal.result_tree_sha256
+
+        result_root = source.paths.result_root
+        result_path = result_root / "protocol-v2-terminal-result.json"
+        result = _read_mapping(result_path)
+        result["frozen_evaluator_report_sha256"] = "0" * 64
+        _write_document(result_path, result)
+        rebound_paths = {
+            "protocol-v2-terminal-result.json",
+            "protocol-v2-terminal-result.json.sha256",
+        }
+        tree_path = result_root / protocol_v2._PACKAGE_TREE_NAME
+        tree = _read_mapping(tree_path)
+        entries = tree["entries"]
+        assert isinstance(entries, list)
+        rebound: set[str] = set()
+        for raw in entries:
+            assert isinstance(raw, dict)
+            relative = raw.get("path")
+            if not isinstance(relative, str) or relative not in rebound_paths:
+                continue
+            payload = result_root.joinpath(*relative.split("/")).read_bytes()
+            raw["sha256"] = _sha256(payload)
+            raw["size_bytes"] = len(payload)
+            rebound.add(relative)
+        assert rebound == rebound_paths
+        _, rebound_tree_sha = _write_document(tree_path, tree)
+        assert rebound_tree_sha != terminal.result_tree_sha256
+        rebound_snapshot = protocol_v2._read_verified_tree(
+            result_root,
+            protocol_v2._result_roles(conformance_passed=True),
+        )
+        rebound_snapshot.recheck()
+
+        sleep(0.002)
+        with pytest.raises(
+            protocol_v2.InventoryV3ProtocolV2Error,
+            match="evaluate-locked-candidate successful lineage record differs",
+        ):
+            protocol_v2.prepare_approval_request(
+                repository_root,
+                expected_head=protocol.evaluator_head_sha,
+                proposed_approver="approver-c",
+                proposed_approved_at_utc=protocol_v2._format_utc(datetime.now(UTC)),
+                attempt_base=attempt_base,
+            )
+
+        assert evaluator_terminal_path.read_bytes() == evaluator_terminal_before
+        assert _snapshot_evaluator_ledger(source) == evaluator_ledger_before
+        assert not source.paths.approval_request_root.exists()
+        assert not (
+            source.paths.attempt_root / "prepare-approval-request-reserved.json"
+        ).exists()
 
     assert registry_path.read_bytes() == registry_before
     assert registry_sidecar_path.read_bytes() == registry_sidecar_before
