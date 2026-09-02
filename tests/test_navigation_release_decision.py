@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import mining_automation.navigation as navigation_root
+import mining_automation.navigation.endurance_rehearsal as endurance_module
 import mining_automation.navigation.release_decision as release_module
 import mining_automation.navigation.round_trip_rehearsal as round_trip_module
 from mining_automation.capture.frame import Frame, PixelFormat
@@ -52,6 +53,14 @@ from mining_automation.navigation.durable_route_evidence import (
     begin_durable_acquisition,
     begin_durable_review,
     load_durable_acquisition,
+)
+from mining_automation.navigation.endurance_rehearsal import (
+    SyntheticEnduranceAttemptOutcome,
+    SyntheticEnduranceExpectation,
+    SyntheticEndurancePhase,
+    SyntheticEnduranceStopReason,
+    SyntheticTraversalAttemptExpectation,
+    evaluate_synthetic_endurance_rehearsal,
 )
 from mining_automation.navigation.offline_route_session import (
     OfflineRouteSession,
@@ -345,6 +354,8 @@ def _full_expectation(
 def _execution_context(
     plan: RoutePlan,
     source: PassiveCaptureSourceIdentity,
+    *,
+    attempt_session_suffix: str = "",
 ) -> RouteEvaluationContext:
     prefix = (
         "synthetic-release-m2b"
@@ -357,7 +368,11 @@ def _execution_context(
         expected_attempt_source=StepAttemptSourceIdentity(
             source_id=f"{prefix}-attempt-source",
             version="1.0.0-synthetic",
-            session_id=f"{prefix}-attempt-session",
+            session_id=(
+                f"{prefix}-attempt-session"
+                if not attempt_session_suffix
+                else f"{prefix}-attempt-session-{attempt_session_suffix}"
+            ),
             evidence_role=AttemptEvidenceRole.SYNTHETIC_ARCHITECTURE_TEST_ONLY,
         ),
         policy=NavigationPolicy(
@@ -429,6 +444,7 @@ def _complete_result(
     started_monotonic_s: float = 10.0,
     first_frame_monotonic_s: float | None = None,
     session_suffix: str = "complete",
+    attempt_id_prefix: str | None = None,
 ) -> OfflineRouteSessionResult:
     session = _session(context, session_suffix)
     sequencer = OfflineRouteSessionSequencer.begin(
@@ -455,7 +471,11 @@ def _complete_result(
             break
         prepared = sequencer.prepare_step(
             session,
-            attempt_id=f"{session.session_id}-attempt-{index + 1}",
+            attempt_id=(
+                f"{session.session_id}-attempt-{index + 1}"
+                if attempt_id_prefix is None
+                else f"{attempt_id_prefix}-attempt-{index + 1}"
+            ),
             evaluated_monotonic_s=captured + 0.1,
         )
         assert prepared.navigation_transition is not None
@@ -543,6 +563,8 @@ def _build_direction(
     reject_arrival: bool = False,
     route_id: str | None = None,
     route_version: str = "1.0.0-synthetic",
+    result_session_suffix: str = "complete",
+    attempt_session_suffix: str = "",
 ) -> _DirectionEvidence:
     root.mkdir(parents=True)
     acquisition_root = root / "acquisition"
@@ -611,8 +633,12 @@ def _build_direction(
             recorded_at_utc=f"2026-09-01T00:00:{20 + ordinal:02d}Z",
         )
     review_receipt = review.finalize(reviewed_at_utc="2026-09-01T00:00:30Z")
-    context = _execution_context(plan.route_plan, identity)
-    result = _complete_result(context)
+    context = _execution_context(
+        plan.route_plan,
+        identity,
+        attempt_session_suffix=attempt_session_suffix,
+    )
+    result = _complete_result(context, session_suffix=result_session_suffix)
     return _DirectionEvidence(
         acquisition_root=acquisition_root,
         review_root=review_root,
@@ -634,30 +660,39 @@ def _build_pair(
     shared_route_id: str | None = None,
     shared_route_version: str = "1.0.0-synthetic",
     shared_reviewer_id: str | None = None,
+    identity_suffix: str = "",
+    attempt_session_suffix: str | None = None,
 ) -> _PairEvidence:
+    identity_token = "" if not identity_suffix else f"-{identity_suffix}"
+    result_session_suffix = "complete" if not identity_suffix else f"complete-{identity_suffix}"
+    effective_attempt_session_suffix = (
+        identity_suffix if attempt_session_suffix is None else attempt_session_suffix
+    )
     return _PairEvidence(
         mine_to_bank=_build_direction(
             root / "mine-to-bank",
             RouteDirection.MINE_TO_BANK,
-            campaign_id="synthetic-release-m2b-campaign",
-            capture_session_id="synthetic-release-m2b-session",
-            operator_id="synthetic-release-m2b-operator",
-            review_id="synthetic-release-m2b-review",
-            reviewer_id=shared_reviewer_id or "synthetic-release-m2b-reviewer",
+            campaign_id=f"synthetic-release-m2b{identity_token}-campaign",
+            capture_session_id=f"synthetic-release-m2b{identity_token}-session",
+            operator_id=f"synthetic-release-m2b{identity_token}-operator",
+            review_id=f"synthetic-release-m2b{identity_token}-review",
+            reviewer_id=(shared_reviewer_id or f"synthetic-release-m2b{identity_token}-reviewer"),
             mine_location_id=mine_location_id,
             bank_location_id=bank_location_id,
             route_id=shared_route_id,
             route_version=shared_route_version,
             reject_arrival=mine_to_bank_reject_arrival,
+            result_session_suffix=result_session_suffix,
+            attempt_session_suffix=effective_attempt_session_suffix,
         ),
         bank_to_mine=_build_direction(
             root / "bank-to-mine",
             RouteDirection.BANK_TO_MINE,
-            campaign_id="synthetic-release-b2m-campaign",
-            capture_session_id="synthetic-release-b2m-session",
-            operator_id="synthetic-release-b2m-operator",
-            review_id="synthetic-release-b2m-review",
-            reviewer_id=shared_reviewer_id or "synthetic-release-b2m-reviewer",
+            campaign_id=f"synthetic-release-b2m{identity_token}-campaign",
+            capture_session_id=f"synthetic-release-b2m{identity_token}-session",
+            operator_id=f"synthetic-release-b2m{identity_token}-operator",
+            review_id=f"synthetic-release-b2m{identity_token}-review",
+            reviewer_id=(shared_reviewer_id or f"synthetic-release-b2m{identity_token}-reviewer"),
             mine_location_id=(
                 mine_location_id
                 if bank_to_mine_mine_location_id is None
@@ -667,6 +702,8 @@ def _build_pair(
             reject_arrival=bank_to_mine_reject_arrival,
             route_id=shared_route_id,
             route_version=shared_route_version,
+            result_session_suffix=result_session_suffix,
+            attempt_session_suffix=effective_attempt_session_suffix,
         ),
     )
 
@@ -780,12 +817,101 @@ def _completed_round_trip(
     )
 
 
+def _completed_round_trip_at(
+    pair: _PairEvidence,
+    *,
+    traversal_id: str,
+    outbound_started_monotonic_s: float,
+    outbound_first_frame_monotonic_s: float | None = None,
+    outbound_attempt_id_prefix: str | None = None,
+) -> round_trip_module.SyntheticRoundTripRehearsalReport:
+    outbound = _complete_result(
+        pair.mine_to_bank.result.progress.session.context,
+        started_monotonic_s=outbound_started_monotonic_s,
+        first_frame_monotonic_s=outbound_first_frame_monotonic_s,
+        session_suffix=f"{traversal_id}-outbound",
+        attempt_id_prefix=outbound_attempt_id_prefix,
+    )
+    return_started = max(
+        outbound.progress.last_event_monotonic_s + 1.0,
+        outbound_started_monotonic_s + 10.0,
+    )
+    return_result = _complete_result(
+        pair.bank_to_mine.result.progress.session.context,
+        started_monotonic_s=return_started,
+        session_suffix=f"{traversal_id}-return",
+    )
+    evidence = _pair_with_result(pair, RouteDirection.MINE_TO_BANK, outbound)
+    evidence = _pair_with_result(evidence, RouteDirection.BANK_TO_MINE, return_result)
+    decision = _evaluate(evidence)
+    return _round_trip(decision, outbound, return_result)
+
+
+def _stopped_round_trip(
+    pair: _PairEvidence,
+    *,
+    direction: RouteDirection,
+    case: str,
+) -> tuple[OfflineRouteSessionResult, round_trip_module.SyntheticRoundTripRehearsalReport]:
+    source = pair.mine_to_bank if direction is RouteDirection.MINE_TO_BANK else pair.bank_to_mine
+    stopped = _stopped_result(source.result.progress.session.context, case)
+    evidence = _pair_with_result(pair, direction, stopped)
+    decision = _evaluate(evidence)
+    return stopped, _round_trip(
+        decision,
+        evidence.mine_to_bank.result,
+        evidence.bank_to_mine.result,
+    )
+
+
+def _endurance_expectation(
+    reports: tuple[round_trip_module.SyntheticRoundTripRehearsalReport, ...],
+    *,
+    planned_cycle_count: int,
+    cycle_numbers: tuple[int, ...] | None = None,
+    recovery_links: tuple[str | None, ...] | None = None,
+    campaign_id: str = "synthetic-repeated-round-trip-campaign",
+) -> SyntheticEnduranceExpectation:
+    cycles = tuple(range(1, len(reports) + 1)) if cycle_numbers is None else cycle_numbers
+    recoveries = (None,) * len(reports) if recovery_links is None else recovery_links
+    assert len(cycles) == len(reports)
+    assert len(recoveries) == len(reports)
+    return SyntheticEnduranceExpectation(
+        campaign_id=campaign_id,
+        shared_timeline_id="synthetic-round-trip-shared-timeline",
+        planned_cycle_count=planned_cycle_count,
+        ordered_attempts=tuple(
+            SyntheticTraversalAttemptExpectation(
+                traversal_id=f"synthetic-endurance-traversal-{index}",
+                cycle_number=cycle_number,
+                scenario_id=(
+                    "nominal-round-trip"
+                    if report.phase is SyntheticRoundTripPhase.COMPLETED
+                    else f"retained-{report.stop_reason.value}"
+                ),
+                round_trip_sha256=report.content_sha256,
+                expected_round_trip_phase=report.phase,
+                expected_round_trip_stop_reason=report.stop_reason,
+                recovery_of_traversal_id=recovery,
+            )
+            for index, (report, cycle_number, recovery) in enumerate(
+                zip(reports, cycles, recoveries, strict=True),
+                start=1,
+            )
+        ),
+    )
+
+
 def _stopped_result(
     context: RouteEvaluationContext,
     case: str,
 ) -> OfflineRouteSessionResult:
     session = _session(context, f"round-trip-{case}")
     sequencer = OfflineRouteSessionSequencer.begin(session, started_monotonic_s=30.0)
+    if case == "interrupted":
+        return sequencer.interrupt(session, evaluated_monotonic_s=30.1)
+    if case == "checkpoint-timeout":
+        return sequencer.timeout(session, evaluated_monotonic_s=30.1)
     departure_id = context.plan.checkpoints[0].checkpoint_id
     observation = _observation(
         context,
@@ -805,6 +931,16 @@ def _stopped_result(
                 context.plan.identity.route_id,
                 context.plan.identity.version,
                 wrong_direction,
+            ),
+        )
+        return sequencer.observe(session, observation, evaluated_monotonic_s=30.15)
+    if case == "wrong-route":
+        observation = replace(
+            observation,
+            route=RouteIdentity(
+                "foreign-synthetic-route",
+                context.plan.identity.version,
+                context.plan.identity.direction,
             ),
         )
         return sequencer.observe(session, observation, evaluated_monotonic_s=30.15)
@@ -844,8 +980,35 @@ def _stopped_result(
             ),
         )
         return sequencer.observe(session, observation, evaluated_monotonic_s=30.15)
+    if case == "unknown":
+        observation = replace(
+            observation,
+            evidence=replace(
+                observation.evidence,
+                detection=CheckpointDetection(CheckpointMatchKind.UNKNOWN, (), 0.0),
+            ),
+        )
+        return sequencer.observe(session, observation, evaluated_monotonic_s=30.15)
+    if case == "ambiguous":
+        observation = replace(
+            observation,
+            evidence=replace(
+                observation.evidence,
+                detection=CheckpointDetection(
+                    CheckpointMatchKind.AMBIGUOUS,
+                    (
+                        departure_id,
+                        context.plan.checkpoints[1].checkpoint_id,
+                    ),
+                    0.99,
+                ),
+            ),
+        )
+        return sequencer.observe(session, observation, evaluated_monotonic_s=30.15)
 
     sequencer.observe(session, observation, evaluated_monotonic_s=30.15)
+    if case == "step-timeout":
+        return sequencer.timeout(session, evaluated_monotonic_s=30.2)
     if case == "duplicate-checkpoint":
         return sequencer.observe(
             session,
@@ -865,17 +1028,53 @@ def _stopped_result(
     assert prepared.navigation_transition is not None
     proposal = prepared.navigation_transition.step_proposal
     assert proposal is not None
+    if case == "attempt-timeout":
+        return sequencer.timeout(session, evaluated_monotonic_s=30.8)
     if case == "late-receipt":
         return sequencer.record_attempt(
             session,
             _receipt(proposal, post_attempt_monotonic_s=30.3),
             evaluated_monotonic_s=31.0,
         )
+    receipt = _receipt(proposal, post_attempt_monotonic_s=30.3)
     sequencer.record_attempt(
         session,
-        _receipt(proposal, post_attempt_monotonic_s=30.3),
+        receipt,
         evaluated_monotonic_s=30.35,
     )
+    if case == "duplicate-attempt-receipt":
+        return sequencer.record_attempt(
+            session,
+            receipt,
+            evaluated_monotonic_s=30.4,
+        )
+    if case == "non-post-receipt-evidence":
+        return sequencer.observe(
+            session,
+            _observation(
+                context,
+                context.plan.checkpoints[1].checkpoint_id,
+                frame_id=302,
+                captured_monotonic_s=receipt.post_attempt_monotonic_s,
+            ),
+            evaluated_monotonic_s=30.4,
+        )
+    if case == "duplicate-attempt-id":
+        sequencer.observe(
+            session,
+            _observation(
+                context,
+                context.plan.checkpoints[1].checkpoint_id,
+                frame_id=302,
+                captured_monotonic_s=30.4,
+            ),
+            evaluated_monotonic_s=30.45,
+        )
+        return sequencer.prepare_step(
+            session,
+            attempt_id=f"{session.session_id}-attempt-1",
+            evaluated_monotonic_s=30.5,
+        )
     if case == "reordered-checkpoint":
         return sequencer.observe(
             session,
@@ -904,6 +1103,39 @@ def _stopped_result(
 @pytest.fixture(scope="module")
 def pair(tmp_path_factory: pytest.TempPathFactory) -> _PairEvidence:
     return _build_pair(tmp_path_factory.mktemp("release-decision-pair"))
+
+
+@pytest.fixture(scope="module")
+def endurance_pairs(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[_PairEvidence, _PairEvidence, _PairEvidence]:
+    root = tmp_path_factory.mktemp("release-decision-endurance-pairs")
+    return (
+        _build_pair(root / "pair-1", identity_suffix="endurance-1"),
+        _build_pair(root / "pair-2", identity_suffix="endurance-2"),
+        _build_pair(root / "pair-3", identity_suffix="endurance-3"),
+    )
+
+
+@pytest.fixture(scope="module")
+def endurance_nominal_round_trips(
+    endurance_pairs: tuple[_PairEvidence, _PairEvidence, _PairEvidence],
+) -> tuple[
+    round_trip_module.SyntheticRoundTripRehearsalReport,
+    round_trip_module.SyntheticRoundTripRehearsalReport,
+]:
+    return (
+        _completed_round_trip_at(
+            endurance_pairs[1],
+            traversal_id="fault-recovery",
+            outbound_started_monotonic_s=100.0,
+        ),
+        _completed_round_trip_at(
+            endurance_pairs[2],
+            traversal_id="post-recovery-cycle",
+            outbound_started_monotonic_s=200.0,
+        ),
+    )
 
 
 def _status(
@@ -2504,6 +2736,672 @@ def test_return_stop_reason_and_handoff_shape_are_recomputed_from_source_time(
         )
 
 
+def test_three_cycle_endurance_package_is_deterministic_unique_and_narrow(
+    endurance_pairs: tuple[_PairEvidence, _PairEvidence, _PairEvidence],
+) -> None:
+    round_trips = tuple(
+        _completed_round_trip_at(
+            pair,
+            traversal_id=f"nominal-{index}",
+            outbound_started_monotonic_s=float(index * 100),
+        )
+        for index, pair in enumerate(endurance_pairs, start=1)
+    )
+    expectation = _endurance_expectation(
+        round_trips,
+        planned_cycle_count=3,
+    )
+
+    first = evaluate_synthetic_endurance_rehearsal(
+        expectation,
+        round_trips=round_trips,
+    )
+    second = evaluate_synthetic_endurance_rehearsal(
+        expectation,
+        round_trips=round_trips,
+    )
+
+    assert first == second
+    assert first.phase is SyntheticEndurancePhase.COMPLETED
+    assert first.stop_reason is None
+    assert first.completed_cycle_count == 3
+    assert first.retained_failure_count == 0
+    assert first.explicit_recovery_count == 0
+    assert first.successful_recovery_count == 0
+    assert (
+        tuple(item.outcome for item in first.attempts)
+        == (SyntheticEnduranceAttemptOutcome.COMPLETED,) * 3
+    )
+    assert first.attempts[0].cross_traversal_departure_fresh is None
+    assert all(item.cross_traversal_departure_fresh is True for item in first.attempts[1:])
+    first_bytes = first.canonical_bytes
+    second_bytes = second.canonical_bytes
+    assert first_bytes == second_bytes
+    assert first.content_sha256 == Sha256Digest.from_bytes(first_bytes)
+    payload = json.loads(first_bytes)
+    histories = [
+        history
+        for attempt in payload["attempts"]
+        for history in attempt["named_direction_histories"]
+    ]
+    assert len(histories) == 6
+    assert len({item["route_session_id"] for item in histories}) == 6
+    assert len({item["capture_source"]["capture_session_id"] for item in histories}) == 6
+    assert len({item["attempt_source"]["session_id"] for item in histories}) == 6
+    assert len({item["durable_lineage"]["campaign_id"] for item in histories}) == 6
+    assert len({item["durable_lineage"]["review_id"] for item in histories}) == 6
+    assert len({item["durable_lineage"]["finalized_package_sha256"] for item in histories}) == len(
+        histories
+    )
+    assert len({item["durable_lineage"]["independent_review_sha256"] for item in histories}) == len(
+        histories
+    )
+    root_identities = [
+        tuple(item["durable_lineage"][root_field])
+        for item in histories
+        for root_field in ("acquisition_root_identity", "review_root_identity")
+    ]
+    assert len(set(root_identities)) == len(root_identities)
+    attempt_ids = [
+        completed["attempt_id"]
+        for history in histories
+        for completed in history["completed_attempts"]
+    ]
+    assert len(set(attempt_ids)) == len(attempt_ids)
+    assert first.automatic_retry_count == 0
+    assert first.report_adoption_count == 0
+    assert first.real_endurance_satisfied is False
+    assert first.bank_interface_open_proven is False
+    assert first.supported_mining_view_proven is False
+    assert first.release_eligible is False
+    assert first.live_navigation_enabled is False
+    assert first.world_state_activation_allowed is False
+    assert first.controller_activation_allowed is False
+    assert first.activation_allowed is False
+    assert first.input_authority is False
+
+
+@pytest.mark.parametrize("boundary_delta", (-0.01, 0.0))
+def test_endurance_cross_traversal_departure_must_be_strictly_fresh(
+    endurance_pairs: tuple[_PairEvidence, _PairEvidence, _PairEvidence],
+    boundary_delta: float,
+) -> None:
+    first = _completed_round_trip_at(
+        endurance_pairs[0],
+        traversal_id=f"boundary-first-{boundary_delta}",
+        outbound_started_monotonic_s=10.0,
+    )
+    prior_terminal = first._source_decision.bank_to_mine._source_post_attempt_result.progress.last_event_monotonic_s
+    second = _completed_round_trip_at(
+        endurance_pairs[1],
+        traversal_id=f"boundary-second-{boundary_delta}",
+        outbound_started_monotonic_s=prior_terminal + boundary_delta - 0.1,
+        outbound_first_frame_monotonic_s=prior_terminal + boundary_delta,
+    )
+    round_trips = (first, second)
+    expectation = _endurance_expectation(round_trips, planned_cycle_count=2)
+
+    report = evaluate_synthetic_endurance_rehearsal(
+        expectation,
+        round_trips=round_trips,
+    )
+
+    assert report.phase is SyntheticEndurancePhase.STOPPED
+    assert report.stop_reason is (SyntheticEnduranceStopReason.CROSS_TRAVERSAL_DEPARTURE_NOT_FRESH)
+    assert report.completed_cycle_count == 1
+    assert report.retained_failure_count == 1
+    assert report.attempts[-1].outcome is (
+        SyntheticEnduranceAttemptOutcome.CAMPAIGN_BOUNDARY_STOPPED
+    )
+    assert report.attempts[-1].round_trip.phase is SyntheticRoundTripPhase.COMPLETED
+    assert report.attempts[-1].cross_traversal_departure_fresh is False
+    assert report.automatic_retry_count == 0
+
+
+def test_endurance_boundary_stop_requires_explicit_same_cycle_fresh_recovery(
+    endurance_pairs: tuple[_PairEvidence, _PairEvidence, _PairEvidence],
+) -> None:
+    first = _completed_round_trip_at(
+        endurance_pairs[0],
+        traversal_id="boundary-recovery-first",
+        outbound_started_monotonic_s=10.0,
+    )
+    prior_terminal = first._source_decision.bank_to_mine._source_post_attempt_result.progress.last_event_monotonic_s
+    nonfresh = _completed_round_trip_at(
+        endurance_pairs[1],
+        traversal_id="boundary-recovery-nonfresh",
+        outbound_started_monotonic_s=prior_terminal - 0.1,
+        outbound_first_frame_monotonic_s=prior_terminal,
+    )
+    recovery = _completed_round_trip_at(
+        endurance_pairs[2],
+        traversal_id="boundary-recovery-fresh",
+        outbound_started_monotonic_s=100.0,
+    )
+    round_trips = (first, nonfresh, recovery)
+    expectation = _endurance_expectation(
+        round_trips,
+        planned_cycle_count=2,
+        cycle_numbers=(1, 2, 2),
+        recovery_links=(None, None, "synthetic-endurance-traversal-2"),
+    )
+
+    report = evaluate_synthetic_endurance_rehearsal(
+        expectation,
+        round_trips=round_trips,
+    )
+
+    assert report.phase is SyntheticEndurancePhase.COMPLETED
+    assert report.completed_cycle_count == 2
+    assert report.retained_failure_count == 1
+    assert report.explicit_recovery_count == 1
+    assert report.successful_recovery_count == 1
+    assert report.attempts[1].round_trip.phase is SyntheticRoundTripPhase.COMPLETED
+    assert report.attempts[1].outcome is (
+        SyntheticEnduranceAttemptOutcome.CAMPAIGN_BOUNDARY_STOPPED
+    )
+    assert report.attempts[1].boundary_stop_reason is (
+        SyntheticEnduranceStopReason.CROSS_TRAVERSAL_DEPARTURE_NOT_FRESH
+    )
+    assert report.attempts[2].explicit_recovery is True
+    assert report.attempts[2].recovery_fresh_departure_proven is True
+    assert report.automatic_retry_count == 0
+
+
+def test_endurance_rejects_exact_report_replay_and_cross_cycle_source_session_reuse(
+    pair: _PairEvidence,
+) -> None:
+    first = _completed_round_trip_at(
+        pair,
+        traversal_id="identity-first",
+        outbound_started_monotonic_s=10.0,
+    )
+    with pytest.raises(RouteEvidenceIntegrityError, match="reports must be unique"):
+        _endurance_expectation((first, first), planned_cycle_count=2)
+
+    second = _completed_round_trip_at(
+        pair,
+        traversal_id="identity-second",
+        outbound_started_monotonic_s=100.0,
+    )
+    round_trips = (first, second)
+    expectation = _endurance_expectation(round_trips, planned_cycle_count=2)
+    with pytest.raises(RouteEvidenceIntegrityError, match="capture session id"):
+        evaluate_synthetic_endurance_rehearsal(
+            expectation,
+            round_trips=round_trips,
+        )
+
+
+def test_endurance_rejects_route_session_and_completed_attempt_identity_reuse(
+    tmp_path: Path,
+    endurance_pairs: tuple[_PairEvidence, _PairEvidence, _PairEvidence],
+    endurance_nominal_round_trips: tuple[
+        round_trip_module.SyntheticRoundTripRehearsalReport,
+        round_trip_module.SyntheticRoundTripRehearsalReport,
+    ],
+) -> None:
+    first = endurance_nominal_round_trips[0]
+    route_session_reuse = _completed_round_trip_at(
+        endurance_pairs[2],
+        traversal_id="fault-recovery",
+        outbound_started_monotonic_s=200.0,
+    )
+    route_session_reports = (first, route_session_reuse)
+    with pytest.raises(RouteEvidenceIntegrityError, match="route session id"):
+        evaluate_synthetic_endurance_rehearsal(
+            _endurance_expectation(route_session_reports, planned_cycle_count=2),
+            round_trips=route_session_reports,
+        )
+
+    first_attempt_id = first._source_decision.mine_to_bank._source_post_attempt_result.progress.navigation.completed_attempts[
+        0
+    ].identity.attempt_id
+    duplicate_prefix = first_attempt_id.removesuffix("-attempt-1")
+    attempt_reuse = _completed_round_trip_at(
+        endurance_pairs[2],
+        traversal_id="distinct-route-session",
+        outbound_started_monotonic_s=200.0,
+        outbound_attempt_id_prefix=duplicate_prefix,
+    )
+    attempt_reports = (first, attempt_reuse)
+    with pytest.raises(RouteEvidenceIntegrityError, match="completed attempt id"):
+        evaluate_synthetic_endurance_rehearsal(
+            _endurance_expectation(attempt_reports, planned_cycle_count=2),
+            round_trips=attempt_reports,
+        )
+
+    attempt_source_reuse_pair = _build_pair(
+        tmp_path / "attempt-source-reuse",
+        identity_suffix="attempt-source-reuse",
+        attempt_session_suffix="endurance-2",
+    )
+    attempt_source_reuse = _completed_round_trip_at(
+        attempt_source_reuse_pair,
+        traversal_id="attempt-source-reuse",
+        outbound_started_monotonic_s=200.0,
+    )
+    attempt_source_reports = (first, attempt_source_reuse)
+    with pytest.raises(RouteEvidenceIntegrityError, match="attempt-source session id"):
+        evaluate_synthetic_endurance_rehearsal(
+            _endurance_expectation(attempt_source_reports, planned_cycle_count=2),
+            round_trips=attempt_source_reports,
+        )
+
+
+def test_endurance_rejects_recovery_after_success_and_malformed_order(
+    endurance_nominal_round_trips: tuple[
+        round_trip_module.SyntheticRoundTripRehearsalReport,
+        round_trip_module.SyntheticRoundTripRehearsalReport,
+    ],
+) -> None:
+    first, second = endurance_nominal_round_trips
+    invalid_recovery = _endurance_expectation(
+        (first, second),
+        planned_cycle_count=2,
+        cycle_numbers=(1, 1),
+        recovery_links=(None, "synthetic-endurance-traversal-1"),
+    )
+    with pytest.raises(RouteEvidenceIntegrityError, match="recovered after success"):
+        evaluate_synthetic_endurance_rehearsal(
+            invalid_recovery,
+            round_trips=(first, second),
+        )
+
+    first_attempt = SyntheticTraversalAttemptExpectation(
+        traversal_id="manifest-first",
+        cycle_number=1,
+        scenario_id="nominal",
+        round_trip_sha256=_digest("manifest-first-report"),
+        expected_round_trip_phase=SyntheticRoundTripPhase.COMPLETED,
+        expected_round_trip_stop_reason=None,
+    )
+    skipped_attempt = SyntheticTraversalAttemptExpectation(
+        traversal_id="manifest-skipped",
+        cycle_number=3,
+        scenario_id="nominal",
+        round_trip_sha256=_digest("manifest-skipped-report"),
+        expected_round_trip_phase=SyntheticRoundTripPhase.COMPLETED,
+        expected_round_trip_stop_reason=None,
+    )
+    with pytest.raises(RouteEvidenceIntegrityError, match="skips or delays"):
+        SyntheticEnduranceExpectation(
+            campaign_id="malformed-order-campaign",
+            shared_timeline_id="synthetic-round-trip-shared-timeline",
+            planned_cycle_count=3,
+            ordered_attempts=(first_attempt, skipped_attempt),
+        )
+
+
+def test_endurance_terminal_stop_reasons_distinguish_failure_from_incomplete_target(
+    endurance_pairs: tuple[_PairEvidence, _PairEvidence, _PairEvidence],
+    endurance_nominal_round_trips: tuple[
+        round_trip_module.SyntheticRoundTripRehearsalReport,
+        round_trip_module.SyntheticRoundTripRehearsalReport,
+    ],
+) -> None:
+    _, failed = _stopped_round_trip(
+        endurance_pairs[0],
+        direction=RouteDirection.MINE_TO_BANK,
+        case="interrupted",
+    )
+    failed_expectation = _endurance_expectation((failed,), planned_cycle_count=2)
+    failed_report = evaluate_synthetic_endurance_rehearsal(
+        failed_expectation,
+        round_trips=(failed,),
+    )
+    assert failed_report.phase is SyntheticEndurancePhase.STOPPED
+    assert failed_report.stop_reason is SyntheticEnduranceStopReason.UNRECOVERED_TRAVERSAL
+    assert failed_report.completed_cycle_count == 0
+    assert failed_report.retained_failure_count == 1
+
+    implicit_advance = _endurance_expectation(
+        (failed, endurance_nominal_round_trips[0]),
+        planned_cycle_count=2,
+        cycle_numbers=(1, 2),
+    )
+    with pytest.raises(RouteEvidenceIntegrityError, match="failure was not recovered exactly"):
+        evaluate_synthetic_endurance_rehearsal(
+            implicit_advance,
+            round_trips=(failed, endurance_nominal_round_trips[0]),
+        )
+
+    nominal = endurance_nominal_round_trips[0]
+    incomplete_expectation = _endurance_expectation((nominal,), planned_cycle_count=2)
+    incomplete_report = evaluate_synthetic_endurance_rehearsal(
+        incomplete_expectation,
+        round_trips=(nominal,),
+    )
+    assert incomplete_report.phase is SyntheticEndurancePhase.STOPPED
+    assert incomplete_report.stop_reason is (
+        SyntheticEnduranceStopReason.PLANNED_CYCLE_TARGET_NOT_MET
+    )
+    assert incomplete_report.completed_cycle_count == 1
+    assert incomplete_report.retained_failure_count == 0
+
+
+def test_endurance_rejects_route_contract_drift(
+    tmp_path: Path,
+    endurance_nominal_round_trips: tuple[
+        round_trip_module.SyntheticRoundTripRehearsalReport,
+        round_trip_module.SyntheticRoundTripRehearsalReport,
+    ],
+) -> None:
+    stable = endurance_nominal_round_trips[0]
+    changed_pair = _build_pair(
+        tmp_path / "changed-route-version",
+        identity_suffix="changed-route-version",
+        shared_route_version="2.0.0-synthetic",
+    )
+    changed = _completed_round_trip_at(
+        changed_pair,
+        traversal_id="changed-route-version",
+        outbound_started_monotonic_s=200.0,
+    )
+    round_trips = (stable, changed)
+    expectation = _endurance_expectation(round_trips, planned_cycle_count=2)
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="contract changed"):
+        evaluate_synthetic_endurance_rehearsal(
+            expectation,
+            round_trips=round_trips,
+        )
+
+
+def test_endurance_history_and_authority_mutation_cannot_be_serialized(
+    endurance_nominal_round_trips: tuple[
+        round_trip_module.SyntheticRoundTripRehearsalReport,
+        round_trip_module.SyntheticRoundTripRehearsalReport,
+    ],
+) -> None:
+    expectation = _endurance_expectation(
+        endurance_nominal_round_trips,
+        planned_cycle_count=2,
+    )
+    report = evaluate_synthetic_endurance_rehearsal(
+        expectation,
+        round_trips=endurance_nominal_round_trips,
+    )
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="history length changed"):
+        replace(
+            report,
+            attempts=report.attempts[:-1],
+            _factory_token=endurance_module._VALIDATION_TOKEN,
+        )
+    with pytest.raises(RouteEvidenceIntegrityError, match="outcome differs"):
+        replace(
+            report.attempts[0],
+            outcome=SyntheticEnduranceAttemptOutcome.TRAVERSAL_STOPPED,
+            _factory_token=endurance_module._VALIDATION_TOKEN,
+        )
+    second = report.attempts[1]
+    assert second.first_outbound_departure_monotonic_s is not None
+    forged_boundary = replace(
+        second,
+        outcome=SyntheticEnduranceAttemptOutcome.CAMPAIGN_BOUNDARY_STOPPED,
+        boundary_stop_reason=(SyntheticEnduranceStopReason.CROSS_TRAVERSAL_DEPARTURE_NOT_FRESH),
+        cross_traversal_departure_fresh=False,
+        _source_prior_terminal_monotonic_s=(second.first_outbound_departure_monotonic_s),
+        _factory_token=endurance_module._FACTORY_TOKEN,
+    )
+    assert "SyntheticTraversalAttemptRecord" not in endurance_module.__all__
+    assert not hasattr(forged_boundary, "to_json_value")
+    with pytest.raises(RouteEvidenceIntegrityError, match="differs from exact source fold"):
+        replace(
+            report,
+            attempts=(report.attempts[0], forged_boundary),
+            _factory_token=endurance_module._VALIDATION_TOKEN,
+        )
+
+    object.__setattr__(report, "input_authority", True)
+    with pytest.raises(RouteEvidenceIntegrityError, match="changed after evaluation"):
+        report.to_json_value()
+
+
+@pytest.mark.parametrize(
+    ("direction", "case", "outer_reason", "inner_reason"),
+    (
+        (
+            RouteDirection.MINE_TO_BANK,
+            "interrupted",
+            OfflineRouteSessionStopReason.INTERRUPTED,
+            NavigationFailureReason.SESSION_INTERRUPTED,
+        ),
+        (
+            RouteDirection.MINE_TO_BANK,
+            "mid-route-skip",
+            OfflineRouteSessionStopReason.NAVIGATION_FAILURE,
+            NavigationFailureReason.SKIPPED_CHECKPOINT,
+        ),
+        (
+            RouteDirection.MINE_TO_BANK,
+            "stale",
+            OfflineRouteSessionStopReason.NAVIGATION_FAILURE,
+            NavigationFailureReason.STALE_FRAME,
+        ),
+        (
+            RouteDirection.MINE_TO_BANK,
+            "late-receipt",
+            OfflineRouteSessionStopReason.NAVIGATION_FAILURE,
+            NavigationFailureReason.STALE_ATTEMPT_RECEIPT,
+        ),
+        (
+            RouteDirection.MINE_TO_BANK,
+            "non-post-receipt-evidence",
+            OfflineRouteSessionStopReason.NAVIGATION_FAILURE,
+            NavigationFailureReason.EVIDENCE_NOT_AFTER_BOUNDARY,
+        ),
+        (
+            RouteDirection.MINE_TO_BANK,
+            "duplicate-attempt-receipt",
+            OfflineRouteSessionStopReason.NAVIGATION_FAILURE,
+            NavigationFailureReason.DUPLICATE_ATTEMPT_RECEIPT,
+        ),
+        (
+            RouteDirection.MINE_TO_BANK,
+            "wrong-direction",
+            OfflineRouteSessionStopReason.NAVIGATION_FAILURE,
+            NavigationFailureReason.DIRECTION_MISMATCH,
+        ),
+        (
+            RouteDirection.MINE_TO_BANK,
+            "wrong-route",
+            OfflineRouteSessionStopReason.NAVIGATION_FAILURE,
+            NavigationFailureReason.ROUTE_ID_MISMATCH,
+        ),
+        (
+            RouteDirection.MINE_TO_BANK,
+            "mixed-session",
+            OfflineRouteSessionStopReason.NAVIGATION_FAILURE,
+            NavigationFailureReason.PROVENANCE_MISMATCH,
+        ),
+        (
+            RouteDirection.MINE_TO_BANK,
+            "unknown",
+            OfflineRouteSessionStopReason.NAVIGATION_FAILURE,
+            NavigationFailureReason.UNKNOWN_CHECKPOINT,
+        ),
+        (
+            RouteDirection.MINE_TO_BANK,
+            "ambiguous",
+            OfflineRouteSessionStopReason.NAVIGATION_FAILURE,
+            NavigationFailureReason.AMBIGUOUS_CHECKPOINT,
+        ),
+        (
+            RouteDirection.BANK_TO_MINE,
+            "duplicate-attempt-id",
+            OfflineRouteSessionStopReason.NAVIGATION_FAILURE,
+            NavigationFailureReason.DUPLICATE_ATTEMPT_ID,
+        ),
+        (
+            RouteDirection.BANK_TO_MINE,
+            "checkpoint-timeout",
+            OfflineRouteSessionStopReason.CHECKPOINT_TIMEOUT,
+            NavigationFailureReason.CHECKPOINT_TIMEOUT,
+        ),
+        (
+            RouteDirection.BANK_TO_MINE,
+            "step-timeout",
+            OfflineRouteSessionStopReason.STEP_TIMEOUT,
+            NavigationFailureReason.STEP_TIMEOUT,
+        ),
+        (
+            RouteDirection.BANK_TO_MINE,
+            "attempt-timeout",
+            OfflineRouteSessionStopReason.ATTEMPT_TIMEOUT,
+            NavigationFailureReason.ATTEMPT_TIMEOUT,
+        ),
+    ),
+)
+def test_endurance_retains_fault_and_requires_explicit_fresh_recovery(
+    endurance_pairs: tuple[_PairEvidence, _PairEvidence, _PairEvidence],
+    endurance_nominal_round_trips: tuple[
+        round_trip_module.SyntheticRoundTripRehearsalReport,
+        round_trip_module.SyntheticRoundTripRehearsalReport,
+    ],
+    direction: RouteDirection,
+    case: str,
+    outer_reason: OfflineRouteSessionStopReason,
+    inner_reason: NavigationFailureReason,
+) -> None:
+    failed_result, failed_round_trip = _stopped_round_trip(
+        endurance_pairs[0],
+        direction=direction,
+        case=case,
+    )
+    round_trips = (failed_round_trip, *endurance_nominal_round_trips)
+    failed_traversal_id = "synthetic-endurance-traversal-1"
+    expectation = _endurance_expectation(
+        round_trips,
+        planned_cycle_count=2,
+        cycle_numbers=(1, 1, 2),
+        recovery_links=(None, failed_traversal_id, None),
+    )
+
+    report = evaluate_synthetic_endurance_rehearsal(
+        expectation,
+        round_trips=round_trips,
+    )
+
+    assert failed_result.progress.stop_reason is outer_reason
+    assert failed_result.progress.navigation.failure_reason is inner_reason
+    assert report.phase is SyntheticEndurancePhase.COMPLETED
+    assert report.stop_reason is None
+    assert report.completed_cycle_count == 2
+    assert report.retained_failure_count == 1
+    assert report.explicit_recovery_count == 1
+    assert report.successful_recovery_count == 1
+    failed, recovery, next_cycle = report.attempts
+    assert failed.ordinal == 1
+    assert failed.expectation.scenario_id == (f"retained-{failed_round_trip.stop_reason.value}")
+    assert failed.outcome is SyntheticEnduranceAttemptOutcome.TRAVERSAL_STOPPED
+    assert failed.round_trip is not endurance_nominal_round_trips[0]
+    assert failed.round_trip.stop_reason is (
+        SyntheticRoundTripStopReason.MINE_TO_BANK_NOT_ARRIVED
+        if direction is RouteDirection.MINE_TO_BANK
+        else SyntheticRoundTripStopReason.BANK_TO_MINE_NOT_ARRIVED
+    )
+    failed_leg = (
+        failed.round_trip.mine_to_bank
+        if direction is RouteDirection.MINE_TO_BANK
+        else failed.round_trip.bank_to_mine
+    )
+    assert failed_leg is not None
+    assert failed_leg.session_stop_reason is outer_reason
+    assert failed_leg.navigation_failure_reason is inner_reason
+    failed_binding = (
+        failed.round_trip._source_decision.mine_to_bank
+        if direction is RouteDirection.MINE_TO_BANK
+        else failed.round_trip._source_decision.bank_to_mine
+    )
+    assert (
+        failed_leg.session_result_sha256
+        == failed_binding.post_attempt_causality.session_result_sha256
+    )
+    if direction is RouteDirection.MINE_TO_BANK:
+        assert failed.round_trip.evaluated_leg_order == (RouteDirection.MINE_TO_BANK,)
+        assert failed.round_trip.bank_to_mine is None
+    else:
+        assert failed.round_trip.evaluated_leg_order == (
+            RouteDirection.MINE_TO_BANK,
+            RouteDirection.BANK_TO_MINE,
+        )
+    assert recovery.expectation.recovery_of_traversal_id == failed_traversal_id
+    assert recovery.explicit_recovery is True
+    assert recovery.recovery_fresh_departure_proven is True
+    assert recovery.outcome is SyntheticEnduranceAttemptOutcome.COMPLETED
+    assert next_cycle.expectation.cycle_number == 2
+    assert next_cycle.explicit_recovery is False
+    assert next_cycle.outcome is SyntheticEnduranceAttemptOutcome.COMPLETED
+    assert report.automatic_retry_count == 0
+    assert report.report_adoption_count == 0
+    assert {"retry", "restart", "resume", "adopt"}.isdisjoint(dir(report))
+
+
+@pytest.mark.parametrize(
+    ("rejected_direction", "expected_reason"),
+    (
+        (
+            RouteDirection.MINE_TO_BANK,
+            SyntheticRoundTripStopReason.MINE_TO_BANK_EVIDENCE_NOT_APPROVED,
+        ),
+        (
+            RouteDirection.BANK_TO_MINE,
+            SyntheticRoundTripStopReason.BANK_TO_MINE_EVIDENCE_NOT_APPROVED,
+        ),
+    ),
+)
+def test_endurance_retains_endpoint_denial_until_a_fresh_b1_lineage_recovers(
+    tmp_path: Path,
+    endurance_nominal_round_trips: tuple[
+        round_trip_module.SyntheticRoundTripRehearsalReport,
+        round_trip_module.SyntheticRoundTripRehearsalReport,
+    ],
+    rejected_direction: RouteDirection,
+    expected_reason: SyntheticRoundTripStopReason,
+) -> None:
+    rejected_pair = _build_pair(
+        tmp_path / rejected_direction.value,
+        identity_suffix=f"endpoint-denial-{rejected_direction.value}",
+        mine_to_bank_reject_arrival=(rejected_direction is RouteDirection.MINE_TO_BANK),
+        bank_to_mine_reject_arrival=(rejected_direction is RouteDirection.BANK_TO_MINE),
+    )
+    rejected_decision = _evaluate(rejected_pair)
+    rejected_round_trip = _round_trip(
+        rejected_decision,
+        rejected_pair.mine_to_bank.result,
+        rejected_pair.bank_to_mine.result,
+    )
+    round_trips = (rejected_round_trip, *endurance_nominal_round_trips)
+    expectation = _endurance_expectation(
+        round_trips,
+        planned_cycle_count=2,
+        cycle_numbers=(1, 1, 2),
+        recovery_links=(None, "synthetic-endurance-traversal-1", None),
+    )
+
+    report = evaluate_synthetic_endurance_rehearsal(
+        expectation,
+        round_trips=round_trips,
+    )
+
+    assert report.phase is SyntheticEndurancePhase.COMPLETED
+    assert report.retained_failure_count == 1
+    assert report.attempts[0].round_trip.stop_reason is expected_reason
+    assert report.attempts[0].outcome is SyntheticEnduranceAttemptOutcome.TRAVERSAL_STOPPED
+    assert report.attempts[1].explicit_recovery is True
+    assert report.attempts[1].recovery_fresh_departure_proven is True
+    assert (
+        report.attempts[0].round_trip.release_decision_sha256
+        != report.attempts[1].round_trip.release_decision_sha256
+    )
+    assert report.bank_interface_open_proven is False
+    assert report.supported_mining_view_proven is False
+    assert report.release_eligible is False
+    assert report.input_authority is False
+
+
 def test_release_boundary_is_not_root_exported_or_input_capable() -> None:
     exported = set(navigation_root.__all__)
     integration_exports = set(integration_boundary.__all__)
@@ -2515,6 +3413,10 @@ def test_release_boundary_is_not_root_exported_or_input_capable() -> None:
     assert "evaluate_synthetic_round_trip_rehearsal" not in exported
     assert "SyntheticRoundTripRehearsalReport" not in integration_exports
     assert "evaluate_synthetic_round_trip_rehearsal" not in integration_exports
+    assert "SyntheticEnduranceRehearsalReport" not in exported
+    assert "evaluate_synthetic_endurance_rehearsal" not in exported
+    assert "SyntheticEnduranceRehearsalReport" not in integration_exports
+    assert "evaluate_synthetic_endurance_rehearsal" not in integration_exports
 
     forbidden_module_parts = {
         "pyautogui",
@@ -2528,7 +3430,7 @@ def test_release_boundary_is_not_root_exported_or_input_capable() -> None:
         "banking",
         "input",
     }
-    for module_under_test in (release_module, round_trip_module):
+    for module_under_test in (release_module, round_trip_module, endurance_module):
         source_path = Path(module_under_test.__file__ or "")
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         imported_modules, imported_names = _imports(tree)

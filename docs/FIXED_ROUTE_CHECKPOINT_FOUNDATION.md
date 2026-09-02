@@ -191,6 +191,42 @@ arrival still records `supported_mining_view_proven=false`. This rehearsal prove
 two-direction ordering and provenance composition. It is not route evidence and grants no release
 or activation authority.
 
+## Repeated synthetic fault and endurance packaging
+
+`navigation.endurance_rehearsal` folds an exact caller-owned tuple of already-issued synthetic
+round-trip reports. Its manifest preregisters every report digest, scenario, cycle number, terminal
+state, and explicit recovery link, and requires at least two planned successful cycles. It is a
+one-shot deterministic packager, not a route runner, retry loop, clock, or fault injector.
+
+Every named direction in every traversal must retain a globally unique route-session ID,
+checkpoint capture-session ID, attempt-source session ID, durable campaign/review identity,
+package/review digest, physical evidence-root identity, and completed or pending attempt ID. This
+includes the bound `bank_to_mine` result when an outbound STOP prevents that leg from being
+evaluated. The route plan/version, detector/profile/build/configuration/environment, support
+envelope, navigation policy, and stable source semantics cannot change between traversals.
+
+Traversal terminal times must be strictly ordered. After the first traversal, the next outbound
+departure frame must be strictly newer than the preceding traversal's effective terminal event.
+A STOP remains in the ordered history and may be followed only by an immediately preregistered
+same-cycle recovery traversal with fresh identities and a fresh departure boundary. Recovery is a
+new complete B1 synthetic traversal; it does not resume a stopped physical leg, adopt an old
+report, or authorize an automatic retry. A completed nested round trip with a nonfresh campaign
+departure is still retained as a campaign-boundary STOP and requires the same explicit recovery.
+
+The package retains each round-trip digest, direction order, outer session STOP reason, inner
+navigation failure reason, terminal timing, checkpoint/attempt history that the B1 result retains,
+and whether each named direction was actually evaluated. A rejected attempt that the underlying
+B1 terminal result does not retain cannot be reconstructed or claimed by this layer. Endpoint
+review denial remains a terminal failure until a separately bound fresh B1 evidence lineage is
+supplied.
+
+The manifest, nested reports, folded history, canonical bytes, and authority fields are
+source-revalidated when serialized. History removal/reordering, report splicing, identity reuse,
+contract drift, source mutation, or authority mutation therefore produces no package. Real-clock
+attestation, real endurance satisfaction, bank-interface proof, supported-mining-view proof,
+release eligibility, WorldState/controller activation, live navigation, and input authority all
+remain fixed false.
+
 ## Endpoint proof boundary
 
 Route arrival proves only a fresh match of that direction's terminal checkpoint.

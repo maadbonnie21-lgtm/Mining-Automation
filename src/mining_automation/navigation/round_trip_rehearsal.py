@@ -644,7 +644,6 @@ class SyntheticRoundTripRehearsalReport:
     def to_json_value(self) -> dict[str, object]:
         if replace(self, _factory_token=_FACTORY_TOKEN) != self:
             raise RouteEvidenceIntegrityError("round-trip report changed after evaluation")
-        _validate_report_sources(self)
         return {
             "activation_allowed": self.activation_allowed,
             "automatic_retry_enabled": self.automatic_retry_enabled,
@@ -1180,3 +1179,34 @@ def evaluate_synthetic_round_trip_rehearsal(
         bank_handoff=bank_handoff,
         mine_arrival=mine_arrival,
     )
+
+
+def _snapshot_synthetic_round_trip_report(
+    value: SyntheticRoundTripRehearsalReport,
+) -> SyntheticRoundTripRehearsalReport:
+    """Re-evaluate one report from its retained B1 sources and detach it."""
+
+    def copy_once(
+        candidate: SyntheticRoundTripRehearsalReport,
+    ) -> SyntheticRoundTripRehearsalReport:
+        if type(candidate) is not SyntheticRoundTripRehearsalReport:
+            raise TypeError("synthetic round-trip report has the wrong type")
+        decision = _snapshot_navigation_release_decision(candidate._source_decision)
+        timeline = _snapshot_timeline_expectation(candidate._source_timeline)
+        return evaluate_synthetic_round_trip_rehearsal(
+            decision,
+            timeline_expectation=timeline,
+            mine_to_bank_result=_owned_result(decision.mine_to_bank._source_post_attempt_result),
+            bank_to_mine_result=_owned_result(decision.bank_to_mine._source_post_attempt_result),
+        )
+
+    try:
+        first = copy_once(value)
+        second = copy_once(value)
+    except (AttributeError, OSError, TypeError, ValueError) as exc:
+        raise RouteEvidenceIntegrityError("synthetic round-trip report is malformed") from exc
+    if first != second:
+        raise RouteEvidenceIntegrityError("synthetic round-trip report changed during snapshot")
+    if second != value:
+        raise RouteEvidenceIntegrityError("synthetic round-trip report differs from its sources")
+    return second
