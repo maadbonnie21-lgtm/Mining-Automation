@@ -25,6 +25,7 @@ from mining_automation.capture import (
 from mining_automation.capture.testing import FakeCaptureBackend, ManualClock
 from mining_automation.perception import resource_release_campaign as campaign
 from mining_automation.perception import resource_release_campaign_cli as campaign_cli
+from mining_automation.perception import resource_release_decision as release_decision
 from mining_automation.perception import resource_replay_promotion as replay_promotion
 from mining_automation.perception.resource import ResourceVisualState
 
@@ -2364,13 +2365,14 @@ def _export_compact_public_package(
     environment_provider: Callable[[], campaign.CaptureEnvironment] = (
         _compact_environment
     ),
+    raw_factory: Callable[[int], RawFrame] = _compact_raw,
     review_override: Mapping[str, campaign.ReviewDecision] | None = None,
 ) -> Path:
     session = _capture_and_seal_small_campaign(
         monkeypatch,
         tmp_path / "source",
         source_owned=source_owned,
-        raw_factory=_compact_raw,
+        raw_factory=raw_factory,
         environment_provider=environment_provider,
     )
     monkeypatch.setattr(campaign, "VARROCK_EAST_IRON_FIXED_UI_REGIONS", ())
@@ -2392,13 +2394,17 @@ def _export_withheld_public_package(
     tmp_path: Path,
     *,
     source_owned: bool = False,
+    environment_provider: Callable[[], campaign.CaptureEnvironment] = (
+        _compact_environment
+    ),
+    raw_factory: Callable[[int], RawFrame] = _compact_raw,
 ) -> Path:
     session = _capture_and_seal_small_campaign(
         monkeypatch,
         tmp_path / "source",
         source_owned=source_owned,
-        raw_factory=_compact_raw,
-        environment_provider=_compact_environment,
+        raw_factory=raw_factory,
+        environment_provider=environment_provider,
     )
     for case in campaign.CAMPAIGN_PLAN:
         artifact_sha = _prepare_case_review(session, case)
@@ -3932,3 +3938,920 @@ def test_deterministic_gzip_has_frozen_canonical_bytes() -> None:
     assert hashlib.sha256(first).hexdigest() == (
         "8e231acbb12962830a43f4463ee9ac73af67e9f0a73a6d20cb6b7ca0bb53054e"
     )
+
+
+def _resource_release_decision_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    source_owned: bool = True,
+) -> tuple[Path, Path, Path, str, str, str]:
+    package, followup, package_sha, followup_sha = _replay_promotion_inputs(
+        monkeypatch,
+        tmp_path,
+        source_owned=source_owned,
+    )
+    proposal = tmp_path / "replay-proposals"
+    proposal_result = replay_promotion.prepare_replay_promotion_proposals(
+        followup,
+        package,
+        proposal,
+        expected_followup_sha256=followup_sha,
+        expected_package_manifest_sha256=package_sha,
+    )
+    return (
+        package,
+        followup,
+        proposal,
+        package_sha,
+        followup_sha,
+        cast(str, proposal_result["manifest_sha256"]),
+    )
+
+
+def _copy_hashed_artifact(source: Path, destination: Path) -> None:
+    destination.write_bytes(source.read_bytes())
+    destination.with_name(f"{destination.name}.sha256").write_bytes(
+        source.with_name(f"{source.name}.sha256").read_bytes()
+    )
+
+
+def test_release_decision_binds_all_roots_and_stays_proposal_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (
+        package,
+        followup,
+        proposal,
+        package_sha,
+        followup_sha,
+        proposal_sha,
+    ) = _resource_release_decision_inputs(monkeypatch, tmp_path)
+    output = tmp_path / "release-decision.json"
+    result = release_decision.prepare_resource_release_decision(
+        followup,
+        package,
+        output,
+        expected_followup_sha256=followup_sha,
+        expected_package_manifest_sha256=package_sha,
+        proposal_dir=proposal,
+        expected_proposal_manifest_sha256=proposal_sha,
+    )
+
+    assert result["review_packet_prepared"] is True
+    assert result["review_package_manifest_sha256"] == package_sha
+    assert result["followup_sha256"] == followup_sha
+    assert result["proposal_manifest_sha256"] == proposal_sha
+    assert result["release_eligible"] is False
+    artifact = _load_followup(output)
+    assert artifact["source_evidence"]["review_package_manifest_sha256"] == (
+        package_sha
+    )
+    checks = artifact["input_checks"]
+    assert checks["accepted_a1_packaging_checkpoint"] == {
+        "status": "ACCEPTED_OFFLINE_NONACTIVATING",
+        "pull_request": 49,
+        "head_sha": "86090c93046ce584652f11fce1c49d59b5988754",
+    }
+    assert checks["permanent_replay_adoption_status"] == (
+        "PROPOSALS_ONLY_NOT_ADOPTED"
+    )
+    envelope = artifact["candidate_envelope"]
+    assert envelope["renderer"] == {
+        "identity": None,
+        "review_status": "PENDING_EXTERNAL_RENDERER_REVIEW",
+        "capture_backend_observed_identity": False,
+        "caller_may_assert_identity": False,
+    }
+    assert envelope["approved"] is False
+    record = artifact["proposed_source_release_record"]
+    assert record["status"] == "PROPOSED_NOT_GRANTED"
+    assert record["replay_promotion"]["permanent_regression"] is False
+    assert record["source_binding_plan"]["binding_complete"] is False
+    assert record["source_binding_plan"]["provided_git_bindings"] == []
+    assert "promoted_failure_payload_blobs" in record["source_binding_plan"][
+        "required_exact_git_bindings"
+    ]
+    assert record["authority"] == artifact["authority"]
+    assert all(value is False for key, value in artifact["authority"].items() if key != "proposal_only")
+    assert artifact["authority"]["proposal_only"] is True
+    condition_ids = [
+        item["condition_id"] for item in artifact["unresolved_conditions"]
+    ]
+    assert "external-release-evidence-boundary-acceptance" not in condition_ids
+    assert "permanent-replay-source-adoption" in condition_ids
+    assert "exact-client-renderer-profile-envelope-review" in condition_ids
+    assert "final-lead-release-decision" in condition_ids
+
+    verified = release_decision.verify_resource_release_decision(
+        output,
+        expected_sha256=cast(str, result["sha256"]),
+    )
+    assert verified["packet_integrity_verified"] is True
+    assert verified["review_packet_prepared"] is True
+    assert verified["release_eligible"] is False
+    assert verified["activation_allowed"] is False
+
+
+def test_release_decision_all_pass_has_no_replay_adoption_blocker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package = _export_compact_public_package(
+        monkeypatch,
+        tmp_path / "package-source",
+        source_owned=True,
+    )
+    package_sha = _current_manifest_sha256(package)
+    followup = tmp_path / "followup.json"
+    followup_result = campaign.prepare_release_followup_inputs(
+        package,
+        followup,
+        expected_manifest_sha256=package_sha,
+    )
+    followup_sha = cast(str, followup_result["sha256"])
+    first = tmp_path / "decision-a.json"
+    second = tmp_path / "decision-b.json"
+    first_result = release_decision.prepare_resource_release_decision(
+        followup,
+        package,
+        first,
+        expected_followup_sha256=followup_sha,
+        expected_package_manifest_sha256=package_sha,
+    )
+    second_result = release_decision.prepare_resource_release_decision(
+        followup,
+        package,
+        second,
+        expected_followup_sha256=followup_sha,
+        expected_package_manifest_sha256=package_sha,
+    )
+
+    assert first.read_bytes() == second.read_bytes()
+    assert first_result["sha256"] == second_result["sha256"]
+    artifact = _load_followup(first)
+    assert artifact["input_checks"]["c1_reported_closed"] is True
+    assert artifact["input_checks"]["permanent_replay_adoption_status"] == (
+        "NOT_REQUIRED"
+    )
+    assert artifact["source_evidence"]["replay_proposal_manifest"] is None
+    assert artifact["proposed_source_release_record"]["replay_promotion"] == {
+        "status": "NOT_REQUIRED",
+        "retained_failure_case_ids": [],
+        "source_owned_failure_case_ids": [],
+        "nonrelease_failure_case_ids": [],
+        "preparable_case_ids": [],
+        "metadata_only_case_ids": [],
+        "excluded_nonrelease_case_ids": [],
+        "preparable_status": "NOT_PRESENT",
+        "metadata_only_status": "NOT_PRESENT",
+        "nonrelease_status": "NOT_PRESENT",
+        "proposal_manifest_sha256": None,
+        "adopted_fixture_git_blobs": [],
+        "permanent_regression": False,
+    }
+    required_bindings = artifact["proposed_source_release_record"][
+        "source_binding_plan"
+    ]["required_exact_git_bindings"]
+    assert "promoted_failure_payload_blobs" not in required_bindings
+    assert "promoted_failure_evaluator_test_blobs" not in required_bindings
+    assert "permanent-replay-source-adoption" not in {
+        item["condition_id"] for item in artifact["unresolved_conditions"]
+    }
+    assert artifact["authority"]["release_eligible"] is False
+
+    with pytest.raises(campaign.CampaignIntegrityError):
+        release_decision.prepare_resource_release_decision(
+            followup,
+            package,
+            tmp_path / "wrong-package-root.json",
+            expected_followup_sha256=followup_sha,
+            expected_package_manifest_sha256="f" * 64,
+        )
+
+
+def test_release_decision_accepts_exact_nonrelease_exclusion_partition(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (
+        package,
+        followup,
+        proposal,
+        package_sha,
+        followup_sha,
+        proposal_sha,
+    ) = _resource_release_decision_inputs(
+        monkeypatch,
+        tmp_path,
+        source_owned=False,
+    )
+    output = tmp_path / "nonrelease-decision.json"
+    result = release_decision.prepare_resource_release_decision(
+        followup,
+        package,
+        output,
+        expected_followup_sha256=followup_sha,
+        expected_package_manifest_sha256=package_sha,
+        proposal_dir=proposal,
+        expected_proposal_manifest_sha256=proposal_sha,
+    )
+    artifact = _load_followup(output)
+    embedded = artifact["source_evidence"]["replay_proposal_manifest"]
+    selection = embedded["selection"]
+    assert selection["preparable_case_ids"] == []
+    assert selection["metadata_only_case_ids"] == []
+    assert selection["excluded_nonrelease_case_ids"] == [
+        case.case_id for case in campaign.CAMPAIGN_PLAN
+    ]
+    assert artifact["input_checks"]["all_cases_source_owned"] is False
+    envelope = artifact["candidate_envelope"]
+    assert envelope["qualifying_evidence_complete"] is False
+    assert envelope["candidate_reported_dpi"] is None
+    assert envelope["candidate_client_geometry"] is None
+    assert envelope["candidate_window_class"] is None
+    assert envelope["candidate_capture_backend"] is None
+    assert artifact["input_checks"]["permanent_replay_adoption_status"] == (
+        "NOT_REQUIRED"
+    )
+    assert artifact["input_checks"]["metadata_only_replay_status"] == "NOT_PRESENT"
+    assert artifact["input_checks"]["nonrelease_evidence_status"] == (
+        "EXCLUDED_FROM_RELEASE"
+    )
+    assert "permanent-replay-source-adoption" not in {
+        item["condition_id"] for item in artifact["unresolved_conditions"]
+    }
+    assert release_decision.verify_resource_release_decision(
+        output,
+        expected_sha256=cast(str, result["sha256"]),
+    )["packet_integrity_verified"] is True
+
+
+def test_release_decision_preserves_nonqualifying_envelope_facts_without_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def staged_raw(value: int) -> RawFrame:
+        width = 125 if value == 3 else 124
+        pixel = bytes((value & 0xFF, 0, 0, 255))
+        return RawFrame(
+            payload=pixel * (width * 104),
+            width=width,
+            height=104,
+            pixel_format=PixelFormat.BGRA8888,
+        )
+
+    def staged_environment() -> campaign.CaptureEnvironment:
+        nonlocal calls
+        index = calls
+        calls += 1
+        environment = _compact_environment()
+        if index == 0:
+            return replace(environment, reported_dpi=None)
+        if index == 1:
+            return replace(
+                environment,
+                reported_dpi=120,
+                window_class="AltRuneLite",
+            )
+        if index == 2:
+            return replace(environment, window_client_width=125)
+        return environment
+
+    package = _export_withheld_public_package(
+        monkeypatch,
+        tmp_path / "package-source",
+        source_owned=True,
+        environment_provider=staged_environment,
+        raw_factory=staged_raw,
+    )
+    package_sha = _current_manifest_sha256(package)
+    followup = tmp_path / "followup.json"
+    followup_result = campaign.prepare_release_followup_inputs(
+        package,
+        followup,
+        expected_manifest_sha256=package_sha,
+    )
+    proposal = tmp_path / "replay-proposals"
+    proposal_result = replay_promotion.prepare_replay_promotion_proposals(
+        followup,
+        package,
+        proposal,
+        expected_followup_sha256=cast(str, followup_result["sha256"]),
+        expected_package_manifest_sha256=package_sha,
+    )
+    output = tmp_path / "release-readiness.json"
+    result = release_decision.prepare_resource_release_decision(
+        followup,
+        package,
+        output,
+        expected_followup_sha256=cast(str, followup_result["sha256"]),
+        expected_package_manifest_sha256=package_sha,
+        proposal_dir=proposal,
+        expected_proposal_manifest_sha256=cast(
+            str, proposal_result["manifest_sha256"]
+        ),
+    )
+
+    artifact = _load_followup(output)
+    envelope = artifact["candidate_envelope"]
+    assert envelope["observed_reported_dpis"] == [None, 120, 96]
+    assert envelope["observed_client_geometries"] == [
+        {"width": 124, "height": 104},
+        {"width": 125, "height": 104},
+    ]
+    assert envelope["observed_window_classes"] == [
+        "AltRuneLite",
+        "SunAwtFrame",
+    ]
+    assert envelope["qualifying_evidence_complete"] is False
+    assert envelope["candidate_reported_dpi"] is None
+    assert envelope["candidate_client_geometry"] is None
+    assert envelope["candidate_window_class"] is None
+    assert envelope["candidate_capture_backend"] is None
+    condition_ids = {
+        item["condition_id"] for item in artifact["unresolved_conditions"]
+    }
+    assert {
+        "reported-dpi-96",
+        "window-class-consistency",
+        "exact-client-geometry",
+    } <= condition_ids
+    assert artifact["authority"]["release_eligible"] is False
+    assert artifact["authority"]["activation_allowed"] is False
+    assert release_decision.verify_resource_release_decision(
+        output,
+        expected_sha256=cast(str, result["sha256"]),
+    )["packet_integrity_verified"] is True
+
+
+def test_release_decision_keeps_metadata_only_failures_unpreparable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package, followup, package_sha, followup_sha = _replay_promotion_inputs(
+        monkeypatch,
+        tmp_path,
+        source_owned=True,
+        pixels_withheld=True,
+    )
+    proposal = tmp_path / "metadata-only-proposals"
+    proposal_result = replay_promotion.prepare_replay_promotion_proposals(
+        followup,
+        package,
+        proposal,
+        expected_followup_sha256=followup_sha,
+        expected_package_manifest_sha256=package_sha,
+    )
+    output = tmp_path / "metadata-only-decision.json"
+    result = release_decision.prepare_resource_release_decision(
+        followup,
+        package,
+        output,
+        expected_followup_sha256=followup_sha,
+        expected_package_manifest_sha256=package_sha,
+        proposal_dir=proposal,
+        expected_proposal_manifest_sha256=cast(
+            str, proposal_result["manifest_sha256"]
+        ),
+    )
+    artifact = _load_followup(output)
+    checks = artifact["input_checks"]
+    assert checks["permanent_replay_adoption_status"] == "NOT_REQUIRED"
+    assert checks["metadata_only_replay_status"] == "UNPREPARABLE_NO_PIXELS"
+    assert checks["nonrelease_evidence_status"] == "NOT_PRESENT"
+    replay = artifact["proposed_source_release_record"]["replay_promotion"]
+    assert replay["preparable_case_ids"] == []
+    assert replay["metadata_only_case_ids"] == [
+        case.case_id for case in campaign.CAMPAIGN_PLAN
+    ]
+    assert replay["preparable_status"] == "NOT_PRESENT"
+    assert replay["metadata_only_status"] == "UNPREPARABLE_NO_PIXELS"
+    assert "promoted_failure_payload_blobs" not in artifact[
+        "proposed_source_release_record"
+    ]["source_binding_plan"]["required_exact_git_bindings"]
+    condition_ids = {
+        item["condition_id"] for item in artifact["unresolved_conditions"]
+    }
+    assert "metadata-only-retained-failure-resolution" in condition_ids
+    assert "permanent-replay-source-adoption" not in condition_ids
+    assert release_decision.verify_resource_release_decision(
+        output,
+        expected_sha256=cast(str, result["sha256"]),
+    )["packet_integrity_verified"] is True
+
+
+def test_release_decision_rejects_rehashed_authority_and_review_tampering(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (
+        package,
+        followup,
+        proposal,
+        package_sha,
+        followup_sha,
+        proposal_sha,
+    ) = _resource_release_decision_inputs(monkeypatch, tmp_path)
+    source = tmp_path / "decision.json"
+    release_decision.prepare_resource_release_decision(
+        followup,
+        package,
+        source,
+        expected_followup_sha256=followup_sha,
+        expected_package_manifest_sha256=package_sha,
+        proposal_dir=proposal,
+        expected_proposal_manifest_sha256=proposal_sha,
+    )
+
+    def grant_authority(payload: dict[str, object]) -> None:
+        cast(dict[str, object], payload["authority"])["release_eligible"] = True
+
+    def infer_renderer(payload: dict[str, object]) -> None:
+        envelope = cast(dict[str, object], payload["candidate_envelope"])
+        renderer = cast(dict[str, object], envelope["renderer"])
+        renderer["identity"] = "inferred-opengl"
+        renderer["review_status"] = "APPROVED"
+
+    def remove_condition(payload: dict[str, object]) -> None:
+        conditions = cast(list[dict[str, object]], payload["unresolved_conditions"])
+        conditions.pop()
+
+    def forge_git_binding(payload: dict[str, object]) -> None:
+        record = cast(dict[str, object], payload["proposed_source_release_record"])
+        plan = cast(dict[str, object], record["source_binding_plan"])
+        plan["status"] = "COMPLETE"
+        plan["provided_git_bindings"] = ["forged"]
+        plan["binding_complete"] = True
+
+    def adopt_embedded_proposal(payload: dict[str, object]) -> None:
+        evidence = cast(dict[str, object], payload["source_evidence"])
+        manifest = cast(dict[str, object], evidence["replay_proposal_manifest"])
+        authority = cast(dict[str, object], manifest["authority"])
+        authority["adopted"] = True
+        rebind_embedded_proposal(payload)
+
+    def rebind_embedded_proposal(payload: dict[str, object]) -> None:
+        evidence = cast(dict[str, object], payload["source_evidence"])
+        manifest = cast(dict[str, object], evidence["replay_proposal_manifest"])
+        digest = hashlib.sha256(_canonical_json_bytes(manifest)).hexdigest()
+        evidence["replay_proposal_manifest_sha256"] = digest
+        record = cast(dict[str, object], payload["proposed_source_release_record"])
+        lineage = cast(dict[str, object], record["lineage"])
+        lineage["replay_proposal_manifest_sha256"] = digest
+        promotion = cast(dict[str, object], record["replay_promotion"])
+        promotion["proposal_manifest_sha256"] = digest
+
+    def rebind_embedded_followup_and_proposal(
+        payload: dict[str, object],
+    ) -> None:
+        evidence = cast(dict[str, object], payload["source_evidence"])
+        followup_inputs = cast(dict[str, object], evidence["followup_inputs"])
+        digest = hashlib.sha256(_canonical_json_bytes(followup_inputs)).hexdigest()
+        evidence["followup_sha256"] = digest
+        manifest = cast(dict[str, object], evidence["replay_proposal_manifest"])
+        manifest_source = cast(dict[str, object], manifest["source"])
+        manifest_source["followup_sha256"] = digest
+        record = cast(dict[str, object], payload["proposed_source_release_record"])
+        lineage = cast(dict[str, object], record["lineage"])
+        lineage["followup_sha256"] = digest
+        rebind_embedded_proposal(payload)
+
+    def replace_proposal_path(payload: dict[str, object]) -> None:
+        evidence = cast(dict[str, object], payload["source_evidence"])
+        manifest = cast(dict[str, object], evidence["replay_proposal_manifest"])
+        entries = cast(list[dict[str, object]], manifest["proposals"])
+        entries[0]["proposal_path"] = "cases/01-forged/proposal.json"
+        rebind_embedded_proposal(payload)
+
+    def replace_proposal_hash(payload: dict[str, object]) -> None:
+        evidence = cast(dict[str, object], payload["source_evidence"])
+        manifest = cast(dict[str, object], evidence["replay_proposal_manifest"])
+        entries = cast(list[dict[str, object]], manifest["proposals"])
+        entries[0]["proposal_sha256"] = "0" * 64
+        rebind_embedded_proposal(payload)
+
+    def replace_proposal_ordinal(payload: dict[str, object]) -> None:
+        evidence = cast(dict[str, object], payload["source_evidence"])
+        manifest = cast(dict[str, object], evidence["replay_proposal_manifest"])
+        entries = cast(list[dict[str, object]], manifest["proposals"])
+        entries[0]["ordinal"] = 99
+        rebind_embedded_proposal(payload)
+
+    def duplicate_proposal(payload: dict[str, object]) -> None:
+        evidence = cast(dict[str, object], payload["source_evidence"])
+        manifest = cast(dict[str, object], evidence["replay_proposal_manifest"])
+        entries = cast(list[dict[str, object]], manifest["proposals"])
+        entries.append(dict(entries[0]))
+        rebind_embedded_proposal(payload)
+
+    def remove_decompressed_binding(payload: dict[str, object]) -> None:
+        evidence = cast(dict[str, object], payload["source_evidence"])
+        followup_inputs = cast(dict[str, object], evidence["followup_inputs"])
+        promotion = cast(
+            dict[str, object], followup_inputs["failure_promotion_inputs"]
+        )
+        candidates = cast(list[dict[str, object]], promotion["candidates"])
+        candidate_raw = cast(
+            dict[str, object], candidates[0]["sanitized_raw_gzip"]
+        )
+        candidate_raw.pop("decompressed_sha256")
+        bindings = cast(list[dict[str, object]], followup_inputs["case_bindings"])
+        artifacts = cast(dict[str, object], bindings[0]["sanitized_artifacts"])
+        binding_raw = cast(dict[str, object], artifacts["raw_gzip"])
+        binding_raw.pop("decompressed_sha256")
+        rebind_embedded_followup_and_proposal(payload)
+
+    def replace_source_raw_path(payload: dict[str, object]) -> None:
+        evidence = cast(dict[str, object], payload["source_evidence"])
+        followup_inputs = cast(dict[str, object], evidence["followup_inputs"])
+        promotion = cast(
+            dict[str, object], followup_inputs["failure_promotion_inputs"]
+        )
+        candidates = cast(list[dict[str, object]], promotion["candidates"])
+        candidate_raw = cast(
+            dict[str, object], candidates[0]["sanitized_raw_gzip"]
+        )
+        candidate_raw["path"] = "../foreign.raw.gz"
+        bindings = cast(list[dict[str, object]], followup_inputs["case_bindings"])
+        artifacts = cast(dict[str, object], bindings[0]["sanitized_artifacts"])
+        binding_raw = cast(dict[str, object], artifacts["raw_gzip"])
+        binding_raw["path"] = "../foreign.raw.gz"
+        rebind_embedded_followup_and_proposal(payload)
+
+    def boolean_schema(payload: dict[str, object]) -> None:
+        payload["schema_version"] = True
+
+    def replace_embedded_profile_field(
+        payload: dict[str, object],
+        field: str,
+        replacement: object,
+    ) -> None:
+        evidence = cast(dict[str, object], payload["source_evidence"])
+        followup_inputs = cast(dict[str, object], evidence["followup_inputs"])
+        source_snapshot = cast(
+            dict[str, object], followup_inputs["source_snapshot"]
+        )
+        profile = cast(dict[str, object], source_snapshot["profile"])
+        profile[field] = replacement
+        rebind_embedded_followup_and_proposal(payload)
+
+    def replace_detector_identity(payload: dict[str, object]) -> None:
+        replace_embedded_profile_field(
+            payload,
+            "detector_version",
+            "foreign-version",
+        )
+
+    def replace_profile_identity(payload: dict[str, object]) -> None:
+        replace_embedded_profile_field(payload, "profile_id", "foreign-profile")
+
+    def replace_profile_schema(payload: dict[str, object]) -> None:
+        replace_embedded_profile_field(payload, "profile_schema_version", 2)
+
+    def replace_location_identity(payload: dict[str, object]) -> None:
+        replace_embedded_profile_field(payload, "location_id", "foreign-location")
+
+    for name, mutation in (
+        ("authority", grant_authority),
+        ("renderer", infer_renderer),
+        ("condition", remove_condition),
+        ("git-binding", forge_git_binding),
+        ("proposal-adoption", adopt_embedded_proposal),
+        ("proposal-path", replace_proposal_path),
+        ("proposal-hash", replace_proposal_hash),
+        ("proposal-ordinal", replace_proposal_ordinal),
+        ("proposal-duplicate", duplicate_proposal),
+        ("missing-decompressed-binding", remove_decompressed_binding),
+        ("foreign-source-raw-path", replace_source_raw_path),
+        ("boolean-schema", boolean_schema),
+        ("detector-identity", replace_detector_identity),
+        ("profile-identity", replace_profile_identity),
+        ("profile-schema", replace_profile_schema),
+        ("location-identity", replace_location_identity),
+    ):
+        forged = tmp_path / f"forged-{name}.json"
+        _copy_hashed_artifact(source, forged)
+        forged_sha = _rewrite_hashed_json(forged, mutation)
+        with pytest.raises(campaign.CampaignIntegrityError):
+            release_decision.verify_resource_release_decision(
+                forged,
+                expected_sha256=forged_sha,
+            )
+
+    forged_followup = tmp_path / "forged-followup.json"
+    _copy_hashed_artifact(followup, forged_followup)
+
+    def replace_capture_branch(payload: dict[str, object]) -> None:
+        snapshot = cast(dict[str, object], payload["source_snapshot"])
+        repository = cast(dict[str, object], snapshot["repository"])
+        repository["branch"] = "forged/other-session"
+
+    forged_followup_sha = _rewrite_hashed_json(
+        forged_followup,
+        replace_capture_branch,
+    )
+    with pytest.raises(
+        campaign.CampaignIntegrityError,
+        match="rooted follow-up does not match",
+    ):
+        release_decision.prepare_resource_release_decision(
+            forged_followup,
+            package,
+            tmp_path / "cross-root.json",
+            expected_followup_sha256=forged_followup_sha,
+            expected_package_manifest_sha256=package_sha,
+            proposal_dir=proposal,
+            expected_proposal_manifest_sha256=proposal_sha,
+        )
+
+
+def test_release_decision_requires_conditional_proposal_and_separate_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (
+        package,
+        followup,
+        proposal,
+        package_sha,
+        followup_sha,
+        proposal_sha,
+    ) = _resource_release_decision_inputs(monkeypatch, tmp_path)
+    with pytest.raises(campaign.CampaignIntegrityError, match="retained failures"):
+        release_decision.prepare_resource_release_decision(
+            followup,
+            package,
+            tmp_path / "missing-proposal.json",
+            expected_followup_sha256=followup_sha,
+            expected_package_manifest_sha256=package_sha,
+        )
+    with pytest.raises(campaign.CampaignError, match="supplied together"):
+        release_decision.prepare_resource_release_decision(
+            followup,
+            package,
+            tmp_path / "half-proposal.json",
+            expected_followup_sha256=followup_sha,
+            expected_package_manifest_sha256=package_sha,
+            proposal_dir=proposal,
+        )
+    for output in (
+        followup,
+        package / "decision.json",
+        proposal / "decision.json",
+    ):
+        with pytest.raises(campaign.CampaignError, match="separate"):
+            release_decision.prepare_resource_release_decision(
+                followup,
+                package,
+                output,
+                expected_followup_sha256=followup_sha,
+                expected_package_manifest_sha256=package_sha,
+                proposal_dir=proposal,
+                expected_proposal_manifest_sha256=proposal_sha,
+            )
+
+
+def test_release_decision_cli_exposes_no_approval_or_envelope_overrides() -> None:
+    parser = campaign_cli.build_parser()
+    prepare = next(
+        action
+        for action in parser._actions
+        if isinstance(action, campaign_cli.argparse._SubParsersAction)
+    ).choices["prepare-release-decision-readiness"]
+    destinations = {action.dest for action in prepare._actions}
+    assert destinations == {
+        "help",
+        "followup",
+        "expected_followup_sha256",
+        "package",
+        "expected_package_manifest_sha256",
+        "proposal",
+        "expected_proposal_manifest_sha256",
+        "output",
+    }
+    assert not destinations & {
+        "approve",
+        "renderer",
+        "dpi",
+        "geometry",
+        "detector",
+        "profile",
+        "release_eligible",
+        "activation_allowed",
+    }
+
+
+def test_release_decision_uses_frozen_snapshots_and_preserves_concurrent_winner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (
+        package,
+        followup,
+        proposal,
+        package_sha,
+        followup_sha,
+        proposal_sha,
+    ) = _resource_release_decision_inputs(monkeypatch, tmp_path)
+    followup_snapshot = campaign._load_verified_followup_snapshot(
+        followup,
+        expected_sha256=followup_sha,
+    )
+    package_snapshot = campaign._load_verified_review_package_snapshot(
+        package,
+        expected_manifest_sha256=package_sha,
+    )
+    proposal_snapshot = release_decision._load_proposal_snapshot(
+        proposal,
+        expected_manifest_sha256=proposal_sha,
+        followup=followup_snapshot.inputs,
+        expected_followup_sha256=followup_sha,
+    )
+    mutated = False
+
+    def frozen_followup(
+        path: Path,
+        *,
+        expected_sha256: str,
+    ) -> object:
+        nonlocal mutated
+        del path, expected_sha256
+        if not mutated:
+            mutated = True
+            followup.write_text("replaced after snapshot", encoding="utf-8")
+            (package / "manifest.json").write_text(
+                "replaced after snapshot",
+                encoding="utf-8",
+            )
+        return followup_snapshot
+
+    def frozen_package(
+        path: Path,
+        *,
+        expected_manifest_sha256: str,
+    ) -> object:
+        del path, expected_manifest_sha256
+        return package_snapshot
+
+    def frozen_proposal(
+        proposal_dir: Path | None,
+        *,
+        expected_manifest_sha256: str | None,
+        followup: Mapping[str, object],
+        expected_followup_sha256: str,
+    ) -> object:
+        del (
+            proposal_dir,
+            expected_manifest_sha256,
+            followup,
+            expected_followup_sha256,
+        )
+        return proposal_snapshot
+
+    monkeypatch.setattr(
+        release_decision.campaign,
+        "_load_verified_followup_snapshot",
+        frozen_followup,
+    )
+    monkeypatch.setattr(
+        release_decision.campaign,
+        "_load_verified_review_package_snapshot",
+        frozen_package,
+    )
+    monkeypatch.setattr(
+        release_decision,
+        "_load_proposal_snapshot",
+        frozen_proposal,
+    )
+    output = tmp_path / "concurrent-decision.json"
+    barrier = threading.Barrier(3)
+    successes: list[dict[str, object]] = []
+    failures: list[BaseException] = []
+
+    def writer() -> None:
+        barrier.wait()
+        try:
+            successes.append(
+                release_decision.prepare_resource_release_decision(
+                    followup,
+                    package,
+                    output,
+                    expected_followup_sha256=followup_sha,
+                    expected_package_manifest_sha256=package_sha,
+                    proposal_dir=proposal,
+                    expected_proposal_manifest_sha256=proposal_sha,
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001 - adversarial writer result
+            failures.append(exc)
+
+    threads = [threading.Thread(target=writer) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+    assert mutated is True
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert isinstance(failures[0], FileExistsError)
+    winning_bytes = output.read_bytes()
+    winning_sidecar = output.with_name(f"{output.name}.sha256").read_bytes()
+    with pytest.raises(FileExistsError):
+        release_decision.prepare_resource_release_decision(
+            followup,
+            package,
+            output,
+            expected_followup_sha256=followup_sha,
+            expected_package_manifest_sha256=package_sha,
+            proposal_dir=proposal,
+            expected_proposal_manifest_sha256=proposal_sha,
+        )
+    assert output.read_bytes() == winning_bytes
+    assert output.with_name(f"{output.name}.sha256").read_bytes() == winning_sidecar
+    assert release_decision.verify_resource_release_decision(
+        output,
+        expected_sha256=cast(str, successes[0]["sha256"]),
+    )["packet_integrity_verified"] is True
+
+
+def test_hashed_artifact_sidecar_failure_never_unlinks_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "owned.json"
+    replacement = b"concurrent-winner-must-survive"
+    real_exclusive_write = campaign._exclusive_write
+    identity_calls = 0
+
+    def distinct_identity(value: object) -> tuple[int, int]:
+        nonlocal identity_calls
+        del value
+        identity_calls += 1
+        return (1, identity_calls)
+
+    def replace_before_sidecar(
+        path: Path,
+        payload: bytes,
+    ) -> tuple[int, int] | None:
+        if path == output:
+            return real_exclusive_write(path, payload)
+        output.unlink()
+        output.write_bytes(replacement)
+        raise FileExistsError("concurrent sidecar winner")
+
+    monkeypatch.setattr(campaign, "_identity_from_stat", distinct_identity)
+    monkeypatch.setattr(campaign, "_exclusive_write", replace_before_sidecar)
+    with pytest.raises(FileExistsError, match="concurrent sidecar winner"):
+        campaign._write_hashed_artifact(output, b"this invocation owned these bytes")
+
+    assert identity_calls == 2
+    assert output.read_bytes() == replacement
+    assert not output.with_name(f"{output.name}.sha256").exists()
+
+
+def test_hashed_artifact_success_path_detects_and_preserves_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "owned.json"
+    replacement = b"replacement-before-successful-sidecar"
+    real_exclusive_write = campaign._exclusive_write
+
+    def replace_then_write_sidecar(
+        path: Path,
+        payload: bytes,
+    ) -> tuple[int, int] | None:
+        if path == output:
+            return real_exclusive_write(path, payload)
+        output.unlink()
+        output.write_bytes(replacement)
+        return real_exclusive_write(path, payload)
+
+    monkeypatch.setattr(campaign, "_exclusive_write", replace_then_write_sidecar)
+    with pytest.raises(
+        campaign.CampaignIntegrityError,
+        match="changed during exclusive publication",
+    ):
+        campaign._write_hashed_artifact(output, b"owned-publication")
+
+    assert output.read_bytes() == replacement
+    assert not output.with_name(f"{output.name}.sha256").exists()
+
+
+def test_hashed_artifact_verifier_rejects_trailing_sidecar_bytes(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "artifact.json"
+    digest = campaign._write_hashed_artifact(output, b"{}\n")
+    sidecar = output.with_name(f"{output.name}.sha256")
+    sidecar.write_bytes(f"{digest}\r\nforeign".encode("ascii"))
+
+    with pytest.raises(campaign.CampaignIntegrityError, match="sidecar size"):
+        campaign._verify_hashed_artifact(output, expected=digest)
