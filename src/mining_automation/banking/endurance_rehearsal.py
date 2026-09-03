@@ -80,30 +80,34 @@ class SyntheticBankingAttempt:
     input_authority: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
-        for value, name in (
+        text_fields: tuple[tuple[object, str], ...] = (
             (self.attempt_id, "attempt_id"),
             (self.session_id, "session_id"),
             (self.deposit_receipt_id, "deposit_receipt_id"),
             (self.source_id, "source_id"),
-        ):
+        )
+        for value, name in text_fields:
             _text(value, name)
-        for value, name in (
+        digest_fields: tuple[tuple[object, str], ...] = (
             (self.evidence_package_sha256, "evidence_package_sha256"),
             (self.acquisition_root_sha256, "acquisition_root_sha256"),
             (self.review_root_sha256, "review_root_sha256"),
-        ):
+        )
+        for value, name in digest_fields:
             _digest(value, name)
-        for value, name in (
+        frame_fields: tuple[tuple[object, str], ...] = (
             (self.pre_frame_id, "pre_frame_id"),
             (self.receipt_frame_id, "receipt_frame_id"),
             (self.post_frame_id, "post_frame_id"),
-        ):
+        )
+        for value, name in frame_fields:
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{name} must be a positive exact int")
-        for value, name in (
+        time_fields: tuple[tuple[object, str], ...] = (
             (self.started_monotonic_s, "started_monotonic_s"),
             (self.completed_monotonic_s, "completed_monotonic_s"),
-        ):
+        )
+        for value, name in time_fields:
             if type(value) is not float or not isfinite(value) or value < 0.0:
                 raise ValueError(f"{name} must be a finite non-negative exact float")
         if self.completed_monotonic_s < self.started_monotonic_s:
@@ -112,10 +116,11 @@ class SyntheticBankingAttempt:
             raise ValueError("bank_before must be exact")
         if type(self.bank_after) is not BankInterfaceState:
             raise ValueError("bank_after must be exact")
-        for value, name in (
+        slot_fields: tuple[tuple[object, str], ...] = (
             (self.occupied_before, "occupied_before"),
             (self.occupied_after, "occupied_after"),
-        ):
+        )
+        for value, name in slot_fields:
             if value is not None and (
                 type(value) is not int or value < 0 or value > INVENTORY_CAPACITY
             ):
