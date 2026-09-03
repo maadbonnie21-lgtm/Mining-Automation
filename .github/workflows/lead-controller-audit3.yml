@@ -1,0 +1,43 @@
+name: Lead controller focused audit
+on:
+  push:
+    branches: [chatgpt/lead-controller-audit3]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 5f370a9f400e8f6f10e60621490a4576f314eb65
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Exact scope, adversarial behavior, and focused gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git merge-base 0d215457fb4b037eedc74cb776a3cf1f5f58a19f HEAD)" = 0d215457fb4b037eedc74cb776a3cf1f5f58a19f
+          test "$(git diff --name-only 0d215457fb4b037eedc74cb776a3cf1f5f58a19f HEAD | sort)" = "$(printf '%s\n' src/mining_automation/controller.py tests/test_controller.py | sort)"
+          python -m pip install -e '.[dev]'
+          python - <<'PY'
+          from mining_automation.contracts import InventoryState, ResourceState, SessionState, WorldState
+          from mining_automation.controller import MiningController
+          c = MiningController()
+          s = WorldState(session_state=SessionState.MINING)
+          s.inventory = InventoryState(occupied_slots=None, confidence=0.0)
+          s.resources = {"first": ResourceState("first", "iron", True, 0.81, (1,2,3,4)), "second": ResourceState("second", "iron", True, 1.0, (5,6,7,8))}
+          i = c.decide(s)
+          assert i is not None and i.kind == "reacquire_inventory" and i.target_id is None and i.interaction_region is None
+          s.inventory = InventoryState(occupied_slots=1, confidence=0.8)
+          i = c.decide(s)
+          assert i is not None and i.kind == "interact_resource" and i.target_id == "first" and i.interaction_region == (1,2,3,4)
+          s.resources = {"unknown": ResourceState("unknown", "iron", None, 0.0, None), "depleted": ResourceState("depleted", "iron", False, 1.0, None)}
+          i = c.decide(s)
+          assert i is not None and i.kind == "reacquire_resources"
+          PY
+          ruff check .
+          mypy src
+          pytest tests/test_controller.py
