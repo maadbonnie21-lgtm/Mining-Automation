@@ -63,7 +63,12 @@ jobs:
           old = '''        review_id=review.review_id,\n        review_plan_sha256=review.review_plan_sha256,\n        review_journal_head_sha256=review.review_journal_head_sha256,\n        review_finalization_sha256=review.review_finalization_sha256,\n    )\n'''
           new = '''        review_id=review.review_id,\n        review_plan_sha256=review.review_plan_sha256,\n        review_journal_head_sha256=review.review_journal_head_sha256,\n        review_finalization_sha256=review.review_finalization_sha256,\n        acquisition_physical_identity_sha256=(\n            acquisition.expectation.acquisition_physical_identity_sha256\n        ),\n        review_physical_identity_sha256=review.review_physical_identity_sha256,\n    )\n'''
           assert s.count(old) == 1
-          p.write_text(s.replace(old, new, 1))
+          s = s.replace(old, new, 1)
+          old = '''        with pytest.raises(\n            RouteEvidenceIntegrityError,\n            match="changed between repeated intake snapshots",\n        ):\n'''
+          new = '''        with pytest.raises(\n            RouteEvidenceIntegrityError,\n            match=(\n                "changed between repeated intake snapshots|"\n                "durable acquisition physical identity differs"\n            ),\n        ):\n'''
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          p.write_text(s)
           PY
           git diff --check
       - name: Focused B4 static and release gates
