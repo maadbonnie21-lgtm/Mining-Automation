@@ -1,0 +1,308 @@
+Obtaining file:///home/runner/work/Mining-Automation/Mining-Automation
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Checking if build backend supports build_editable: started
+  Checking if build backend supports build_editable: finished with status 'done'
+  Getting requirements to build editable: started
+  Getting requirements to build editable: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): started
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Collecting pytest~=9.1.1 (from mining-automation==0.1.0.dev0)
+  Downloading pytest-9.1.1-py3-none-any.whl.metadata (7.6 kB)
+Collecting pytest-cov~=7.1.0 (from mining-automation==0.1.0.dev0)
+  Downloading pytest_cov-7.1.0-py3-none-any.whl.metadata (32 kB)
+Collecting ruff~=0.16.3 (from mining-automation==0.1.0.dev0)
+  Downloading ruff-0.16.6-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (26 kB)
+Collecting mypy~=2.3.1 (from mining-automation==0.1.0.dev0)
+  Downloading mypy-2.3.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.4 kB)
+Collecting typing_extensions>=4.6.0 (from mypy~=2.3.1->mining-automation==0.1.0.dev0)
+  Downloading typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting mypy_extensions>=1.0.0 (from mypy~=2.3.1->mining-automation==0.1.0.dev0)
+  Downloading mypy_extensions-1.1.0-py3-none-any.whl.metadata (1.1 kB)
+Collecting pathspec>=1.0.0 (from mypy~=2.3.1->mining-automation==0.1.0.dev0)
+  Downloading pathspec-1.1.1-py3-none-any.whl.metadata (14 kB)
+Collecting librt>=0.13.0 (from mypy~=2.3.1->mining-automation==0.1.0.dev0)
+  Downloading librt-0.15.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (1.3 kB)
+Collecting ast-serialize<1.0.0,>=0.6.0 (from mypy~=2.3.1->mining-automation==0.1.0.dev0)
+  Downloading ast_serialize-0.9.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (1.4 kB)
+Collecting iniconfig>=1.0.1 (from pytest~=9.1.1->mining-automation==0.1.0.dev0)
+  Downloading iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)
+Collecting packaging>=22 (from pytest~=9.1.1->mining-automation==0.1.0.dev0)
+  Using cached packaging-26.3-py3-none-any.whl.metadata (3.5 kB)
+Collecting pluggy<2,>=1.5 (from pytest~=9.1.1->mining-automation==0.1.0.dev0)
+  Downloading pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)
+Collecting pygments>=2.7.2 (from pytest~=9.1.1->mining-automation==0.1.0.dev0)
+  Downloading pygments-2.21.0-py3-none-any.whl.metadata (2.5 kB)
+Collecting coverage>=7.10.6 (from coverage[toml]>=7.10.6->pytest-cov~=7.1.0->mining-automation==0.1.0.dev0)
+  Downloading coverage-7.16.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (8.6 kB)
+Downloading mypy-2.3.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (15.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 15.3/15.3 MB 74.6 MB/s  0:00:00
+Downloading ast_serialize-0.9.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (1.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.3/1.3 MB 229.7 MB/s  0:00:00
+Downloading pytest-9.1.1-py3-none-any.whl (386 kB)
+Downloading pluggy-1.6.0-py3-none-any.whl (20 kB)
+Downloading pytest_cov-7.1.0-py3-none-any.whl (22 kB)
+Downloading ruff-0.16.6-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (10.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 10.3/10.3 MB 180.7 MB/s  0:00:00
+Downloading coverage-7.16.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (257 kB)
+Downloading iniconfig-2.3.0-py3-none-any.whl (7.5 kB)
+Downloading librt-0.15.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (531 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 531.9/531.9 kB 4.5 MB/s  0:00:00
+Downloading mypy_extensions-1.1.0-py3-none-any.whl (5.0 kB)
+Using cached packaging-26.3-py3-none-any.whl (129 kB)
+Downloading pathspec-1.1.1-py3-none-any.whl (57 kB)
+Downloading pygments-2.21.0-py3-none-any.whl (1.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.3/1.3 MB 5.1 MB/s  0:00:00
+Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+Building wheels for collected packages: mining-automation
+  Building editable for mining-automation (pyproject.toml): started
+  Building editable for mining-automation (pyproject.toml): finished with status 'done'
+  Created wheel for mining-automation: filename=mining_automation-0.1.0.dev0-0.editable-py3-none-any.whl size=2621 sha256=0a0ffcca281618759a1eaac9b52dc032296e72a78ebf59487b3c2f92687fca41
+  Stored in directory: /tmp/pip-ephem-wheel-cache-49f21js9/wheels/3f/4e/a7/c4d02697a6c48e719aab9eecb6d7a1333e6e92a4118e90603d
+Successfully built mining-automation
+Installing collected packages: typing_extensions, ruff, pygments, pluggy, pathspec, packaging, mypy_extensions, mining-automation, librt, iniconfig, coverage, ast-serialize, pytest, mypy, pytest-cov
+
+Successfully installed ast-serialize-0.9.0 coverage-7.16.0 iniconfig-2.3.0 librt-0.15.0 mining-automation-0.1.0.dev0 mypy-2.3.1 mypy_extensions-1.1.0 packaging-26.3 pathspec-1.1.1 pluggy-1.6.0 pygments-2.21.0 pytest-9.1.1 pytest-cov-7.1.0 ruff-0.16.6 typing_extensions-4.16.0
+I001 [*] Import block is un-sorted or un-formatted
+  --> tests/test_resource_release_live_readiness.py:1:1
+   |
+ 1 | / from __future__ import annotations
+ 2 | |
+ 3 | | from collections.abc import Iterator
+ 4 | | import ast
+ 5 | | import hashlib
+ 6 | | import inspect
+ 7 | | import json
+ 8 | | import subprocess
+ 9 | | from dataclasses import replace
+10 | | from pathlib import Path
+11 | | from typing import cast
+12 | |
+13 | | import pytest
+14 | |
+15 | | import mining_automation.perception as perception
+16 | | from mining_automation.perception import resource_release_campaign as campaign
+17 | | from mining_automation.perception import resource_release_campaign_cli as campaign_cli
+18 | | from mining_automation.perception import resource_release_live_readiness as readiness
+19 | | from mining_automation.perception.resource_release_live_readiness import (
+20 | |     RESOURCE_RELEASE_LIVE_READINESS_STATUS,
+21 | |     ResourceReleaseLiveReadinessError,
+22 | |     prepare_resource_release_live_readiness,
+23 | |     verify_resource_release_live_readiness,
+24 | | )
+   | |_^
+25 |
+26 |   _HEAD = "8" * 40
+   |
+help: Organize imports
+  |
+2 |
+  - from collections.abc import Iterator
+3 | import ast
+--------------------------------------------------------------------------------
+7 | import subprocess
+8 + from collections.abc import Iterator
+9 | from dataclasses import replace
+  |
+
+Found 1 error.
+[*] 1 fixable with the `--fix` option.
+Success: no issues found in 46 source files
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.1.1, pluggy-1.6.0 -- /opt/hostedtoolcache/Python/3.12.14/x64/bin/python
+cachedir: .pytest_cache
+rootdir: /home/runner/work/Mining-Automation/Mining-Automation
+configfile: pyproject.toml
+plugins: cov-7.1.0
+collecting ... collected 40 items
+
+tests/test_resource_release_live_readiness.py::test_readiness_manifest_freezes_exact_campaign_envelope_and_no_authority PASSED [  2%]
+tests/test_resource_release_live_readiness.py::test_readiness_is_deterministic_and_verifies_only_with_external_root PASSED [  5%]
+tests/test_resource_release_live_readiness.py::test_coordinated_rewrite_cannot_change_status_even_with_new_expected_root PASSED [  7%]
+tests/test_resource_release_live_readiness.py::test_replacement_during_verification_is_caught_by_final_recheck PASSED [ 10%]
+tests/test_resource_release_live_readiness.py::test_stale_dirty_or_foreign_repository_fails_closed PASSED [ 12%]
+tests/test_resource_release_live_readiness.py::test_runtime_or_source_gate_change_refuses_without_publication PASSED [ 15%]
+tests/test_resource_release_live_readiness.py::test_preparation_never_constructs_session_or_capture_backend PASSED [ 17%]
+tests/test_resource_release_live_readiness.py::test_policy_drift_and_plan_drift_are_rejected_before_publication PASSED [ 20%]
+tests/test_resource_release_live_readiness.py::test_any_fixed_case_semantic_change_breaks_frozen_plan_root[0-case_id-replacement-startup] PASSED [ 22%]
+tests/test_resource_release_live_readiness.py::test_any_fixed_case_semantic_change_breaks_frozen_plan_root[0-operator_prompt-changed operator staging text] PASSED [ 25%]
+tests/test_resource_release_live_readiness.py::test_any_fixed_case_semantic_change_breaks_frozen_plan_root[1-required_review_meaning-neighboring-copper] PASSED [ 27%]
+tests/test_resource_release_live_readiness.py::test_any_fixed_case_semantic_change_breaks_frozen_plan_root[1-requested_focal_state-DEPLETED] PASSED [ 30%]
+tests/test_resource_release_live_readiness.py::test_capture_configuration_drift_is_rejected[retry_attempts-1] PASSED [ 32%]
+tests/test_resource_release_live_readiness.py::test_capture_configuration_drift_is_rejected[automatic_camera_control-True] PASSED [ 35%]
+tests/test_resource_release_live_readiness.py::test_capture_configuration_drift_is_rejected[automatic_camera_recovery-True] PASSED [ 37%]
+tests/test_resource_release_live_readiness.py::test_capture_configuration_drift_is_rejected[input_allowed-True] PASSED [ 40%]
+tests/test_resource_release_live_readiness.py::test_capture_configuration_drift_is_rejected[capture_backend-foreign-backend] PASSED [ 42%]
+tests/test_resource_release_live_readiness.py::test_capture_configuration_drift_is_rejected[required_evidence_origin-test-injected-non-release] PASSED [ 45%]
+tests/test_resource_release_live_readiness.py::test_capture_configuration_drift_is_rejected[required_reported_dpi-120] PASSED [ 47%]
+tests/test_resource_release_live_readiness.py::test_detector_profile_identity_drift_is_rejected[detector_id-foreign-detector] PASSED [ 50%]
+tests/test_resource_release_live_readiness.py::test_detector_profile_identity_drift_is_rejected[detector_version-0.0.0] PASSED [ 52%]
+tests/test_resource_release_live_readiness.py::test_detector_profile_identity_drift_is_rejected[profile_id-foreign-profile] PASSED [ 55%]
+tests/test_resource_release_live_readiness.py::test_detector_profile_identity_drift_is_rejected[profile_schema_version-2] PASSED [ 57%]
+tests/test_resource_release_live_readiness.py::test_detector_profile_identity_drift_is_rejected[profile_sha256-ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff] PASSED [ 60%]
+tests/test_resource_release_live_readiness.py::test_detector_profile_identity_drift_is_rejected[location_id-foreign-location] PASSED [ 62%]
+tests/test_resource_release_live_readiness.py::test_detector_profile_identity_drift_is_rejected[resource_ids-value6] PASSED [ 65%]
+tests/test_resource_release_live_readiness.py::test_readiness_requires_one_nonmerge_direct_child_of_exact_a7[history0] PASSED [ 67%]
+tests/test_resource_release_live_readiness.py::test_readiness_requires_one_nonmerge_direct_child_of_exact_a7[history1] PASSED [ 70%]
+tests/test_resource_release_live_readiness.py::test_readiness_requires_one_nonmerge_direct_child_of_exact_a7[history2] PASSED [ 72%]
+tests/test_resource_release_live_readiness.py::test_campaign_and_profile_working_bytes_equal_exact_head_blobs PASSED [ 75%]
+tests/test_resource_release_live_readiness.py::test_head_blob_binding_detects_assume_unchanged_working_source[src/mining_automation/perception/resource_release_campaign.py] PASSED [ 77%]
+tests/test_resource_release_live_readiness.py::test_head_blob_binding_detects_assume_unchanged_working_source[tools/resource_release_campaign.py] PASSED [ 80%]
+tests/test_resource_release_live_readiness.py::test_existing_artifact_is_preserved_and_duplicate_json_is_rejected PASSED [ 82%]
+tests/test_resource_release_live_readiness.py::test_output_must_be_external_real_path_and_not_an_ads PASSED [ 85%]
+tests/test_resource_release_live_readiness.py::test_repository_toctou_stops_before_publication_or_returns_no_root PASSED [ 87%]
+tests/test_resource_release_live_readiness.py::test_false_gate_cli_start_creates_neither_session_nor_backend PASSED [ 90%]
+tests/test_resource_release_live_readiness.py::test_cli_readiness_commands_are_thin_and_expected_root_is_mandatory PASSED [ 92%]
+tests/test_resource_release_live_readiness.py::test_readiness_module_is_nonexported_and_has_no_authorization_seam PASSED [ 95%]
+tests/test_resource_release_live_enable.py::test_a11_is_one_literal_true_source_gate PASSED [ 97%]
+tests/test_resource_release_live_enable.py::test_a11_preserves_fixed_campaign_and_fail_closed_policy PASSED [100%]
+
+============================== 40 passed in 5.12s ==============================
+........................................................................ [  6%]
+........................................................................ [ 12%]
+........................................................................ [ 19%]
+........................................................................ [ 25%]
+........................................................................ [ 31%]
+........................................................................ [ 38%]
+........................................................................ [ 44%]
+........................................................................ [ 51%]
+........................................................................ [ 57%]
+........................................................................ [ 63%]
+..........................................F.F........................... [ 70%]
+........................................................................ [ 76%]
+........................................................................ [ 82%]
+........................................................................ [ 89%]
+........................................................................ [ 95%]
+......................................s..........                        [100%]
+=================================== FAILURES ===================================
+________ test_capture_configuration_source_owns_pending_dpi_requirement ________
+
+tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-1/test_capture_configuration_sou0')
+
+    def test_capture_configuration_source_owns_pending_dpi_requirement(
+        tmp_path: Path,
+    ) -> None:
+        session = _session(tmp_path)
+        payload = json.loads((session / "session.json").read_text(encoding="utf-8"))
+    
+        assert campaign.RESOURCE_RELEASE_CAMPAIGN_VERSION == "1.1.0"
+        assert campaign.RESOURCE_RELEASE_CONFIGURATION_ID == (
+            "resource-release-campaign:varrock-east-iron-v1@1.1.0"
+        )
+        assert payload["campaign_version"] == "1.1.0"
+        assert payload["configuration_id"] == campaign.RESOURCE_RELEASE_CONFIGURATION_ID
+        configuration = payload["capture_configuration"]
+        assert configuration["required_reported_dpi"] == 96
+        assert configuration["reported_dpi_requirement_status"] == (
+            "required-candidate-pending-fresh-review"
+        )
+>       assert configuration["live_source_authorized"] is False
+E       assert True is False
+
+tests/test_resource_release_campaign.py:529: AssertionError
+________ test_live_source_gate_blocks_before_capture_or_case_directory _________
+
+tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-1/test_live_source_gate_blocks_b0')
+
+    def test_live_source_gate_blocks_before_capture_or_case_directory(
+        tmp_path: Path,
+    ) -> None:
+        session = _session(tmp_path)
+        backend = FakeCaptureBackend([_small_raw()], name="windows-runelite")
+        source = CaptureSource(backend, clock=ManualClock())
+    
+        with pytest.raises(campaign.CampaignError, match="NOT YET AUTHORIZED"):
+>           campaign.capture_next_case(
+                session,
+                source,
+                repository=_repository(),
+                environment_provider=_environment,
+            )
+
+tests/test_resource_release_campaign.py:561: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/mining_automation/perception/resource_release_campaign.py:2286: in capture_next_case
+    return _capture_next_with_source(
+src/mining_automation/perception/resource_release_campaign.py:2256: in _capture_next_with_source
+    return _capture_case(
+src/mining_automation/perception/resource_release_campaign.py:1700: in _capture_case
+    frame = source.capture()
+            ^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <mining_automation.capture.source.CaptureSource object at 0x7f4887cf3910>
+
+    def capture(self) -> Frame:
+        """Return the next validated frame.
+    
+        Raises:
+            CaptureClosedError: the source is not open.
+            CaptureFailureThresholdExceeded: too many consecutive failures; the
+                source is latched until :meth:`reset_failures`.
+            CaptureError: any other capture failure, always a subclass so
+                callers can branch on cause.
+        """
+        if self._latched_error is not None:
+            raise self._latched_error
+        if not self._is_open:
+>           raise CaptureClosedError("capture source is not open")
+E           mining_automation.capture.errors.CaptureClosedError: capture source is not open
+
+src/mining_automation/capture/source.py:278: CaptureClosedError
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.12.14-final-0 _______________
+
+Name                                                                  Stmts   Miss  Cover   Missing
+---------------------------------------------------------------------------------------------------
+src/mining_automation/__init__.py                                         2      0   100%
+src/mining_automation/app.py                                              7      7     0%   1-12
+src/mining_automation/capture/__init__.py                                 6      0   100%
+src/mining_automation/capture/backend.py                                 18      0   100%
+src/mining_automation/capture/errors.py                                  16      0   100%
+src/mining_automation/capture/frame.py                                   82      0   100%
+src/mining_automation/capture/source.py                                 164      0   100%
+src/mining_automation/capture/testing.py                                 87      0   100%
+src/mining_automation/capture/windows/__init__.py                         5      0   100%
+src/mining_automation/capture/windows/_win32_calls.py                   182    182     0%   17-416
+src/mining_automation/capture/windows/backend.py                         48      0   100%
+src/mining_automation/capture/windows/bmp.py                             13      0   100%
+src/mining_automation/capture/windows/dpi.py                              7      0   100%
+src/mining_automation/capture/windows/gdi_resources.py                   94      6    94%   51, 53, 91, 127, 129, 178
+src/mining_automation/capture/windows/geometry.py                         6      0   100%
+src/mining_automation/capture/windows/testing.py                         33      0   100%
+src/mining_automation/capture/windows/win32_api.py                       43      0   100%
+src/mining_automation/capture/windows/window_selector.py                 17      0   100%
+src/mining_automation/contracts.py                                      165      0   100%
+src/mining_automation/controller.py                                      33     12    64%   32, 44, 52, 64-76
+src/mining_automation/diagnostics.py                                     21      2    90%   17, 24
+src/mining_automation/perception/__init__.py                             16      0   100%
+src/mining_automation/perception/cli.py                                  56      2    96%   73-74
+src/mining_automation/perception/constrained_v1_authority.py            270     15    94%   92, 120, 134, 136, 138, 160, 181, 183, 185, 283, 285, 287, 289, 298, 300
+src/mining_automation/perception/constrained_v1_same_cycle.py           108     11    90%   55, 59-60, 72, 74, 123, 127, 129, 131, 133, 135
+src/mining_automation/perception/detector.py                             67      2    97%   112-113
+src/mining_automation/perception/errors.py                               11      0   100%
+src/mining_automation/perception/evaluation.py                          220      3    99%   58, 62, 471
+src/mining_automation/perception/fixture_materialization.py              80      5    94%   60, 68, 79, 132, 144
+src/mining_automation/perception/production_profiles.py                 139     16    88%   78, 80, 82, 86, 91, 95, 132, 136, 160, 193, 212, 247, 251-252, 259, 285
+src/mining_automation/perception/production_resource_pipeline.py         37      5    86%   58, 63, 65, 67, 69
+src/mining_automation/perception/replay.py                              396     34    91%   56, 101, 161, 164, 180, 182, 184, 207, 212, 218, 220, 229, 231, 253, 255, 258, 260, 263, 275, 277, 296, 298, 302, 309, 357, 602-603, 624-625, 640, 679-680, 691-692
+src/mining_automation/perception/resource.py                            480     65    86%   65, 79, 82, 84, 86, 88, 119, 139, 144, 162, 165, 167, 186, 189, 191, 261, 263, 265, 267, 272, 278, 284, 292, 296, 299, 331, 343, 369, 379, 381, 394, 516, 599, 741, 743, 747-748, 755, 758, 791, 806-808, 822-823, 825, 849, 851, 859, 863, 871, 905, 980, 983, 992, 1003, 1024, 1027-1028, 1051, 1106, 1109-1112
+src/mining_automation/perception/resource_fixtures.py                   297     69    77%   60, 78, 81, 83, 94, 120, 127, 129, 131, 156, 166, 168, 170, 172, 174, 182, 185, 189, 195, 197, 206, 209, 211, 242, 308-309, 312-313, 315, 329-331, 344, 347, 351, 354, 373-374, 381, 394, 396, 399, 417, 434, 437, 440, 509, 513, 515, 576, 605-638
+src/mining_automation/perception/resource_release_campaign.py          2508    509    80%   176, 183, 185, 187, 189, 193, 197, 199, 207, 389, 391, 393, 411, 413, 419, 431, 503, 505, 508, 510, 512, 514, 517, 519, 521, 525, 527, 529, 533, 538, 548, 551, 556, 558, 563, 566, 576, 579-580, 592-593, 613-614, 622, 624, 633, 652-653, 661-662, 707-708, 726, 746-747, 801, 813, 822, 824, 869, 889, 891, 893, 898, 937-943, 951, 960, 973-974, 976, 1006, 1008, 1010, 1012, 1022, 1026, 1031, 1039, 1042, 1054-1055, 1059, 1063, 1069, 1072, 1075, 1093, 1095, 1125-1127, 1136, 1181, 1204, 1207-1208, 1229-1230, 1251, 1264-1265, 1267, 1272, 1274, 1282, 1286, 1291, 1307, 1428-1448, 1483, 1486, 1530-1534, 1571, 1575, 1586, 1594, 1615, 1621, 1626, 1629, 1635, 1637, 1639, 1657, 1660, 1677, 1693-1694, 1726, 1733-1749, 1778-1794, 1851-1868, 1945, 1950, 1969, 1978, 1982, 1988, 1994, 1998, 2004, 2012, 2018, 2024, 2032, 2038, 2043, 2076, 2092, 2122, 2139, 2149, 2154, 2175, 2180, 2208, 2232, 2245, 2248, 2251, 2283, 2300-2306, 2329, 2349, 2354, 2359-2361, 2385, 2390, 2395, 2429, 2445, 2450, 2455, 2459, 2471, 2473, 2479, 2483, 2487, 2511, 2515, 2527, 2595, 2598, 2602, 2606, 2609-2610, 2616, 2620, 2629, 2654, 2673-2674, 2680-2684, 2698, 2704, 2726, 2730, 2733, 2737, 2742, 2748, 2750, 2792, 2928, 2933-2934, 2939, 2942, 3060-3065, 3109, 3114, 3127, 3134, 3144, 3146, 3154, 3165, 3177, 3183, 3185, 3192, 3196, 3214, 3235-3237, 3267, 3281, 3292-3293, 3318, 3321, 3398, 3403, 3423, 3430, 3433, 3436, 3459, 3476, 3508, 3533, 3536, 3556, 3560-3561, 3589, 3594, 3598, 3600, 3603-3604, 3615, 3620, 3624, 3633, 3670, 3680, 3686, 3701, 3706, 3711, 3730, 3755, 3772, 3774, 3776, 3792, 3803-3818, 3821, 3823, 3843, 3934, 3940, 3969, 3973, 4041, 4067, 4075, 4085, 4093, 4100-4101, 4106, 4110, 4114, 4143, 4151, 4156, 4165, 4168, 4171, 4178, 4182, 4192, 4209, 4211, 4228, 4235, 4237, 4241, 4247, 4253, 4260, 4265, 4295, 4315, 4327, 4339, 4342, 4408, 4434, 4439, 4472, 4496, 4498, 4515, 4518, 4538, 4544, 4652, 4655-4659, 4673, 4675, 4677, 4681, 4685, 4691, 4704, 4719, 4722, 4733, 4738, 4745, 4750, 4754, 4757-4770, 4785, 4789, 4824, 4842, 4847, 4849, 4852, 4875, 4886, 4903, 4913, 4916, 4951, 4971, 4990, 4998, 5013, 5016, 5034, 5048, 5090, 5141, 5150, 5168, 5182, 5202, 5209, 5213, 5228, 5243, 5250, 5254, 5269, 5286, 5311, 5361, 5377, 5381, 5815-5816, 5846, 5871, 5893, 5898, 5903, 5922, 5947, 5955-5967, 5983, 5990, 5995, 6024-6037, 6059, 6064-6075, 6083, 6110, 6145, 6158, 6177, 6212, 6219, 6243, 6248, 6261, 6268, 6277, 6288, 6294, 6299-6313, 6337, 6364, 6405, 6408, 6457, 6464, 6476, 6483, 6491, 6501, 6508, 6526, 6547, 6559, 6582, 6588, 6603, 6608, 6729, 6747, 6819, 6831
+src/mining_automation/perception/resource_release_campaign_cli.py       185     44    76%   188-189, 217, 223, 228, 237-251, 261, 288-294, 296-297, 305, 315-317, 350-358, 366-370, 382-384, 392, 399, 407, 414, 426, 433, 449
+src/mining_automation/perception/resource_release_decision.py           238     18    92%   180, 186, 281, 296, 358, 380, 569, 759, 765, 769, 775, 785, 794-797, 859, 908, 915, 927
+src/mining_automation/perception/resource_release_endurance.py          261     21    92%   77, 85, 90, 169, 175, 223-224, 228, 300, 339, 528, 876, 922, 1000, 1008, 1016, 1040, 1061, 1081, 1091, 1099
+src/mining_automation/perception/resource_release_live_readiness.py     225     34    85%   104, 119, 127, 159-160, 164, 168, 181, 194, 209-226, 239, 248, 278-279, 328, 333, 346, 351-352, 366, 617, 663, 677, 692, 717, 756, 765
+src/mining_automation/perception/resource_release_receipt.py            259     23    91%   144-145, 485, 492, 504, 536, 540, 544, 548, 552, 556, 560, 564, 568, 572, 576, 624, 637, 645, 658-659, 664, 704
+src/mining_automation/perception/resource_replay_promotion.py           342     56    84%   43, 49, 57, 73, 86, 98-103, 144, 259, 264, 268, 279, 320-335, 382, 396, 412, 422, 489-491, 517, 596, 601, 604, 615, 634, 638, 641, 692, 697, 709, 774, 784, 800, 855, 858, 874, 935, 994, 1001-1002, 1007
+src/mining_automation/perception/scene_diagnostics.py                   164     12    93%   139, 142, 170, 188, 217, 270, 284, 391, 397, 399, 441, 443
+src/mining_automation/perception/scene_landmarks.py                     256     27    89%   86, 89-92, 101, 104, 106, 114, 116, 147, 165, 168, 214, 217, 262, 297, 299, 301, 323, 396, 399, 407, 409, 465, 467, 488
+src/mining_automation/perception/testing.py                              15      0   100%
+src/mining_automation/perception/wide_scene_registration.py             203     14    93%   126, 141, 147, 149, 153, 155, 169, 172, 174, 273, 275, 277, 335, 398
+src/mining_automation/scheduling.py                                      31      3    90%   21, 27, 31
+---------------------------------------------------------------------------------------------------
+TOTAL                                                                  7913   1197    85%
+=========================== short test summary info ============================
+FAILED tests/test_resource_release_campaign.py::test_capture_configuration_source_owns_pending_dpi_requirement - assert True is False
+FAILED tests/test_resource_release_campaign.py::test_live_source_gate_blocks_before_capture_or_case_directory - mining_automation.capture.errors.CaptureClosedError: capture source is not open
+2 failed, 1126 passed, 1 skipped in 1732.91s (0:28:52)
