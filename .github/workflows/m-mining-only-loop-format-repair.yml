@@ -1,0 +1,74 @@
+name: Mining-only atomic loop format repair
+
+on:
+  push:
+    branches:
+      - chatgpt/m-mining-only-loop-helper
+
+permissions:
+  contents: write
+
+jobs:
+  format-validate-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/m-mining-only-loop-helper
+          path: helper
+          fetch-depth: 1
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/m-mining-only-atomic-loop
+          path: target
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Recover reviewed source payloads from original helper
+        shell: python
+        run: |
+          import base64
+          import gzip
+          import re
+          from pathlib import Path
+
+          workflow = Path('helper/.github/workflows/m-mining-only-loop-helper.yml').read_text(encoding='utf-8')
+          for key, destination in (
+              ('SOURCE_GZIP_BASE64', Path('target/src/mining_automation/mining_slice.py')),
+              ('TEST_GZIP_BASE64', Path('target/tests/test_mining_slice.py')),
+          ):
+              match = re.search(rf'^          {key}: ([A-Za-z0-9+/=]+)$', workflow, re.MULTILINE)
+              if match is None:
+                  raise SystemExit(f'missing {key}')
+              destination.write_bytes(gzip.decompress(base64.b64decode(match.group(1))))
+      - name: Install
+        working-directory: target
+        run: python -m pip install -e '.[dev]'
+      - name: Apply deterministic Ruff fixes and formatting
+        working-directory: target
+        run: |
+          ruff check --fix src/mining_automation/mining_slice.py tests/test_mining_slice.py
+          ruff format src/mining_automation/mining_slice.py tests/test_mining_slice.py
+      - name: Ruff
+        working-directory: target
+        run: ruff check src/mining_automation/mining_slice.py tests/test_mining_slice.py
+      - name: Strict mypy
+        working-directory: target
+        run: mypy --strict src
+      - name: Focused mining-only tests
+        working-directory: target
+        run: python -m pytest -q tests/test_mining_slice.py tests/test_controller.py
+      - name: Full repository pytest
+        working-directory: target
+        run: python -m pytest -q
+      - name: Commit exact source and tests
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'crusader-row-command-center'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src/mining_automation/mining_slice.py tests/test_mining_slice.py
+          git commit -m 'feat(mining): add atomic one-attempt mining-only loop'
+          git push origin HEAD:chatgpt/m-mining-only-atomic-loop
