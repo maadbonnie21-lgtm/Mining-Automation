@@ -1,0 +1,75 @@
+name: Lead controller prep audit
+
+on:
+  push:
+    branches:
+      - chatgpt/lead-controller-audit
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 5f370a9f400e8f6f10e60621490a4576f314eb65
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Exact topology and scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git merge-base 0d215457fb4b037eedc74cb776a3cf1f5f58a19f HEAD)" = "0d215457fb4b037eedc74cb776a3cf1f5f58a19f"
+          names="$(git diff --name-only 0d215457fb4b037eedc74cb776a3cf1f5f58a19f HEAD | sort)"
+          expected="$(printf '%s\n' src/mining_automation/controller.py tests/test_controller.py | sort)"
+          test "$names" = "$expected"
+          ! git diff --name-only 0d215457fb4b037eedc74cb776a3cf1f5f58a19f HEAD | grep -E '^src/mining_automation/(perception|navigation|banking|capture)/'
+      - name: Independent adversarial behavior matrix
+        shell: bash
+        run: |
+          python -m pip install -e '.[dev]'
+          python - <<'PY'
+          from mining_automation.contracts import InventoryState, ResourceState, SessionState, WorldState
+          from mining_automation.controller import MiningController
+
+          controller = MiningController()
+
+          unknown = WorldState(session_state=SessionState.MINING)
+          unknown.inventory = InventoryState(occupied_slots=None, confidence=0.0)
+          unknown.resources = {
+              "first": ResourceState("first", "iron", True, 0.81, (1, 2, 3, 4)),
+              "second": ResourceState("second", "iron", True, 1.0, (5, 6, 7, 8)),
+          }
+          intent = controller.decide(unknown)
+          assert intent is not None
+          assert intent.kind == "reacquire_inventory"
+          assert intent.target_id is None
+          assert intent.interaction_region is None
+
+          known = WorldState(session_state=SessionState.MINING)
+          known.inventory = InventoryState(occupied_slots=1, confidence=0.8)
+          known.resources = unknown.resources
+          intent = controller.decide(known)
+          assert intent is not None
+          assert intent.kind == "interact_resource"
+          assert intent.target_id == "first"
+          assert intent.interaction_region == (1, 2, 3, 4)
+
+          no_available = WorldState(session_state=SessionState.MINING)
+          no_available.inventory = InventoryState(occupied_slots=1, confidence=1.0)
+          no_available.resources = {
+              "unknown": ResourceState("unknown", "iron", None, 0.0, None),
+              "depleted": ResourceState("depleted", "iron", False, 1.0, None),
+          }
+          intent = controller.decide(no_available)
+          assert intent is not None
+          assert intent.kind == "reacquire_resource"
+          PY
+          ruff check .
+          mypy src
+          pytest tests/test_controller.py
+          pytest --cov=mining_automation --cov-report=term-missing
