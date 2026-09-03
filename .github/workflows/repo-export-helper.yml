@@ -1,0 +1,28 @@
+name: Repository export helper
+
+on:
+  push:
+    branches:
+      - chatgpt/repo-export-helper
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 5f370a9f400e8f6f10e60621490a4576f314eb65
+          fetch-depth: 0
+      - name: Verify exact source
+        run: test "$(git rev-parse HEAD)" = "5f370a9f400e8f6f10e60621490a4576f314eb65"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mining-automation-controller-prep-source
+          path: |
+            .
+            !.git/**
+          include-hidden-files: true
+          retention-days: 1
