@@ -1,0 +1,250 @@
+name: Lead A11 retry
+
+on:
+  push:
+    branches:
+      - chatgpt/lead-a11-retry
+
+permissions:
+  contents: write
+
+jobs:
+  a11:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/a11-resource-live-enable-only
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply exact A11 production and historical-test migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "0d215457fb4b037eedc74cb776a3cf1f5f58a19f"
+          python - <<'PY'
+          from pathlib import Path
+
+          frozen = "0d215457fb4b037eedc74cb776a3cf1f5f58a19f"
+          source_path = Path("src/mining_automation/perception/resource_release_campaign.py")
+          source = source_path.read_text(encoding="utf-8")
+          old = "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = False"
+          new = "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = True"
+          if source.count(old) != 1 or new in source:
+              raise SystemExit("A11 source gate did not match the frozen parent")
+          source_path.write_text(source.replace(old, new), encoding="utf-8")
+
+          path = Path("tests/test_resource_release_live_readiness.py")
+          text = path.read_text(encoding="utf-8")
+          anchor = "_REAL_GIT_BLOB_BINDING = readiness._git_blob_binding\n"
+          if text.count(anchor) != 1 or "_FROZEN_READINESS_HEAD" in text:
+              raise SystemExit("A11 readiness constants did not match")
+          text = text.replace(
+              anchor,
+              anchor
+              + f"_FROZEN_READINESS_HEAD = \"{frozen}\"\n"
+              + "_FROZEN_CAMPAIGN_SOURCE_PATH = readiness._CAMPAIGN_SOURCE_PATH\n",
+              1,
+          )
+
+          start = text.index("@pytest.fixture(autouse=True)\ndef _fixed_test_lineage")
+          end = text.index("\n\ndef _repository(", start)
+          fixture = '''@pytest.fixture(autouse=True)
+          def _fixed_test_lineage(
+              monkeypatch: pytest.MonkeyPatch,
+              tmp_path: Path,
+          ) -> None:
+              historical_root = tmp_path / "frozen-a8-repository"
+              historical_source = historical_root / _FROZEN_CAMPAIGN_SOURCE_PATH
+              historical_source.parent.mkdir(parents=True, exist_ok=True)
+              frozen_blob = subprocess.run(
+                  [
+                      "git",
+                      "show",
+                      f"{_FROZEN_READINESS_HEAD}:{_FROZEN_CAMPAIGN_SOURCE_PATH}",
+                  ],
+                  cwd=_ROOT,
+                  check=True,
+                  capture_output=True,
+              ).stdout
+              historical_source.write_bytes(
+                  frozen_blob.replace(b"\\r\\n", b"\\n").replace(b"\\n", b"\\r\\n")
+              )
+
+              monkeypatch.setattr(campaign, "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED", False)
+              monkeypatch.setattr(campaign, "__file__", str(historical_source))
+              monkeypatch.setattr(
+                  readiness,
+                  "_CAMPAIGN_SOURCE_PATH",
+                  str(historical_source),
+              )
+              monkeypatch.setattr(
+                  readiness,
+                  "_read_head_with_parents",
+                  lambda root: (_HEAD, _ACCEPTED_PARENT),
+              )
+
+              def fake_blob_binding(root: Path, relative_path: str) -> dict[str, object]:
+                  del root
+                  supplied = Path(relative_path)
+                  payload_path = supplied if supplied.is_absolute() else _ROOT / supplied
+                  payload = payload_path.read_bytes()
+                  return {
+                      "path": relative_path,
+                      "git_blob_sha": "a" * 40,
+                      "sha256": hashlib.sha256(payload).hexdigest(),
+                  }
+
+              monkeypatch.setattr(readiness, "_git_blob_binding", fake_blob_binding)
+          '''
+          fixture = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in fixture.splitlines()
+          )
+          text = text[:start] + fixture + text[end:]
+
+          old_root = "def _repository_root(tmp_path: Path) -> Path:\n    del tmp_path\n    return _ROOT"
+          new_root = (
+              "def _repository_root(tmp_path: Path) -> Path:\n"
+              "    return tmp_path / \"frozen-a8-repository\""
+          )
+          if text.count(old_root) != 1:
+              raise SystemExit("A11 repository-root helper did not match")
+          text = text.replace(old_root, new_root, 1)
+
+          old_binding = (
+              "def test_campaign_and_profile_working_bytes_equal_exact_head_blobs() -> None:\n"
+              "    campaign_binding = _REAL_GIT_BLOB_BINDING(_ROOT, readiness._CAMPAIGN_SOURCE_PATH)\n"
+              "    profile_binding = _REAL_GIT_BLOB_BINDING(_ROOT, readiness._PROFILE_SOURCE_PATH)\n"
+              "    tool_binding = _REAL_GIT_BLOB_BINDING(_ROOT, readiness._TOOL_SOURCE_PATH)"
+          )
+          new_binding = '''def test_campaign_and_profile_working_bytes_equal_exact_head_blobs() -> None:
+              historical_path = Path(readiness._CAMPAIGN_SOURCE_PATH)
+              historical_blob = subprocess.run(
+                  [
+                      "git",
+                      "rev-parse",
+                      f"{_FROZEN_READINESS_HEAD}:{_FROZEN_CAMPAIGN_SOURCE_PATH}",
+                  ],
+                  cwd=_ROOT,
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              ).stdout.strip()
+              campaign_binding = {
+                  "path": readiness._CAMPAIGN_SOURCE_PATH,
+                  "git_blob_sha": historical_blob,
+                  "sha256": hashlib.sha256(historical_path.read_bytes()).hexdigest(),
+              }
+              profile_binding = _REAL_GIT_BLOB_BINDING(_ROOT, readiness._PROFILE_SOURCE_PATH)
+              tool_binding = _REAL_GIT_BLOB_BINDING(_ROOT, readiness._TOOL_SOURCE_PATH)'''
+          new_binding = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in new_binding.splitlines()
+          )
+          if text.count(old_binding) != 1:
+              raise SystemExit("A11 historical binding test did not match")
+          path.write_text(text.replace(old_binding, new_binding, 1), encoding="utf-8")
+          PY
+          cat > tests/test_resource_release_live_enable.py <<'PYTEST'
+          from __future__ import annotations
+
+          import ast
+          from pathlib import Path
+
+          from mining_automation.perception import resource_release_campaign as campaign
+          from mining_automation.perception.production_profiles import (
+              load_varrock_east_iron_profile,
+          )
+
+          ROOT = Path(__file__).resolve().parents[1]
+          SOURCE = ROOT / "src/mining_automation/perception/resource_release_campaign.py"
+
+
+          def test_a11_is_one_literal_true_source_gate() -> None:
+              assert campaign.LIVE_RESOURCE_CAMPAIGN_AUTHORIZED is True
+              tree = ast.parse(SOURCE.read_bytes(), filename=str(SOURCE))
+              assignments: list[ast.expr] = []
+              for node in tree.body:
+                  if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                      if (
+                          node.target.id == "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED"
+                          and node.value is not None
+                      ):
+                          assignments.append(node.value)
+                  elif isinstance(node, ast.Assign):
+                      if any(
+                          isinstance(target, ast.Name)
+                          and target.id == "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED"
+                          for target in node.targets
+                      ):
+                          assignments.append(node.value)
+              assert len(assignments) == 1
+              assert isinstance(assignments[0], ast.Constant)
+              assert assignments[0].value is True
+
+
+          def test_a11_preserves_fixed_passive_campaign_and_fail_closed_policy() -> None:
+              assert campaign._capture_configuration() == {
+                  "capture_backend": "windows-runelite",
+                  "title_match": "RuneLite",
+                  "retry_attempts": 0,
+                  "automatic_camera_control": False,
+                  "automatic_camera_recovery": False,
+                  "input_allowed": False,
+                  "one_capture_per_observation": True,
+                  "required_evidence_origin": "source-owned-windows-runelite",
+                  "required_reported_dpi": 96,
+                  "reported_dpi_requirement_status": (
+                      "required-candidate-pending-fresh-review"
+                  ),
+                  "live_source_authorized": True,
+              }
+              assert len(campaign.CAMPAIGN_PLAN) == 15
+              assert [case.ordinal for case in campaign.CAMPAIGN_PLAN] == list(range(1, 16))
+
+              profile = load_varrock_east_iron_profile()
+              assert {item.maximum_distance for item in profile.scene_landmarks} == {0.12}
+              assert len(profile.scene_landmarks) == 6
+              assert profile.minimum_landmark_quorum == 5
+              assert profile.minimum_landmark_zones == 3
+              assert len(
+                  {
+                      item.zone(profile.frame_width, profile.frame_height).value
+                      for item in profile.scene_landmarks
+                  }
+              ) == 3
+              assert (profile.frame_width, profile.frame_height) == (1005, 1078)
+              assert profile.pixel_format.value == "bgra8888"
+          PYTEST
+          git diff --check
+          python -m compileall -q tests/test_resource_release_live_enable.py tests/test_resource_release_live_readiness.py
+      - name: Exact gates
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check .
+          mypy src
+          pytest tests/test_resource_release_live_readiness.py tests/test_resource_release_live_enable.py
+          pytest --cov=mining_automation --cov-report=term-missing
+      - name: Independent pre-push audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          names="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' src/mining_automation/perception/resource_release_campaign.py tests/test_resource_release_live_enable.py tests/test_resource_release_live_readiness.py | sort)"
+          test "$names" = "$expected"
+          diff="$(git diff --unified=0 -- src/mining_automation/perception/resource_release_campaign.py)"
+          test "$(printf '%s\n' "$diff" | grep -c '^-LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final\[bool\] = False$')" -eq 1
+          test "$(printf '%s\n' "$diff" | grep -c '^+LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final\[bool\] = True$')" -eq 1
+          ! git diff --name-only | grep -E '^src/mining_automation/(navigation|banking)/'
+      - name: Commit and push A11
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Mining Automation Lead"
+          git config user.email "lead@users.noreply.github.com"
+          git add src/mining_automation/perception/resource_release_campaign.py tests/test_resource_release_live_readiness.py tests/test_resource_release_live_enable.py
+          git commit -m "feat(validation): enable exact A11 resource campaign gate"
+          git push origin HEAD:chatgpt/a11-resource-live-enable-only
