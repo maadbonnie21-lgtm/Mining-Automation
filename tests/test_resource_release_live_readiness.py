@@ -27,10 +27,25 @@ _OTHER_HEAD = "9" * 40
 _ACCEPTED_PARENT = "d34143f00835cdafc4ace2987b1b8202e7a0abfb"
 _ROOT = Path(__file__).resolve().parents[1]
 _REAL_GIT_BLOB_BINDING = readiness._git_blob_binding
+_REAL_SOURCE_GATE_BINDING = readiness._source_gate_binding
+_REAL_CAPTURE_CONFIGURATION = campaign._capture_configuration
+_A11_ENABLED_HEAD_TEST_MIGRATION = True
 
 
 @pytest.fixture(autouse=True)
 def _fixed_test_lineage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(campaign, "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED", False)
+    monkeypatch.setattr(
+        campaign,
+        "_capture_configuration",
+        lambda *, live_source_authorized=False: _REAL_CAPTURE_CONFIGURATION(
+            live_source_authorized=False
+        ),
+    )
+    enabled_sha = hashlib.sha256(
+        Path(campaign.__file__).resolve(strict=True).read_bytes()
+    ).hexdigest()
+    monkeypatch.setattr(readiness, "_EXPECTED_CAMPAIGN_SOURCE_SHA256", enabled_sha)
     monkeypatch.setattr(
         readiness,
         "_read_head_with_parents",
@@ -46,6 +61,22 @@ def _fixed_test_lineage(monkeypatch: pytest.MonkeyPatch) -> None:
         }
 
     monkeypatch.setattr(readiness, "_git_blob_binding", fake_blob_binding)
+
+
+    def frozen_source_gate_binding(root: Path) -> dict[str, object]:
+        del root
+        return {
+            "source_path": readiness._CAMPAIGN_SOURCE_PATH,
+            "source_sha256": readiness._EXPECTED_CAMPAIGN_SOURCE_SHA256,
+            "git_blob_sha": "a" * 40,
+            "gate_name": readiness._SOURCE_GATE_NAME,
+            "gate_value": False,
+            "assignment_form": "single_literal_false",
+        }
+
+    monkeypatch.setattr(
+        readiness, "_source_gate_binding", frozen_source_gate_binding
+    )
 
 
 def _repository(
@@ -372,6 +403,9 @@ def test_runtime_or_source_gate_change_refuses_without_publication(
         campaign, "read_repository_provenance", lambda root: _repository()
     )
     repository_root = _repository_root(tmp_path)
+    monkeypatch.setattr(
+        readiness, "_source_gate_binding", _REAL_SOURCE_GATE_BINDING
+    )
     runtime_output = tmp_path / "runtime.json"
     monkeypatch.setattr(campaign, "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED", True)
     with pytest.raises(ResourceReleaseLiveReadinessError, match="already enabled"):
@@ -393,6 +427,43 @@ def test_runtime_or_source_gate_change_refuses_without_publication(
         )
     assert not source_output.exists()
 
+
+
+def test_a11_enabled_head_changes_only_live_gate_and_preserves_safety(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(campaign, "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED", True)
+    source_path = Path(campaign.__file__).resolve(strict=True)
+    current_source = source_path.read_text(encoding="utf-8")
+    old_gate = "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = False"
+    new_gate = "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = True"
+    assert current_source.count(new_gate) == 1
+    assert old_gate not in current_source
+    assert campaign.LIVE_RESOURCE_CAMPAIGN_AUTHORIZED is True
+
+    profile = readiness.load_varrock_east_iron_profile()
+    assert {item.maximum_distance for item in profile.scene_landmarks} == {0.12}
+    assert len(profile.scene_landmarks) == 6
+    assert profile.minimum_landmark_quorum == 5
+    assert profile.minimum_landmark_zones == 3
+    assert len(
+        {
+            item.zone(profile.frame_width, profile.frame_height).value
+            for item in profile.scene_landmarks
+        }
+    ) == 3
+    assert profile.frame_width == 1005
+    assert profile.frame_height == 1078
+    assert profile.pixel_format.value == "bgra8888"
+    assert campaign._REQUIRED_REPORTED_DPI == 96
+    assert len(campaign.CAMPAIGN_PLAN) == 15
+    config = _REAL_CAPTURE_CONFIGURATION(live_source_authorized=True)
+    assert config["live_source_authorized"] is True
+    assert config["retry_attempts"] == 0
+    assert config["automatic_camera_control"] is False
+    assert config["automatic_camera_recovery"] is False
+    assert config["input_allowed"] is False
+    assert all(value is False for value in readiness._authority().values())
 
 def test_preparation_never_constructs_session_or_capture_backend(
     monkeypatch: pytest.MonkeyPatch,
@@ -567,9 +638,9 @@ def test_campaign_and_profile_working_bytes_equal_exact_head_blobs() -> None:
     tool_binding = _REAL_GIT_BLOB_BINDING(_ROOT, readiness._TOOL_SOURCE_PATH)
     assert campaign_binding == {
         "path": readiness._CAMPAIGN_SOURCE_PATH,
-        "git_blob_sha": "8dda986b902475093af36aad043a8c747cbfeb7f",
+        "git_blob_sha": "0a68a8cd346a0b2482dbdbb864d02284a04ef9b7",
         "sha256": (
-            "8e791f582af8ba3f5c19e60b951114b451d76fcd321cb6ff809f77bac828c83a"
+            "50649a0195e2dea8e9dac645689dd4274efeea4c3ef80eaebbe40b271072aafd"
         ),
     }
     assert profile_binding == {

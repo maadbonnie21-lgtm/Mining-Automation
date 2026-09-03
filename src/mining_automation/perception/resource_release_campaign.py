@@ -101,7 +101,7 @@ _INJECTED_CAPTURE_CAPABILITY: Final[object] = object()
 
 # Source-owned live gate.  This PR prepares the campaign but does not authorize
 # RuneLite capture.  A later, separately reviewed enable-only change is needed.
-LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = False
+LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = True
 
 _SHA256_PATTERN: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}\Z")
 _GIT_SHA_PATTERN: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{40}\Z")
