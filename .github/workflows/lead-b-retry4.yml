@@ -1,0 +1,119 @@
+name: Lead B4 retry 4
+
+on:
+  push:
+    branches:
+      - chatgpt/lead-b-retry4
+
+permissions:
+  contents: write
+
+jobs:
+  b4:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/b4-navigation-writer-integration
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build exact two-parent candidate and migrate B2 release fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "a19b02f090be5165db2baee8b178b19efc4153f5"
+          git fetch origin codex/b-navigation-handle-anchored-real-evidence-writer
+          test "$(git rev-parse FETCH_HEAD)" = "e5d9f3005402070ca0fa8221611dac58580d6d59"
+          git config user.name "Mining Automation Lead"
+          git config user.email "lead@users.noreply.github.com"
+          git merge --no-ff --no-commit -X theirs e5d9f3005402070ca0fa8221611dac58580d6d59
+          python - <<'PY'
+          from pathlib import Path
+
+          durable = Path("src/mining_automation/navigation/durable_route_evidence.py")
+          text = durable.read_text(encoding="utf-8")
+          old = "from dataclasses import dataclass, field"
+          new = "from dataclasses import InitVar, dataclass, field"
+          if text.count(old) != 1 or new in text:
+              raise SystemExit("B4 dataclass import changed")
+          durable.write_text(text.replace(old, new), encoding="utf-8")
+
+          test_path = Path("tests/test_navigation_release_decision.py")
+          tests = test_path.read_text(encoding="utf-8")
+          acquisition_anchor = (
+              "        acquisition_finalization_sha256="
+              "pins.acquisition_finalization_sha256,\n"
+          )
+          review_anchor = (
+              "        review_finalization_sha256="
+              "review.review_finalization_sha256,\n"
+          )
+          if tests.count(acquisition_anchor) != 1 or tests.count(review_anchor) != 1:
+              raise SystemExit("B4 release expectation fixture changed")
+          tests = tests.replace(
+              acquisition_anchor,
+              acquisition_anchor
+              + "        acquisition_physical_identity_sha256="
+              + "pins.acquisition_physical_identity_sha256,\n",
+              1,
+          )
+          tests = tests.replace(
+              review_anchor,
+              review_anchor
+              + "        review_physical_identity_sha256="
+              + "review.review_physical_identity_sha256,\n",
+              1,
+          )
+          test_path.write_text(tests, encoding="utf-8")
+          PY
+          git add src/mining_automation/navigation/durable_route_evidence.py tests/test_navigation_release_decision.py
+          git diff --check --cached
+      - name: Validate B4 candidate
+        shell: bash
+        run: |
+          set +e
+          {
+            python -m pip install -e '.[dev]'
+            ruff check .
+            mypy src
+            pytest tests/test_navigation*.py -x -vv
+            pytest --cov=mining_automation --cov-report=term-missing
+          } > /tmp/b4-validation.log 2>&1
+          status=$?
+          cat /tmp/b4-validation.log
+          exit "$status"
+      - name: Publish B4 diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp /tmp/b4-validation.log /tmp/B4_VALIDATION.log
+          git merge --abort || true
+          git reset --hard
+          git clean -fdx
+          git fetch origin main
+          git checkout -B chatgpt/b4-diagnostics-output origin/main
+          cp /tmp/B4_VALIDATION.log B4_VALIDATION.log
+          git config user.name "Mining Automation Lead Diagnostics"
+          git config user.email "lead-diagnostics@users.noreply.github.com"
+          git add B4_VALIDATION.log
+          git commit -m "chore(diagnostics): publish latest B4 validation failure"
+          git push --force origin HEAD:chatgpt/b4-diagnostics-output
+      - name: Audit, commit, and push B4
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f src/mining_automation/navigation/endurance_rehearsal.py
+          test -f src/mining_automation/navigation/release_decision.py
+          test -f src/mining_automation/navigation/round_trip_rehearsal.py
+          test -f src/mining_automation/navigation/_windows_handle_anchored.py
+          test -f src/mining_automation/navigation/handle_anchored_route_evidence.py
+          grep -q 'DURABLE_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE.*False' src/mining_automation/navigation/durable_route_evidence.py
+          grep -q 'HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE.*False' src/mining_automation/navigation/handle_anchored_route_evidence.py
+          ! git diff --name-only a19b02f090be5165db2baee8b178b19efc4153f5 | grep -E '^src/mining_automation/(perception|banking)/'
+          git commit -m "merge(navigation): integrate accepted handle writer into B2 line"
+          test "$(git rev-list --parents -n 1 HEAD)" = "$(git rev-parse HEAD) a19b02f090be5165db2baee8b178b19efc4153f5 e5d9f3005402070ca0fa8221611dac58580d6d59"
+          git push origin HEAD:chatgpt/b4-navigation-writer-integration
