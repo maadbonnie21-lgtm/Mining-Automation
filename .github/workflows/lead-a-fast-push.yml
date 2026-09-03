@@ -1,0 +1,192 @@
+name: Lead A11 fast push
+on:
+  push:
+    branches: [chatgpt/lead-a-fast-push]
+permissions:
+  contents: write
+jobs:
+  a11:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/a11-resource-live-enable-only
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply exact A11 candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 0d215457fb4b037eedc74cb776a3cf1f5f58a19f
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+          frozen = '0d215457fb4b037eedc74cb776a3cf1f5f58a19f'
+          p = Path('src/mining_automation/perception/resource_release_campaign.py')
+          s = p.read_text()
+          old = 'LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = False'
+          new = 'LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = True'
+          assert s.count(old) == 1 and new not in s
+          p.write_text(s.replace(old, new))
+
+          p = Path('tests/test_resource_release_live_readiness.py')
+          s = p.read_text()
+          anchor = 'from __future__ import annotations\n\n'
+          assert s.count(anchor) == 1
+          s = s.replace(anchor, anchor + 'from collections.abc import Iterator\n', 1)
+          anchor = '_REAL_GIT_BLOB_BINDING = readiness._git_blob_binding\n'
+          assert s.count(anchor) == 1
+          support = dedent(f'''\
+          _REAL_GIT_BLOB_BINDING = readiness._git_blob_binding
+          _REAL_CAPTURE_CONFIGURATION = campaign._capture_configuration
+          _FROZEN_READINESS_HEAD = "{frozen}"
+          _HISTORICAL_ROOT: Path | None = None
+
+
+          def _historical_root() -> Path:
+              if _HISTORICAL_ROOT is None:
+                  raise AssertionError("frozen A8 worktree fixture is unavailable")
+              return _HISTORICAL_ROOT
+
+
+          @pytest.fixture(scope="module", autouse=True)
+          def _frozen_readiness_worktree(
+              tmp_path_factory: pytest.TempPathFactory,
+          ) -> Iterator[None]:
+              global _HISTORICAL_ROOT
+              root = tmp_path_factory.mktemp("frozen-a8-worktree") / "repository"
+              subprocess.run(
+                  ["git", "worktree", "add", "--detach", str(root), _FROZEN_READINESS_HEAD],
+                  cwd=_ROOT, check=True, capture_output=True, text=True,
+              )
+              assert subprocess.run(
+                  ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                  capture_output=True, text=True,
+              ).stdout.strip() == _FROZEN_READINESS_HEAD
+              raw = (root / readiness._CAMPAIGN_SOURCE_PATH).read_bytes()
+              assert hashlib.sha256(raw).hexdigest() == readiness._EXPECTED_CAMPAIGN_SOURCE_SHA256
+              _HISTORICAL_ROOT = root
+              try:
+                  yield
+              finally:
+                  _HISTORICAL_ROOT = None
+                  subprocess.run(
+                      ["git", "worktree", "remove", "--force", str(root)],
+                      cwd=_ROOT, check=True, capture_output=True, text=True,
+                  )
+          ''')
+          s = s.replace(anchor, support, 1)
+          old_fixture = dedent('''\
+          @pytest.fixture(autouse=True)
+          def _fixed_test_lineage(monkeypatch: pytest.MonkeyPatch) -> None:
+              monkeypatch.setattr(
+                  readiness,
+                  "_read_head_with_parents",
+                  lambda root: (_HEAD, _ACCEPTED_PARENT),
+              )
+          ''')
+          new_fixture = dedent('''\
+          @pytest.fixture(autouse=True)
+          def _fixed_test_lineage(
+              monkeypatch: pytest.MonkeyPatch,
+              _frozen_readiness_worktree: None,
+          ) -> None:
+              monkeypatch.setattr(campaign, "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED", False)
+              monkeypatch.setattr(
+                  campaign, "__file__", str(_historical_root() / readiness._CAMPAIGN_SOURCE_PATH)
+              )
+              monkeypatch.setattr(
+                  campaign,
+                  "_capture_configuration",
+                  lambda *, live_source_authorized=False: _REAL_CAPTURE_CONFIGURATION(
+                      live_source_authorized=False
+                  ),
+              )
+              monkeypatch.setattr(
+                  readiness,
+                  "_read_head_with_parents",
+                  lambda root: (_HEAD, _ACCEPTED_PARENT),
+              )
+          ''')
+          assert s.count(old_fixture) == 1
+          s = s.replace(old_fixture, new_fixture, 1)
+          old_root = 'def _repository_root(tmp_path: Path) -> Path:\n    del tmp_path\n    return _ROOT\n'
+          new_root = 'def _repository_root(tmp_path: Path) -> Path:\n    del tmp_path\n    return _historical_root()\n'
+          assert s.count(old_root) == 1
+          s = s.replace(old_root, new_root, 1)
+          assert s.count('_REAL_GIT_BLOB_BINDING(_ROOT,') == 3
+          s = s.replace('_REAL_GIT_BLOB_BINDING(_ROOT,', '_REAL_GIT_BLOB_BINDING(_historical_root(),')
+          p.write_text(s)
+
+          Path('tests/test_resource_release_live_enable.py').write_text(dedent('''\
+          from __future__ import annotations
+
+          import ast
+          from pathlib import Path
+
+          from mining_automation.perception import resource_release_campaign as campaign
+          from mining_automation.perception.production_profiles import load_varrock_east_iron_profile
+
+          ROOT = Path(__file__).resolve().parents[1]
+          SOURCE = ROOT / "src/mining_automation/perception/resource_release_campaign.py"
+
+
+          def test_a11_is_one_literal_true_source_gate() -> None:
+              assert campaign.LIVE_RESOURCE_CAMPAIGN_AUTHORIZED is True
+              tree = ast.parse(SOURCE.read_bytes(), filename=str(SOURCE))
+              values = [
+                  node.value
+                  for node in tree.body
+                  if isinstance(node, ast.AnnAssign)
+                  and isinstance(node.target, ast.Name)
+                  and node.target.id == "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED"
+              ]
+              assert len(values) == 1
+              assert isinstance(values[0], ast.Constant) and values[0].value is True
+
+
+          def test_a11_preserves_fixed_campaign_and_policy() -> None:
+              config = campaign._capture_configuration()
+              assert config["live_source_authorized"] is True
+              assert config["retry_attempts"] == 0
+              assert config["automatic_camera_control"] is False
+              assert config["automatic_camera_recovery"] is False
+              assert config["input_allowed"] is False
+              assert config["one_capture_per_observation"] is True
+              assert config["required_reported_dpi"] == 96
+              assert len(campaign.CAMPAIGN_PLAN) == 15
+              assert [case.ordinal for case in campaign.CAMPAIGN_PLAN] == list(range(1, 16))
+              profile = load_varrock_east_iron_profile()
+              assert {x.maximum_distance for x in profile.scene_landmarks} == {0.12}
+              assert len(profile.scene_landmarks) == 6
+              assert profile.minimum_landmark_quorum == 5
+              assert profile.minimum_landmark_zones == 3
+              assert len({x.zone(profile.frame_width, profile.frame_height).value for x in profile.scene_landmarks}) == 3
+              assert (profile.frame_width, profile.frame_height) == (1005, 1078)
+              assert profile.pixel_format.value == "bgra8888"
+          '''))
+          PY
+          git diff --check
+      - name: Focused and static gates
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check .
+          mypy src
+          pytest tests/test_resource_release_live_readiness.py tests/test_resource_release_live_enable.py
+      - name: Independent diff audit and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git diff --name-only | sort)" = "$(printf '%s\n' src/mining_automation/perception/resource_release_campaign.py tests/test_resource_release_live_enable.py tests/test_resource_release_live_readiness.py | sort)"
+          test -z "$(git diff --name-only -- src/mining_automation/perception/resource_release_live_readiness.py)"
+          d="$(git diff --unified=0 -- src/mining_automation/perception/resource_release_campaign.py)"
+          test "$(printf '%s\n' "$d" | grep -c '^-LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final\[bool\] = False$')" -eq 1
+          test "$(printf '%s\n' "$d" | grep -c '^+LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final\[bool\] = True$')" -eq 1
+          git config user.name "Mining Automation Lead"
+          git config user.email "lead@users.noreply.github.com"
+          git add src/mining_automation/perception/resource_release_campaign.py tests/test_resource_release_live_readiness.py tests/test_resource_release_live_enable.py
+          git commit -m 'feat(validation): enable exact A11 resource campaign gate'
+          test "$(git rev-parse HEAD^)" = 0d215457fb4b037eedc74cb776a3cf1f5f58a19f
+          git push origin HEAD:chatgpt/a11-resource-live-enable-only
