@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import json
-
+from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
 _RUNBOOK = _ROOT / "validation" / "resource_a12_a13_runbook.json"
