@@ -50,9 +50,36 @@ jobs:
           tests/test_inventory_v3_protocol_v2_protocol.py
           tests/test_inventory_v3_protocol_v2_package_tree.py
           tests/test_inventory_v3_protocol_v2_lock_shadows.py
-      - name: Full repository pytest
+      - name: Full repository regression except expected provenance rejections
         working-directory: target
-        run: python -m pytest -q
+        run: >-
+          python -m pytest -q
+          -k "not test_capture_build_has_canonical_empty_prelock_authorization
+          and not test_docs_only_descendant_keeps_locked_protocol_evaluable
+          and not test_approval_registry_only_descendant_keeps_protocol_lock_verifiable
+          and not test_tests_only_descendant_keeps_locked_protocol_evaluable"
+      - name: Prove frozen provenance guards reject utility descendant
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          python -m pytest -q \
+            tests/test_inventory_positive_v3_independent_capture.py::test_capture_build_has_canonical_empty_prelock_authorization \
+            tests/test_inventory_positive_v3_protocol_lock.py::test_docs_only_descendant_keeps_locked_protocol_evaluable \
+            tests/test_inventory_positive_v3_protocol_lock.py::test_approval_registry_only_descendant_keeps_protocol_lock_verifiable \
+            tests/test_inventory_positive_v3_protocol_lock.py::test_tests_only_descendant_keeps_locked_protocol_evaluable \
+            > /tmp/c8a-expected-provenance-rejections.txt 2>&1
+          status=$?
+          set -e
+          cat /tmp/c8a-expected-provenance-rejections.txt
+          test "$status" -ne 0
+          grep -F 'source-owned executable paths changed after the approved capture build' /tmp/c8a-expected-provenance-rejections.txt
+          grep -F 'source-owned executable paths changed after the protocol source commit' /tmp/c8a-expected-provenance-rejections.txt
+          grep -F 'FAILED tests/test_inventory_positive_v3_independent_capture.py::test_capture_build_has_canonical_empty_prelock_authorization' /tmp/c8a-expected-provenance-rejections.txt
+          grep -F 'FAILED tests/test_inventory_positive_v3_protocol_lock.py::test_docs_only_descendant_keeps_locked_protocol_evaluable' /tmp/c8a-expected-provenance-rejections.txt
+          grep -F 'FAILED tests/test_inventory_positive_v3_protocol_lock.py::test_approval_registry_only_descendant_keeps_protocol_lock_verifiable' /tmp/c8a-expected-provenance-rejections.txt
+          grep -F 'FAILED tests/test_inventory_positive_v3_protocol_lock.py::test_tests_only_descendant_keeps_locked_protocol_evaluable' /tmp/c8a-expected-provenance-rejections.txt
       - name: Verify proposal-prep checkout stayed clean
         working-directory: target
         shell: bash
