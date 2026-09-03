@@ -1,0 +1,62 @@
+{
+  "a11_exact_authorized_source_sha": "01d29ab1c2d8a1849d21c37c9284391cb97119b6",
+  "activation_allowed": false,
+  "automatic_camera_control": false,
+  "automatic_camera_recovery": false,
+  "automatic_retry_count": 0,
+  "capture_requires_explicit_tyler_authorization": true,
+  "campaign_case_count": 15,
+  "frame_contract": {
+    "height": 1078,
+    "pixel_format": "bgra8888",
+    "reported_dpi": 96,
+    "width": 1005
+  },
+  "input_authority": false,
+  "resource_invariants": {
+    "all_three_zones_required": true,
+    "landmark_count": 6,
+    "minimum_landmark_quorum": 5,
+    "threshold": 0.12,
+    "unknown_or_unsupported_result": "zero_targets_and_stop"
+  },
+  "a12_operator_sequence": [
+    "git rev-parse HEAD  # must equal the exact A11 SHA",
+    "python tools/resource_release_campaign.py start --operator-id <operator-id>",
+    "python tools/resource_release_campaign.py status --session <session>",
+    "python tools/resource_release_campaign.py capture-next --session <session> --confirm-staged-case <exact-next-case-id>",
+    "repeat status then exactly one capture-next for each source-ordered fixed case; never retry automatically",
+    "python tools/resource_release_campaign.py seal --session <session>"
+  ],
+  "a13_independent_review_sequence": [
+    "python tools/resource_release_campaign.py prepare-review --session <session> --case-id <case-id>",
+    "python tools/resource_release_campaign.py review-template --session <session> --case-id <case-id> --output <fresh-review-template.json>",
+    "independent reviewer completes truth outside operator control",
+    "python tools/resource_release_campaign.py review --session <session> --decision <completed-review-decision.json>",
+    "repeat prepare-review, review-template, and review for every fixed case",
+    "python tools/resource_release_campaign.py release --session <session> --output <fresh-release-ledger.json>",
+    "python tools/resource_release_campaign.py export-review --session <session> --output <fresh-review-package-root>",
+    "independently retain the exported manifest SHA-256 before continuing",
+    "python tools/resource_release_campaign.py verify-export --package <review-package-root> --expected-manifest-sha256 <retained-manifest-sha256>",
+    "python tools/resource_release_campaign.py prepare-followup --package <review-package-root> --expected-manifest-sha256 <retained-manifest-sha256> --output <fresh-followup.json>",
+    "independently retain the follow-up SHA-256",
+    "python tools/resource_release_campaign.py verify-followup --inputs <followup.json> --expected-sha256 <retained-followup-sha256>",
+    "when retained failures exist: prepare and independently verify replay-promotion proposals; proposals grant no release authority",
+    "python tools/resource_release_campaign.py prepare-release-decision-readiness --followup <followup.json> --expected-followup-sha256 <retained-followup-sha256> --package <review-package-root> --expected-package-manifest-sha256 <retained-manifest-sha256> --output <fresh-release-review-packet.json>",
+    "independently retain the release-review packet SHA-256",
+    "python tools/resource_release_campaign.py verify-release-review-packet --decision <release-review-packet.json> --expected-sha256 <retained-release-review-sha256>",
+    "only a later source-owned, independently reviewed receipt issuance commit may close the release path"
+  ],
+  "hard_stops": [
+    "wrong exact Git SHA",
+    "unsupported frame geometry or DPI",
+    "unsupported scene or any UNKNOWN resource",
+    "missing or out-of-order fixed case",
+    "capture failure or ambiguous observation",
+    "reviewer/operator identity overlap",
+    "manifest, follow-up, proposal, or decision root mismatch",
+    "any requested camera or input operation",
+    "any attempted automatic retry"
+  ],
+  "synthetic_evidence_is_real_release_evidence": false
+}
