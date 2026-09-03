@@ -27,15 +27,15 @@ jobs:
           import subprocess
           from pathlib import Path
 
-          previous = subprocess.check_output(
+          source = subprocess.check_output(
               [
                   "git",
                   "show",
-                  "HEAD^:.github/workflows/windows-navigation-handle-writer.yml",
+                  "d482138c2e9bd73e6acf774e94c4bb3547c3dcc8:.github/workflows/windows-navigation-handle-writer.yml",
               ],
               text=True,
           )
-          lines = previous.splitlines()
+          lines = source.splitlines()
           step_index = lines.index(
               "      - name: Apply deterministic B2/B3 compatibility repair"
           )
@@ -69,7 +69,6 @@ jobs:
 
           for obsolete in (
               ".github/workflows/b4-finalize-integration.yml",
-              ".github/b4-finalizer-trigger",
               ".github/b4-finalizer-trigger",
           ):
               Path(obsolete).unlink(missing_ok=True)
