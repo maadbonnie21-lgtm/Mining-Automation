@@ -14,5 +14,20 @@ jobs:
         with:
           ref: chatgpt/a11-execution-helper
           fetch-depth: 0
-      - name: Confirm helper execution
-        run: echo "A11 helper workflow is running"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply exact A11 source and test migration
+        run: python .github/scripts/a11_patch.py
+      - name: Commit generated A11 patch
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "A11 helper already patched; no commit required."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/mining_automation/perception/resource_release_campaign.py tests/test_resource_release_live_readiness.py
+          git commit -m "feat(validation): generate A11 live-resource enable patch"
+          git push origin HEAD:chatgpt/a11-execution-helper
