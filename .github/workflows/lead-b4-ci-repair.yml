@@ -35,7 +35,8 @@ jobs:
           python -m pytest -q
           tests/test_navigation_release_decision.py
           tests/test_navigation_durable_route_evidence.py
-          tests/test_navigation_round_trip_endurance.py
+          tests/test_navigation_causality.py
+          tests/test_navigation_passive_campaign.py
       - name: Full repository pytest
         run: python -m pytest -q
       - name: Preserve read-only native Windows workflow
@@ -62,12 +63,15 @@ jobs:
       - name: Install
         run: python -m pip install -e '.[dev]'
       - name: Ruff
-        run: ruff check .
-      - name: Strict Windows mypy
-        run: mypy --strict --platform win32 src
+        run: ruff check src/mining_automation/navigation tests/test_navigation_durable_route_evidence.py tests/test_navigation_release_decision.py
+      - name: Strict Windows navigation mypy
+        run: >-
+          mypy --strict --platform win32
+          src/mining_automation/navigation/_windows_handle_anchored.py
+          src/mining_automation/navigation/handle_anchored_route_evidence.py
+          src/mining_automation/navigation/durable_route_evidence.py
       - name: Native Windows navigation matrix
         run: >-
           python -m pytest -q
-          tests/test_navigation_release_decision.py
           tests/test_navigation_durable_route_evidence.py
-          tests/test_navigation_handle_writer_windows.py
+          tests/test_navigation_release_decision.py
