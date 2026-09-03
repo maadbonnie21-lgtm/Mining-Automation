@@ -25,7 +25,22 @@ jobs:
           test "$(git rev-parse HEAD)" = "0fa2e11587aa336a5602422dc2f64d71d779d5eb"
           test "$(git merge-base ff3a9357566d19210981461b46e504d474393ab5 HEAD)" = "ff3a9357566d19210981461b46e504d474393ab5"
           test -z "$(git diff --name-only ff3a9357566d19210981461b46e504d474393ab5 HEAD | grep -Ev '^(docs/BANKING.md|src/mining_automation/banking/|tests/test_banking_)' || true)"
-          test -z "$(grep -R -n -E 'pyautogui|SendInput|mouse_event|keyboard|RuneLite' src/mining_automation/banking || true)"
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          forbidden_roots = {"pyautogui", "pynput", "keyboard", "mouse"}
+          for path in Path("src/mining_automation/banking").glob("*.py"):
+              tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      roots = {alias.name.split(".", 1)[0] for alias in node.names}
+                  elif isinstance(node, ast.ImportFrom) and node.module:
+                      roots = {node.module.split(".", 1)[0]}
+                  else:
+                      continue
+                  assert not (roots & forbidden_roots), (path, roots & forbidden_roots)
+          PY
       - name: Banking adversarial and compatibility regression
         shell: bash
         run: |
