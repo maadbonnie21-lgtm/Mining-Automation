@@ -30,13 +30,8 @@ jobs:
         run: ruff check .
       - name: Strict mypy
         run: mypy --strict --platform linux src
-      - name: Focused Resource release validation
-        run: >-
-          python -m pytest -q
-          tests/test_resource_release_campaign.py
-          tests/test_resource_release_live_readiness.py
-          tests/test_resource_release_decision.py
-          tests/test_resource_release_receipt.py
-          tests/test_resource_same_cycle.py
+      - name: Focused Resource validation
+        shell: bash
+        run: python -m pytest -q tests/test_resource*.py
       - name: Full repository pytest
         run: python -m pytest -q
