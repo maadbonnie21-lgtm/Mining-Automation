@@ -32,6 +32,13 @@ class MiningController:
             return self._intent("reacquire", timeout_s=10.0, expected=("location", "inventory"))
 
         if state.session_state is SessionState.MINING:
+            if state.inventory.is_full is None:
+                return self._intent(
+                    "reacquire_inventory",
+                    timeout_s=5.0,
+                    expected=("inventory_state",),
+                )
+
             if state.inventory.is_full is True:
                 return self._intent(
                     "begin_navigation_to_bank",
@@ -47,7 +54,7 @@ class MiningController:
                     expected=("resource_state",),
                 )
 
-            target = max(candidates, key=lambda resource: resource.confidence)
+            target = candidates[0]
             if target.interaction_region is None:
                 raise ControllerDecisionError("validated resource has no interaction region")
 
