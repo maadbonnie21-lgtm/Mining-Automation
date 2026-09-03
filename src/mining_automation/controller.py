@@ -29,9 +29,20 @@ class MiningController:
             return None
 
         if state.session_state is SessionState.ACQUIRING:
-            return self._intent("reacquire", timeout_s=10.0, expected=("location", "inventory"))
+            return self._intent(
+                "reacquire",
+                timeout_s=10.0,
+                expected=("location", "inventory"),
+            )
 
         if state.session_state is SessionState.MINING:
+            if state.inventory.is_full is None:
+                return self._intent(
+                    "reacquire_inventory",
+                    timeout_s=5.0,
+                    expected=("inventory_state",),
+                )
+
             if state.inventory.is_full is True:
                 return self._intent(
                     "begin_navigation_to_bank",
@@ -47,9 +58,11 @@ class MiningController:
                     expected=("resource_state",),
                 )
 
-            target = max(candidates, key=lambda resource: resource.confidence)
+            target = candidates[0]
             if target.interaction_region is None:
-                raise ControllerDecisionError("validated resource has no interaction region")
+                raise ControllerDecisionError(
+                    "validated resource has no interaction region"
+                )
 
             return ActionIntent(
                 action_id=str(uuid.uuid4()),
@@ -57,26 +70,52 @@ class MiningController:
                 target_id=target.resource_id,
                 interaction_region=target.interaction_region,
                 timeout_s=12.0,
-                expected_observation_kinds=("activity_state", "resource_state", "inventory_state"),
+                expected_observation_kinds=(
+                    "activity_state",
+                    "resource_state",
+                    "inventory_state",
+                ),
                 metadata={"resource_type": target.resource_type},
             )
 
         if state.session_state is SessionState.NAVIGATING_TO_BANK:
-            return self._intent("navigation_step_to_bank", 8.0, ("location", "checkpoint"))
+            return self._intent(
+                "navigation_step_to_bank",
+                8.0,
+                ("location", "checkpoint"),
+            )
 
         if state.session_state is SessionState.BANKING:
-            return self._intent("banking_step", 8.0, ("bank_state", "inventory_state"))
+            return self._intent(
+                "banking_step",
+                8.0,
+                ("bank_state", "inventory_state"),
+            )
 
         if state.session_state is SessionState.NAVIGATING_TO_MINE:
-            return self._intent("navigation_step_to_mine", 8.0, ("location", "checkpoint"))
+            return self._intent(
+                "navigation_step_to_mine",
+                8.0,
+                ("location", "checkpoint"),
+            )
 
         if state.session_state is SessionState.RECOVERING:
-            return self._intent("recovery_step", 10.0, ("recovery_evidence",))
+            return self._intent(
+                "recovery_step",
+                10.0,
+                ("recovery_evidence",),
+            )
 
-        raise ControllerDecisionError(f"unhandled session state: {state.session_state}")
+        raise ControllerDecisionError(
+            f"unhandled session state: {state.session_state}"
+        )
 
     @staticmethod
-    def _intent(kind: str, timeout_s: float, expected: tuple[str, ...]) -> ActionIntent:
+    def _intent(
+        kind: str,
+        timeout_s: float,
+        expected: tuple[str, ...],
+    ) -> ActionIntent:
         return ActionIntent(
             action_id=str(uuid.uuid4()),
             kind=kind,
