@@ -1,0 +1,79 @@
+name: Lead B4 CI repair
+
+on:
+  push:
+    branches: [chatgpt/lead-b4-ci-repair]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/b4-navigation-writer-integration
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Restore B2 detailed intake contract without weakening B3 physical identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "1732b83848d3a13d7cd61752bbe23ab8e8122f1b"
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/mining_automation/navigation/durable_route_evidence.py')
+          s = p.read_text()
+          assert 'from dataclasses import dataclass, field' in s
+          s = s.replace(
+              'from dataclasses import dataclass, field',
+              'from dataclasses import InitVar, dataclass, field',
+              1,
+          )
+
+          anchor = '''@dataclass(frozen=True, slots=True)\nclass _AcquisitionFilesystemIdentity:\n    root_identity: tuple[int, ...]\n    tree_identity: tuple[tuple[str, bool, tuple[int, ...]], ...]\n\n\n'''
+          assert s.count(anchor) == 1
+          addition = anchor + '''@dataclass(frozen=True, slots=True)\nclass _ReviewFilesystemIdentity:\n    root_identity: tuple[int, ...]\n    tree_identity: tuple[tuple[str, bool, tuple[int, ...]], ...]\n\n\n@dataclass(frozen=True, slots=True)\nclass _VerifiedDurableRouteEvidence:\n    """Detached strict-intake detail for the deny-only release boundary."""\n\n    package: FinalizedRouteEvidencePackage\n    review: RouteEvidenceReview\n    report: RouteEvidenceVerificationReport\n    expectation: DurableRouteEvidenceFilesystemExpectation\n    acquisition_filesystem_identity: _AcquisitionFilesystemIdentity\n    review_filesystem_identity: _ReviewFilesystemIdentity\n    activation_allowed: Literal[False] = field(default=False, init=False)\n    input_authority: Literal[False] = field(default=False, init=False)\n    _factory_token: InitVar[object | None] = None\n\n    def __post_init__(self, _factory_token: object | None) -> None:\n        if _factory_token is not _FACTORY_TOKEN:\n            raise ValueError("verified durable route evidence requires its strict loader")\n        if type(self.package) is not FinalizedRouteEvidencePackage:\n            raise ValueError("verified durable route evidence requires an exact package")\n        if type(self.review) is not RouteEvidenceReview:\n            raise ValueError("verified durable route evidence requires an exact review")\n        if type(self.report) is not RouteEvidenceVerificationReport:\n            raise ValueError("verified durable route evidence requires an exact report")\n        if type(self.expectation) is not DurableRouteEvidenceFilesystemExpectation:\n            raise ValueError("verified durable route evidence requires exact caller pins")\n        if type(self.acquisition_filesystem_identity) is not _AcquisitionFilesystemIdentity:\n            raise ValueError("verified durable route evidence lacks acquisition identity")\n        if type(self.review_filesystem_identity) is not _ReviewFilesystemIdentity:\n            raise ValueError("verified durable route evidence lacks review identity")\n        if self.activation_allowed is not False or self.input_authority is not False:\n            raise ValueError("verified durable route evidence cannot carry authority")\n\n\n'''
+          s = s.replace(anchor, addition, 1)
+
+          anchor = '''def load_durable_acquisition(\n    root: str | os.PathLike[str],\n'''
+          assert s.count(anchor) == 1
+          helper = '''def _review_filesystem_identity(\n    root_signature: tuple[int, ...],\n    tree: Mapping[str, _TreeEntry],\n) -> _ReviewFilesystemIdentity:\n    return _ReviewFilesystemIdentity(\n        root_identity=_directory_signature_identity(root_signature),\n        tree_identity=tuple(\n            (\n                relative,\n                entry.is_directory,\n                (\n                    _directory_signature_identity(entry.signature)\n                    if entry.is_directory\n                    else entry.signature\n                ),\n            )\n            for relative, entry in sorted(tree.items())\n        ),\n    )\n\n\n'''
+          s = s.replace(anchor, helper + anchor, 1)
+
+          old_sig = '''def load_and_verify_durable_synthetic_route_evidence(\n    acquisition_root: str | os.PathLike[str],\n    review_root: str | os.PathLike[str],\n    expectation: DurableRouteEvidenceFilesystemExpectation,\n) -> RouteEvidenceVerificationReport:\n    """Verify exact separate roots without granting release or input authority."""\n'''
+          new_sig = '''def _load_and_verify_durable_synthetic_route_evidence_detailed(\n    acquisition_root: str | os.PathLike[str],\n    review_root: str | os.PathLike[str],\n    expectation: DurableRouteEvidenceFilesystemExpectation,\n) -> _VerifiedDurableRouteEvidence:\n    """Verify exact separate roots and retain strict identity detail, without authority."""\n'''
+          assert s.count(old_sig) == 1
+          s = s.replace(old_sig, new_sig, 1)
+
+          old_tail = '''    _assert_stable_intake(root_path, root_signature, initial_tree, snapshots, size_limits)\n    return report\n'''
+          new_tail = '''    _assert_stable_intake(root_path, root_signature, initial_tree, snapshots, size_limits)\n    return _VerifiedDurableRouteEvidence(\n        package=package,\n        review=review,\n        report=report,\n        expectation=owned_expectation,\n        acquisition_filesystem_identity=acquisition.filesystem_identity,\n        review_filesystem_identity=_review_filesystem_identity(root_signature, initial_tree),\n        _factory_token=_FACTORY_TOKEN,\n    )\n\n\ndef load_and_verify_durable_synthetic_route_evidence(\n    acquisition_root: str | os.PathLike[str],\n    review_root: str | os.PathLike[str],\n    expectation: DurableRouteEvidenceFilesystemExpectation,\n) -> RouteEvidenceVerificationReport:\n    """Verify exact separate roots without granting release or input authority."""\n\n    return _load_and_verify_durable_synthetic_route_evidence_detailed(\n        acquisition_root, review_root, expectation\n    ).report\n'''
+          assert s.count(old_tail) == 1
+          s = s.replace(old_tail, new_tail, 1)
+          p.write_text(s)
+          PY
+          git diff --check
+      - name: Focused B4 static and release gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          ruff check src/mining_automation/navigation/durable_route_evidence.py src/mining_automation/navigation/release_decision.py
+          mypy src
+          pytest tests/test_navigation_release_decision.py tests/test_navigation_release_endurance.py tests/test_durable_route_evidence.py -q
+          grep -F 'acquisition_physical_identity_sha256' src/mining_automation/navigation/durable_route_evidence.py
+          grep -F 'review_physical_identity_sha256' src/mining_automation/navigation/durable_route_evidence.py
+          grep -F 'DURABLE_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE: Final[Literal[False]] = False' src/mining_automation/navigation/durable_route_evidence.py
+      - name: Commit and push B4 repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Mining Automation Lead'
+          git config user.email 'lead@users.noreply.github.com'
+          git add src/mining_automation/navigation/durable_route_evidence.py
+          git commit -m 'fix(navigation): restore detailed B2 release intake over B3 writer'
+          git push origin HEAD:chatgpt/b4-navigation-writer-integration
