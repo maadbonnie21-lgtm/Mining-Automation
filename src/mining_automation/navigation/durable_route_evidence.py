@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import stat
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -239,6 +239,45 @@ class DurableRouteEvidenceFilesystemExpectation(RouteEvidenceFilesystemExpectati
 class _AcquisitionFilesystemIdentity:
     root_identity: tuple[int, ...]
     tree_identity: tuple[tuple[str, bool, tuple[int, ...]], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ReviewFilesystemIdentity:
+    root_identity: tuple[int, ...]
+    tree_identity: tuple[tuple[str, bool, tuple[int, ...]], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedDurableRouteEvidence:
+    """Detached strict-intake detail for the deny-only release boundary."""
+
+    package: FinalizedRouteEvidencePackage
+    review: RouteEvidenceReview
+    report: RouteEvidenceVerificationReport
+    expectation: DurableRouteEvidenceFilesystemExpectation
+    acquisition_filesystem_identity: _AcquisitionFilesystemIdentity
+    review_filesystem_identity: _ReviewFilesystemIdentity
+    activation_allowed: Literal[False] = field(default=False, init=False)
+    input_authority: Literal[False] = field(default=False, init=False)
+    _factory_token: InitVar[object | None] = None
+
+    def __post_init__(self, _factory_token: object | None) -> None:
+        if _factory_token is not _FACTORY_TOKEN:
+            raise ValueError("verified durable route evidence requires its strict loader")
+        if type(self.package) is not FinalizedRouteEvidencePackage:
+            raise ValueError("verified durable route evidence requires an exact package")
+        if type(self.review) is not RouteEvidenceReview:
+            raise ValueError("verified durable route evidence requires an exact review")
+        if type(self.report) is not RouteEvidenceVerificationReport:
+            raise ValueError("verified durable route evidence requires an exact report")
+        if type(self.expectation) is not DurableRouteEvidenceFilesystemExpectation:
+            raise ValueError("verified durable route evidence requires exact caller pins")
+        if type(self.acquisition_filesystem_identity) is not _AcquisitionFilesystemIdentity:
+            raise ValueError("verified durable route evidence lacks acquisition identity")
+        if type(self.review_filesystem_identity) is not _ReviewFilesystemIdentity:
+            raise ValueError("verified durable route evidence lacks review identity")
+        if self.activation_allowed is not False or self.input_authority is not False:
+            raise ValueError("verified durable route evidence cannot carry authority")
 
 
 @dataclass(frozen=True, slots=True)
@@ -981,6 +1020,12 @@ def _snapshot_acquisition_expectation(
 ) -> DurableAcquisitionFilesystemExpectation:
     if type(value) is not DurableAcquisitionFilesystemExpectation:
         raise TypeError("expectation must be DurableAcquisitionFilesystemExpectation")
+    if (
+        value.evidence_role != SYNTHETIC_ROUTE_EVIDENCE_ROLE
+        or value.activation_allowed is not False
+        or value.input_authority is not False
+    ):
+        raise ValueError("durable acquisition expectation carries mutated authority fields")
     return DurableAcquisitionFilesystemExpectation(
         finalized_package_sha256=Sha256Digest(value.finalized_package_sha256.value),
         acquisition_head_sha256=Sha256Digest(value.acquisition_head_sha256.value),
@@ -1020,6 +1065,12 @@ def _snapshot_full_expectation(
 ) -> DurableRouteEvidenceFilesystemExpectation:
     if type(value) is not DurableRouteEvidenceFilesystemExpectation:
         raise TypeError("expectation must be DurableRouteEvidenceFilesystemExpectation")
+    if (
+        value.evidence_role != SYNTHETIC_ROUTE_EVIDENCE_ROLE
+        or value.activation_allowed is not False
+        or value.input_authority is not False
+    ):
+        raise ValueError("durable route expectation carries mutated authority fields")
     acquisition = DurableAcquisitionFilesystemExpectation(
         finalized_package_sha256=value.finalized_package_sha256,
         acquisition_head_sha256=value.acquisition_head_sha256,
@@ -1103,6 +1154,27 @@ def _acquisition_filesystem_identity(
     tree: Mapping[str, _TreeEntry],
 ) -> _AcquisitionFilesystemIdentity:
     return _AcquisitionFilesystemIdentity(
+        root_identity=_directory_signature_identity(root_signature),
+        tree_identity=tuple(
+            (
+                relative,
+                entry.is_directory,
+                (
+                    _directory_signature_identity(entry.signature)
+                    if entry.is_directory
+                    else entry.signature
+                ),
+            )
+            for relative, entry in sorted(tree.items())
+        ),
+    )
+
+
+def _review_filesystem_identity(
+    root_signature: tuple[int, ...],
+    tree: Mapping[str, _TreeEntry],
+) -> _ReviewFilesystemIdentity:
+    return _ReviewFilesystemIdentity(
         root_identity=_directory_signature_identity(root_signature),
         tree_identity=tuple(
             (
@@ -1949,12 +2021,12 @@ def _begin_durable_review_with_namespace_factory(
     )
 
 
-def load_and_verify_durable_synthetic_route_evidence(
+def _load_and_verify_durable_synthetic_route_evidence_detailed(
     acquisition_root: str | os.PathLike[str],
     review_root: str | os.PathLike[str],
     expectation: DurableRouteEvidenceFilesystemExpectation,
-) -> RouteEvidenceVerificationReport:
-    """Verify exact separate roots without granting release or input authority."""
+) -> _VerifiedDurableRouteEvidence:
+    """Verify exact roots and retain detached detail for deny-only binding."""
 
     acquisition_path = _absolute_path_once(acquisition_root, "durable acquisition root")
     review_path = _absolute_path_once(review_root, "durable review root")
@@ -2154,4 +2226,26 @@ def load_and_verify_durable_synthetic_route_evidence(
             "acquisition filesystem identity changed during durable review verification"
         )
     _assert_stable_intake(root_path, root_signature, initial_tree, snapshots, size_limits)
-    return report
+    return _VerifiedDurableRouteEvidence(
+        package=package,
+        review=review,
+        report=report,
+        expectation=owned_expectation,
+        acquisition_filesystem_identity=acquisition.filesystem_identity,
+        review_filesystem_identity=_review_filesystem_identity(root_signature, initial_tree),
+        _factory_token=_FACTORY_TOKEN,
+    )
+
+
+def load_and_verify_durable_synthetic_route_evidence(
+    acquisition_root: str | os.PathLike[str],
+    review_root: str | os.PathLike[str],
+    expectation: DurableRouteEvidenceFilesystemExpectation,
+) -> RouteEvidenceVerificationReport:
+    """Verify exact separate roots without granting release or input authority."""
+
+    return _load_and_verify_durable_synthetic_route_evidence_detailed(
+        acquisition_root,
+        review_root,
+        expectation,
+    ).report

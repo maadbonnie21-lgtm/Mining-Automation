@@ -344,10 +344,16 @@ def _full_expectation(
         reviewer_id=review.reviewer_id,
         acquisition_journal_head_sha256=pins.acquisition_journal_head_sha256,
         acquisition_finalization_sha256=pins.acquisition_finalization_sha256,
+        acquisition_physical_identity_sha256=(
+            pins.acquisition_physical_identity_sha256
+        ),
         review_id=review.review_id,
         review_plan_sha256=review.review_plan_sha256,
         review_journal_head_sha256=review.review_journal_head_sha256,
         review_finalization_sha256=review.review_finalization_sha256,
+        review_physical_identity_sha256=(
+            review.review_physical_identity_sha256
+        ),
     )
 
 
@@ -2011,10 +2017,11 @@ def test_repeated_pair_intake_rejects_metadata_change_between_snapshots(
     )
     with pytest.raises(
         RouteEvidenceIntegrityError,
-        match="changed between repeated intake snapshots",
+        match="durable acquisition physical identity differs",
     ):
         _evaluate(evidence)
-    assert call_count == 4
+    # B3 physical identity rejects the mutation at the first repeated intake.
+    assert call_count == 3
 
 
 def test_evaluator_is_read_only_and_returned_mutation_cannot_change_fresh_result(
