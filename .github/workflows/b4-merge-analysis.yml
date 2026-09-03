@@ -1,0 +1,33 @@
+name: B4 merge analysis
+
+on:
+  push:
+    branches: ["chatgpt/b4-merge-control"]
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/b4-merge-control
+          fetch-depth: 0
+      - name: Inspect exact B2 plus B3 merge
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --detach a19b02f090be5165db2baee8b178b19efc4153f5
+          set +e
+          git merge --no-ff --no-commit e5d9f3005402070ca0fa8221611dac58580d6d59
+          rc=$?
+          set -e
+          echo "MERGE_RC=$rc"
+          git status --short
+          echo "UNMERGED_PATHS"
+          git diff --name-only --diff-filter=U
+          for path in $(git diff --name-only --diff-filter=U); do
+            echo "===== CONFLICT: $path ====="
+            grep -n -C 12 -E '^(<<<<<<<|=======|>>>>>>>)' "$path" || true
+          done
+          exit 0
