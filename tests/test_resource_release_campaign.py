@@ -510,8 +510,18 @@ def test_each_node_cycle_freezes_initial_depleted_respawn_and_focal_truth() -> N
 
 
 def test_capture_configuration_source_owns_pending_dpi_requirement(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    real_capture_configuration = campaign._capture_configuration
+    monkeypatch.setattr(campaign, "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED", False)
+    monkeypatch.setattr(
+        campaign,
+        "_capture_configuration",
+        lambda *, live_source_authorized=False: real_capture_configuration(
+            live_source_authorized=False
+        ),
+    )
     session = _session(tmp_path)
     payload = json.loads((session / "session.json").read_text(encoding="utf-8"))
 
@@ -551,8 +561,18 @@ def test_campaign_directory_is_exclusively_owned_and_collision_preserves_winner(
 
 
 def test_live_source_gate_blocks_before_capture_or_case_directory(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    real_capture_configuration = campaign._capture_configuration
+    monkeypatch.setattr(campaign, "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED", False)
+    monkeypatch.setattr(
+        campaign,
+        "_capture_configuration",
+        lambda *, live_source_authorized=False: real_capture_configuration(
+            live_source_authorized=False
+        ),
+    )
     session = _session(tmp_path)
     backend = FakeCaptureBackend([_small_raw()], name="windows-runelite")
     source = CaptureSource(backend, clock=ManualClock())
