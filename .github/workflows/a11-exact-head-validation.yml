@@ -1,0 +1,75 @@
+name: A11 exact-head validation
+
+on:
+  push:
+    branches:
+      - chatgpt/a11-exact-head-validation
+
+permissions:
+  contents: read
+
+jobs:
+  validate-a11-exact-head:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_SHA: 319db654e62dcc17c634e464404810a61d205ec0
+      ENABLE_SHA: 80a3937177226437d98e1dea67a54e43f6dde091
+      ACCEPTED_PARENT_SHA: 0d215457fb4b037eedc74cb776a3cf1f5f58a19f
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 319db654e62dcc17c634e464404810a61d205ec0
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify exact immutable topology and changed-file scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^)" = "$ENABLE_SHA"
+          test "$(git rev-parse HEAD^^)" = "$ACCEPTED_PARENT_SHA"
+          git merge-base --is-ancestor "$ACCEPTED_PARENT_SHA" "$TARGET_SHA"
+          mapfile -t changed < <(git diff --name-only "$ACCEPTED_PARENT_SHA..$TARGET_SHA" | sort)
+          expected=(
+            src/mining_automation/perception/resource_release_campaign.py
+            tests/test_resource_release_campaign.py
+            tests/test_resource_release_live_readiness.py
+          )
+          test "${#changed[@]}" -eq "${#expected[@]}"
+          for i in "${!expected[@]}"; do
+            test "${changed[$i]}" = "${expected[$i]}"
+          done
+      - name: Prove the only production delta is the one source-owned gate line
+        shell: python
+        run: |
+          from pathlib import Path
+          import subprocess
+
+          path = "src/mining_automation/perception/resource_release_campaign.py"
+          accepted = subprocess.check_output(
+              ["git", "show", f"{__import__('os').environ['ACCEPTED_PARENT_SHA']}:{path}"],
+              text=True,
+          )
+          current = Path(path).read_text(encoding="utf-8")
+          old = "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = False"
+          new = "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = True"
+          assert accepted.count(old) == 1
+          assert new not in accepted
+          assert current.count(new) == 1
+          assert old not in current
+          assert current == accepted.replace(old, new, 1)
+      - name: Install
+        run: python -m pip install -e '.[dev]'
+      - name: Ruff
+        run: ruff check .
+      - name: Strict mypy
+        run: mypy --strict src
+      - name: Focused Resource release and readiness tests
+        run: >-
+          python -m pytest -q
+          tests/test_resource_release_campaign.py
+          tests/test_resource_release_live_readiness.py
+      - name: Full repository pytest
+        run: python -m pytest --cov=mining_automation --cov-report=term-missing
