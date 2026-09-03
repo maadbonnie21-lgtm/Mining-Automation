@@ -76,7 +76,7 @@ def test_positive_integer_parser_rejects_zero_and_negative_values() -> None:
             raise AssertionError(f"expected {value!r} to be rejected")
 
 
-def test_negative_interval_stops_before_windows_backend_construction(capsys: object) -> None:
+def test_negative_interval_stops_before_windows_backend_construction() -> None:
     tool = _load_tool()
 
     assert tool.main(["--interval", "-0.1"]) == 2
