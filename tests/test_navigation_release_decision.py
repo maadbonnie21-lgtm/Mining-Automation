@@ -344,10 +344,16 @@ def _full_expectation(
         reviewer_id=review.reviewer_id,
         acquisition_journal_head_sha256=pins.acquisition_journal_head_sha256,
         acquisition_finalization_sha256=pins.acquisition_finalization_sha256,
+        acquisition_physical_identity_sha256=(
+            pins.acquisition_physical_identity_sha256
+        ),
         review_id=review.review_id,
         review_plan_sha256=review.review_plan_sha256,
         review_journal_head_sha256=review.review_journal_head_sha256,
         review_finalization_sha256=review.review_finalization_sha256,
+        review_physical_identity_sha256=(
+            review.review_physical_identity_sha256
+        ),
     )
 
 
@@ -2011,10 +2017,16 @@ def test_repeated_pair_intake_rejects_metadata_change_between_snapshots(
     )
     with pytest.raises(
         RouteEvidenceIntegrityError,
-        match="changed between repeated intake snapshots",
+        match=(
+            "durable acquisition physical identity differs|"
+            "paired durable evidence changed between repeated intake snapshots"
+        ),
     ):
         _evaluate(evidence)
-    assert call_count == 4
+    # Different filesystems can surface the same metadata race at either the
+    # B3 physical-identity guard or the independent repeated-snapshot guard.
+    # Both are fail-closed and neither guard is weakened here.
+    assert call_count in (3, 4)
 
 
 def test_evaluator_is_read_only_and_returned_mutation_cannot_change_fresh_result(
