@@ -1,0 +1,42 @@
+{
+  "activation_allowed": false,
+  "campaign_execution_allowed": false,
+  "exact_starting_git_sha": "66c7e9536539979bc60e17f02f026eb64ebf0768",
+  "input_authority": false,
+  "live_pixels_allowed_during_proposal": false,
+  "proposal_status": "host-proposal-only-not-authorized",
+  "protocol_lock_sha256": "60ff2c511e46be3b87df4e0d9e4f705d897a4181f9152f2729ee90f6c45f8cf5",
+  "source_change_allowlist": [
+    "validation/inventory_v3/live-campaign-authorizations.json",
+    "validation/inventory_v3_protocol_v2/live-campaign-authorizations.json",
+    "validation/inventory_v3_protocol_v2/live-campaign-authorizations.json.sha256"
+  ],
+  "proposal_expected_fields": {
+    "activation_allowed": false,
+    "promotion_allowed": false,
+    "source_registry_modified": false,
+    "status": "proposal-only-not-authorized"
+  },
+  "review_checklist": [
+    "The proposal was produced on the actual Windows producer host from an exact detached checkout of the starting SHA.",
+    "The opaque receipt id was preissued lowercase UUIDv4 and was not invented by the proposal tool.",
+    "The proposal performed no capture and no RuneLite, account, item, tab, camera, mouse, or keyboard action.",
+    "The observed producer identity came from the Windows host and was not fabricated or edited.",
+    "The proposal changed no tracked repository file and created no one-shot attempt state.",
+    "Only the exact three allowlisted authorization files may be materialized in the later authorization child.",
+    "The legacy and Protocol V2 authorization records agree exactly and the sidecar matches canonical bytes.",
+    "The independent validation approval registry remains canonical empty and cannot be self-granted.",
+    "Every activation, promotion, release, controller, banking, navigation, and input authority field remains false."
+  ],
+  "authorization_child_ci_matrix": [
+    "verify one direct non-merge child of the exact starting SHA",
+    "verify exact three-file changed-path allowlist",
+    "verify canonical JSON and SHA-256 sidecar",
+    "verify both authorization registries contain the same singleton identity",
+    "verify observed producer identity and opaque receipt id match the returned host proposal",
+    "verify approval registry remains unchanged and empty",
+    "verify authorization readiness without reading live pixels",
+    "run Ruff, strict Linux mypy, full pytest, and Protocol V2 locked-suite regression",
+    "verify activation_allowed=false, promotion_allowed=false, and input_authority=false"
+  ]
+}
