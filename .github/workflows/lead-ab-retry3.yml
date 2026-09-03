@@ -1,0 +1,423 @@
+name: Lead A11 and B4 retry 3
+
+on:
+  push:
+    branches:
+      - chatgpt/lead-ab-retry3
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lead-ab-retry3
+  cancel-in-progress: false
+
+jobs:
+  resource-a11:
+    name: A11 exact enable and historical-contract migration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/a11-resource-live-enable-only
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply exact A11 changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "0d215457fb4b037eedc74cb776a3cf1f5f58a19f"
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          frozen = "0d215457fb4b037eedc74cb776a3cf1f5f58a19f"
+          source_path = Path("src/mining_automation/perception/resource_release_campaign.py")
+          source = source_path.read_text(encoding="utf-8")
+          old = "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = False"
+          new = "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = True"
+          if source.count(old) != 1 or new in source:
+              raise SystemExit("A11 source gate does not match exact frozen parent")
+          source_path.write_text(source.replace(old, new), encoding="utf-8")
+
+          test_path = Path("tests/test_resource_release_live_readiness.py")
+          text = test_path.read_text(encoding="utf-8")
+          future_anchor = "from __future__ import annotations\n\n"
+          if text.count(future_anchor) != 1:
+              raise SystemExit("A11 test import anchor changed")
+          text = text.replace(
+              future_anchor,
+              future_anchor + "from collections.abc import Iterator\n",
+              1,
+          )
+
+          constants_anchor = "_REAL_GIT_BLOB_BINDING = readiness._git_blob_binding\n"
+          if text.count(constants_anchor) != 1:
+              raise SystemExit("A11 test constants anchor changed")
+          support = dedent(
+              f'''\
+              _REAL_GIT_BLOB_BINDING = readiness._git_blob_binding
+              _REAL_CAPTURE_CONFIGURATION = campaign._capture_configuration
+              _FROZEN_READINESS_HEAD = "{frozen}"
+              _HISTORICAL_ROOT: Path | None = None
+
+
+              def _historical_root() -> Path:
+                  if _HISTORICAL_ROOT is None:
+                      raise AssertionError("frozen A8 worktree fixture is unavailable")
+                  return _HISTORICAL_ROOT
+
+
+              @pytest.fixture(scope="module", autouse=True)
+              def _frozen_readiness_worktree(
+                  tmp_path_factory: pytest.TempPathFactory,
+              ) -> Iterator[None]:
+                  global _HISTORICAL_ROOT
+                  repository_root = (
+                      tmp_path_factory.mktemp("frozen-a8-worktree") / "repository"
+                  )
+                  subprocess.run(
+                      [
+                          "git",
+                          "worktree",
+                          "add",
+                          "--detach",
+                          str(repository_root),
+                          _FROZEN_READINESS_HEAD,
+                      ],
+                      cwd=_ROOT,
+                      check=True,
+                      capture_output=True,
+                      text=True,
+                  )
+                  actual = subprocess.run(
+                      ["git", "rev-parse", "HEAD"],
+                      cwd=repository_root,
+                      check=True,
+                      capture_output=True,
+                      text=True,
+                  ).stdout.strip()
+                  if actual != _FROZEN_READINESS_HEAD:
+                      raise AssertionError("frozen A8 worktree resolved to wrong head")
+                  campaign_source = (
+                      repository_root / readiness._CAMPAIGN_SOURCE_PATH
+                  ).read_bytes()
+                  if hashlib.sha256(campaign_source).hexdigest() != (
+                      readiness._EXPECTED_CAMPAIGN_SOURCE_SHA256
+                  ):
+                      raise AssertionError("frozen A8 source bytes are not canonical")
+                  _HISTORICAL_ROOT = repository_root
+                  try:
+                      yield
+                  finally:
+                      _HISTORICAL_ROOT = None
+                      subprocess.run(
+                          [
+                              "git",
+                              "worktree",
+                              "remove",
+                              "--force",
+                              str(repository_root),
+                          ],
+                          cwd=_ROOT,
+                          check=True,
+                          capture_output=True,
+                          text=True,
+                      )
+              '''
+          )
+          text = text.replace(constants_anchor, support, 1)
+
+          fixture_old = dedent(
+              '''\
+              @pytest.fixture(autouse=True)
+              def _fixed_test_lineage(monkeypatch: pytest.MonkeyPatch) -> None:
+                  monkeypatch.setattr(
+                      readiness,
+                      "_read_head_with_parents",
+                      lambda root: (_HEAD, _ACCEPTED_PARENT),
+                  )
+              '''
+          )
+          fixture_new = dedent(
+              '''\
+              @pytest.fixture(autouse=True)
+              def _fixed_test_lineage(
+                  monkeypatch: pytest.MonkeyPatch,
+                  _frozen_readiness_worktree: None,
+              ) -> None:
+                  monkeypatch.setattr(
+                      campaign,
+                      "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED",
+                      False,
+                  )
+                  monkeypatch.setattr(
+                      campaign,
+                      "__file__",
+                      str(_historical_root() / readiness._CAMPAIGN_SOURCE_PATH),
+                  )
+                  monkeypatch.setattr(
+                      campaign,
+                      "_capture_configuration",
+                      lambda *, live_source_authorized=False: (
+                          _REAL_CAPTURE_CONFIGURATION(live_source_authorized=False)
+                      ),
+                  )
+                  monkeypatch.setattr(
+                      readiness,
+                      "_read_head_with_parents",
+                      lambda root: (_HEAD, _ACCEPTED_PARENT),
+                  )
+              '''
+          )
+          if text.count(fixture_old) != 1:
+              raise SystemExit("A11 autouse fixture body changed")
+          text = text.replace(fixture_old, fixture_new, 1)
+
+          root_old = dedent(
+              '''\
+              def _repository_root(tmp_path: Path) -> Path:
+                  del tmp_path
+                  return _ROOT
+              '''
+          )
+          root_new = dedent(
+              '''\
+              def _repository_root(tmp_path: Path) -> Path:
+                  del tmp_path
+                  return _historical_root()
+              '''
+          )
+          if text.count(root_old) != 1:
+              raise SystemExit("A11 repository-root helper changed")
+          text = text.replace(root_old, root_new, 1)
+
+          exact_binding_call = "_REAL_GIT_BLOB_BINDING(_ROOT,"
+          if text.count(exact_binding_call) != 3:
+              raise SystemExit("A11 exact-head binding call count changed")
+          text = text.replace(
+              exact_binding_call,
+              "_REAL_GIT_BLOB_BINDING(_historical_root(),",
+          )
+          test_path.write_text(text, encoding="utf-8")
+
+          Path("tests/test_resource_release_live_enable.py").write_text(
+              dedent(
+                  '''\
+                  from __future__ import annotations
+
+                  import ast
+                  from pathlib import Path
+
+                  from mining_automation.perception import resource_release_campaign as campaign
+                  from mining_automation.perception.production_profiles import (
+                      load_varrock_east_iron_profile,
+                  )
+
+                  ROOT = Path(__file__).resolve().parents[1]
+                  SOURCE = ROOT / "src/mining_automation/perception/resource_release_campaign.py"
+
+
+                  def test_a11_is_one_literal_true_source_gate() -> None:
+                      assert campaign.LIVE_RESOURCE_CAMPAIGN_AUTHORIZED is True
+                      tree = ast.parse(SOURCE.read_bytes(), filename=str(SOURCE))
+                      assignments: list[ast.expr] = []
+                      for node in tree.body:
+                          if isinstance(node, ast.AnnAssign) and isinstance(
+                              node.target, ast.Name
+                          ):
+                              if (
+                                  node.target.id == "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED"
+                                  and node.value is not None
+                              ):
+                                  assignments.append(node.value)
+                          elif isinstance(node, ast.Assign):
+                              if any(
+                                  isinstance(target, ast.Name)
+                                  and target.id == "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED"
+                                  for target in node.targets
+                              ):
+                                  assignments.append(node.value)
+                      assert len(assignments) == 1
+                      assert isinstance(assignments[0], ast.Constant)
+                      assert assignments[0].value is True
+
+
+                  def test_a11_preserves_fixed_campaign_and_fail_closed_policy() -> None:
+                      configuration = campaign._capture_configuration()
+                      assert configuration["live_source_authorized"] is True
+                      assert configuration["retry_attempts"] == 0
+                      assert configuration["automatic_camera_control"] is False
+                      assert configuration["automatic_camera_recovery"] is False
+                      assert configuration["input_allowed"] is False
+                      assert configuration["one_capture_per_observation"] is True
+                      assert configuration["required_reported_dpi"] == 96
+                      assert configuration["required_evidence_origin"] == (
+                          "source-owned-windows-runelite"
+                      )
+                      assert len(campaign.CAMPAIGN_PLAN) == 15
+                      assert [case.ordinal for case in campaign.CAMPAIGN_PLAN] == list(
+                          range(1, 16)
+                      )
+
+                      profile = load_varrock_east_iron_profile()
+                      assert {
+                          item.maximum_distance for item in profile.scene_landmarks
+                      } == {0.12}
+                      assert len(profile.scene_landmarks) == 6
+                      assert profile.minimum_landmark_quorum == 5
+                      assert profile.minimum_landmark_zones == 3
+                      assert len(
+                          {
+                              item.zone(
+                                  profile.frame_width, profile.frame_height
+                              ).value
+                              for item in profile.scene_landmarks
+                          }
+                      ) == 3
+                      assert (profile.frame_width, profile.frame_height) == (1005, 1078)
+                      assert profile.pixel_format.value == "bgra8888"
+                  '''
+              ),
+              encoding="utf-8",
+          )
+          PY
+          git diff --check
+          python -m compileall -q tests/test_resource_release_live_readiness.py tests/test_resource_release_live_enable.py
+      - name: Validate exact A11
+        id: validate
+        shell: bash
+        run: |
+          set +e
+          {
+            python -m pip install -e '.[dev]'
+            ruff check .
+            mypy src
+            pytest tests/test_resource_release_live_readiness.py tests/test_resource_release_live_enable.py -vv
+            pytest --cov=mining_automation --cov-report=term-missing
+          } > /tmp/a11-validation.log 2>&1
+          status=$?
+          cat /tmp/a11-validation.log
+          echo "$status" > /tmp/a11-status
+          exit "$status"
+      - name: Publish A11 diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp /tmp/a11-validation.log /tmp/A11_VALIDATION.log
+          git reset --hard
+          git clean -fdx
+          git fetch origin main
+          git checkout -B chatgpt/a11-diagnostics-output origin/main
+          cp /tmp/A11_VALIDATION.log A11_VALIDATION.log
+          git config user.name "Mining Automation Lead Diagnostics"
+          git config user.email "lead-diagnostics@users.noreply.github.com"
+          git add A11_VALIDATION.log
+          git commit -m "chore(diagnostics): publish latest A11 validation failure"
+          git push --force origin HEAD:chatgpt/a11-diagnostics-output
+      - name: Audit and push exact A11
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          names="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' src/mining_automation/perception/resource_release_campaign.py tests/test_resource_release_live_enable.py tests/test_resource_release_live_readiness.py | sort)"
+          test "$names" = "$expected"
+          test -z "$(git diff --name-only -- src/mining_automation/perception/resource_release_live_readiness.py)"
+          production_diff="$(git diff --unified=0 -- src/mining_automation/perception/resource_release_campaign.py)"
+          test "$(printf '%s\n' "$production_diff" | grep -c '^-LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final\[bool\] = False$')" -eq 1
+          test "$(printf '%s\n' "$production_diff" | grep -c '^+LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final\[bool\] = True$')" -eq 1
+          ! git diff --name-only | grep -E '^src/mining_automation/(navigation|banking)/'
+          git config user.name "Mining Automation Lead"
+          git config user.email "lead@users.noreply.github.com"
+          git add src/mining_automation/perception/resource_release_campaign.py tests/test_resource_release_live_readiness.py tests/test_resource_release_live_enable.py
+          git commit -m "feat(validation): enable exact A11 resource campaign gate"
+          test "$(git rev-parse HEAD^)" = "0d215457fb4b037eedc74cb776a3cf1f5f58a19f"
+          git push origin HEAD:chatgpt/a11-resource-live-enable-only
+
+  navigation-b4:
+    name: B4 exact merge worker with published diagnostics
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/b4-navigation-writer-integration
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Construct exact integration candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "a19b02f090be5165db2baee8b178b19efc4153f5"
+          git fetch origin codex/b-navigation-handle-anchored-real-evidence-writer
+          test "$(git rev-parse FETCH_HEAD)" = "e5d9f3005402070ca0fa8221611dac58580d6d59"
+          git config user.name "Mining Automation Lead"
+          git config user.email "lead@users.noreply.github.com"
+          git merge --no-ff --no-commit -X theirs e5d9f3005402070ca0fa8221611dac58580d6d59
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/mining_automation/navigation/durable_route_evidence.py")
+          text = path.read_text(encoding="utf-8")
+          old = "from dataclasses import dataclass, field"
+          new = "from dataclasses import InitVar, dataclass, field"
+          if text.count(old) != 1 or new in text:
+              raise SystemExit("B4 dataclass import does not match merge candidate")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+          git add src/mining_automation/navigation/durable_route_evidence.py
+          git diff --check --cached
+          test -f src/mining_automation/navigation/endurance_rehearsal.py
+          test -f src/mining_automation/navigation/release_decision.py
+          test -f src/mining_automation/navigation/round_trip_rehearsal.py
+          test -f src/mining_automation/navigation/_windows_handle_anchored.py
+          test -f src/mining_automation/navigation/handle_anchored_route_evidence.py
+      - name: Validate exact B4 candidate
+        shell: bash
+        run: |
+          set +e
+          {
+            python -m pip install -e '.[dev]'
+            ruff check .
+            mypy src
+            pytest tests/test_navigation*.py -x -vv
+            pytest --cov=mining_automation --cov-report=term-missing
+          } > /tmp/b4-validation.log 2>&1
+          status=$?
+          cat /tmp/b4-validation.log
+          echo "$status" > /tmp/b4-status
+          exit "$status"
+      - name: Publish B4 diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp /tmp/b4-validation.log /tmp/B4_VALIDATION.log
+          git merge --abort || true
+          git reset --hard
+          git clean -fdx
+          git fetch origin main
+          git checkout -B chatgpt/b4-diagnostics-output origin/main
+          cp /tmp/B4_VALIDATION.log B4_VALIDATION.log
+          git config user.name "Mining Automation Lead Diagnostics"
+          git config user.email "lead-diagnostics@users.noreply.github.com"
+          git add B4_VALIDATION.log
+          git commit -m "chore(diagnostics): publish latest B4 validation failure"
+          git push --force origin HEAD:chatgpt/b4-diagnostics-output
+      - name: Audit, commit, and push exact B4
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'DURABLE_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE.*False' src/mining_automation/navigation/durable_route_evidence.py
+          grep -q 'HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE.*False' src/mining_automation/navigation/handle_anchored_route_evidence.py
+          ! git diff --name-only a19b02f090be5165db2baee8b178b19efc4153f5 | grep -E '^src/mining_automation/(perception|banking)/'
+          git commit -m "merge(navigation): integrate accepted handle writer into B2 line"
+          parents="$(git rev-list --parents -n 1 HEAD)"
+          test "$parents" = "$(git rev-parse HEAD) a19b02f090be5165db2baee8b178b19efc4153f5 e5d9f3005402070ca0fa8221611dac58580d6d59"
+          git push origin HEAD:chatgpt/b4-navigation-writer-integration
