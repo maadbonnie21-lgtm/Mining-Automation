@@ -46,6 +46,13 @@ jobs:
           assert s.count(old_tail) == 1
           s = s.replace(old_tail, new_tail, 1)
           p.write_text(s)
+
+          p = Path('tests/test_navigation_release_decision.py')
+          s = p.read_text()
+          old = '''        review_id=review.review_id,\n        review_plan_sha256=review.review_plan_sha256,\n        review_journal_head_sha256=review.review_journal_head_sha256,\n        review_finalization_sha256=review.review_finalization_sha256,\n    )\n'''
+          new = '''        review_id=review.review_id,\n        review_plan_sha256=review.review_plan_sha256,\n        review_journal_head_sha256=review.review_journal_head_sha256,\n        review_finalization_sha256=review.review_finalization_sha256,\n        acquisition_physical_identity_sha256=(\n            acquisition.expectation.acquisition_physical_identity_sha256\n        ),\n        review_physical_identity_sha256=review.review_physical_identity_sha256,\n    )\n'''
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, new, 1))
           PY
           git diff --check
       - name: Focused B4 static and release gates
@@ -53,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install -e '.[dev]'
-          ruff check src/mining_automation/navigation/durable_route_evidence.py src/mining_automation/navigation/release_decision.py
+          ruff check src/mining_automation/navigation/durable_route_evidence.py src/mining_automation/navigation/release_decision.py tests/test_navigation_release_decision.py
           mypy src
           pytest tests/test_navigation_release_decision.py tests/test_navigation_durable_route_evidence.py -q
           grep -F 'acquisition_physical_identity_sha256' src/mining_automation/navigation/durable_route_evidence.py
@@ -65,6 +72,6 @@ jobs:
           set -euo pipefail
           git config user.name 'Mining Automation Lead'
           git config user.email 'lead@users.noreply.github.com'
-          git add src/mining_automation/navigation/durable_route_evidence.py
-          git commit -m 'fix(navigation): restore detailed B2 release intake over B3 writer'
+          git add src/mining_automation/navigation/durable_route_evidence.py tests/test_navigation_release_decision.py
+          git commit -m 'fix(navigation): restore B2 release intake over B3 physical identity'
           git push origin HEAD:chatgpt/b4-navigation-writer-integration
