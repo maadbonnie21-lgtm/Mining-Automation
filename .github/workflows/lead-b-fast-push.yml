@@ -1,0 +1,67 @@
+name: Lead B4 fast push
+on:
+  push:
+    branches: [chatgpt/lead-b-fast-push]
+permissions:
+  contents: write
+jobs:
+  b4:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/b4-navigation-writer-integration
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = a19b02f090be5165db2baee8b178b19efc4153f5
+          git fetch origin codex/b-navigation-handle-anchored-real-evidence-writer
+          test "$(git rev-parse FETCH_HEAD)" = e5d9f3005402070ca0fa8221611dac58580d6d59
+          git config user.name "Mining Automation Lead"
+          git config user.email "lead@users.noreply.github.com"
+          git merge --no-ff --no-commit -X theirs e5d9f3005402070ca0fa8221611dac58580d6d59
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/mining_automation/navigation/durable_route_evidence.py')
+          s = p.read_text()
+          old = 'from dataclasses import dataclass, field'
+          new = 'from dataclasses import InitVar, dataclass, field'
+          assert s.count(old) == 1 and new not in s
+          p.write_text(s.replace(old, new))
+          p = Path('tests/test_navigation_release_decision.py')
+          s = p.read_text()
+          a = '        acquisition_finalization_sha256=pins.acquisition_finalization_sha256,\n'
+          r = '        review_finalization_sha256=review.review_finalization_sha256,\n'
+          assert s.count(a) == 1 and s.count(r) == 1
+          s = s.replace(a, a + '        acquisition_physical_identity_sha256=pins.acquisition_physical_identity_sha256,\n', 1)
+          s = s.replace(r, r + '        review_physical_identity_sha256=review.review_physical_identity_sha256,\n', 1)
+          p.write_text(s)
+          PY
+          git add src/mining_automation/navigation/durable_route_evidence.py tests/test_navigation_release_decision.py
+          git diff --check --cached
+      - name: Focused gates
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check .
+          mypy src
+          pytest tests/test_navigation*.py
+      - name: Independent scope audit and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f src/mining_automation/navigation/endurance_rehearsal.py
+          test -f src/mining_automation/navigation/release_decision.py
+          test -f src/mining_automation/navigation/round_trip_rehearsal.py
+          test -f src/mining_automation/navigation/_windows_handle_anchored.py
+          test -f src/mining_automation/navigation/handle_anchored_route_evidence.py
+          grep -q 'DURABLE_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE.*False' src/mining_automation/navigation/durable_route_evidence.py
+          grep -q 'HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE.*False' src/mining_automation/navigation/handle_anchored_route_evidence.py
+          ! git diff --name-only a19b02f090be5165db2baee8b178b19efc4153f5 | grep -E '^src/mining_automation/(perception|banking)/'
+          git commit -m 'merge(navigation): integrate accepted handle writer into B2 line'
+          test "$(git rev-list --parents -n 1 HEAD)" = "$(git rev-parse HEAD) a19b02f090be5165db2baee8b178b19efc4153f5 e5d9f3005402070ca0fa8221611dac58580d6d59"
+          git push origin HEAD:chatgpt/b4-navigation-writer-integration
