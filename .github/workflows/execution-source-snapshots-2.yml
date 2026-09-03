@@ -1,0 +1,42 @@
+name: Execution source snapshots 2
+
+on:
+  push:
+    branches:
+      - chatgpt/execution-source-snapshots
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: c7
+            ref: 861613a3830ebfa9249ef8e89f94a0188e03eadb
+          - lane: c6
+            ref: c7ed7a1b42b26f0f960916538b8f063016c873e7
+          - lane: b4-current
+            ref: d482138c2e9bd73e6acf774e94c4bb3547c3dcc8
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          fetch-depth: 0
+      - name: Verify exact ref and archive
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ matrix.ref }}"
+          git archive --format=zip --output="snapshot-${{ matrix.lane }}.zip" HEAD
+          sha256sum "snapshot-${{ matrix.lane }}.zip" > "snapshot-${{ matrix.lane }}.zip.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-${{ matrix.lane }}-${{ matrix.ref }}
+          path: |
+            snapshot-${{ matrix.lane }}.zip
+            snapshot-${{ matrix.lane }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 1
