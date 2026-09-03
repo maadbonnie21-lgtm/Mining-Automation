@@ -1,0 +1,28 @@
+name: Banking exact-head export
+
+on:
+  push:
+    branches:
+      - chatgpt/banking-export-helper
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 0fa2e11587aa336a5602422dc2f64d71d779d5eb
+          fetch-depth: 0
+      - name: Verify exact head
+        run: test "$(git rev-parse HEAD)" = "0fa2e11587aa336a5602422dc2f64d71d779d5eb"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mining-automation-banking-accepted-source
+          path: |
+            .
+            !.git/**
+          include-hidden-files: true
+          retention-days: 1
