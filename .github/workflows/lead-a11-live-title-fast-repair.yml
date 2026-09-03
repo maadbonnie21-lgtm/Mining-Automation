@@ -1,0 +1,73 @@
+name: Lead A11 live title binding fast repair
+
+on:
+  push:
+    branches: [chatgpt/lead-a11-live-title-fast-repair]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/a11-resource-live-backend-title-fix-v2
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Pin exact authorized parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "01d29ab1c2d8a1849d21c37c9284391cb97119b6"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Patch exact title binding and one regression
+        shell: python
+        run: |
+          from pathlib import Path
+          source = Path('src/mining_automation/perception/resource_release_campaign.py')
+          text = source.read_text(encoding='utf-8')
+          old = '        title_match=DEFAULT_TITLE_SUBSTRING,\n'
+          new = '        title_match=_LIVE_CAPTURE_TITLE_MATCH,\n'
+          assert text.count(old) == 1
+          source.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+
+          tests = Path('tests/test_resource_release_campaign.py')
+          t = tests.read_text(encoding='utf-8')
+          marker = 'def test_windows_capture_environment_reports_source_owned_title_binding() -> None:'
+          assert marker not in t
+          t += '''\n\n\ndef test_windows_capture_environment_reports_source_owned_title_binding() -> None:\n    selected = SimpleNamespace(\n        title=\"RuneLite - private-title\",\n        class_name=\"SunAwtFrame\",\n        hwnd=1234,\n        client_width=1005,\n        client_height=1078,\n    )\n    backend = SimpleNamespace(\n        name=\"windows-runelite\", selected_window=selected, current_dpi=96\n    )\n    environment = campaign._windows_capture_environment(backend)\n    assert campaign.DEFAULT_TITLE_SUBSTRING == \"runelite\"\n    assert environment.title_match == \"RuneLite\"\n    assert environment.window_title == \"RuneLite - private-title\"\n    assert environment.reported_dpi == 96\n'''
+          tests.write_text(t, encoding='utf-8', newline='\n')
+      - name: Exact diff audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t changed < <(git diff --name-only)
+          test "${#changed[@]}" -eq 2
+          test "${changed[0]}" = "src/mining_automation/perception/resource_release_campaign.py"
+          test "${changed[1]}" = "tests/test_resource_release_campaign.py"
+          git diff --check
+          test "$(git diff -- src/mining_automation/perception/resource_release_campaign.py | grep -c '^[-+]        title_match=' )" -eq 2
+      - name: Install
+        run: python -m pip install -e '.[dev]'
+      - name: Ruff
+        run: ruff check src/mining_automation/perception/resource_release_campaign.py tests/test_resource_release_campaign.py
+      - name: Strict mypy
+        run: mypy --strict --platform linux src
+      - name: Exact regression only
+        run: >-
+          python -m pytest -q
+          tests/test_resource_release_campaign.py
+          -k windows_capture_environment_reports_source_owned_title_binding
+      - name: Commit and push corrected child
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "maadbonnie21-lgtm"
+          git config user.email "317453648+maadbonnie21-lgtm@users.noreply.github.com"
+          git add src/mining_automation/perception/resource_release_campaign.py tests/test_resource_release_campaign.py
+          git commit -m "fix(validation): bind live Resource environment to release title"
+          git push origin HEAD:chatgpt/a11-resource-live-backend-title-fix-v2
