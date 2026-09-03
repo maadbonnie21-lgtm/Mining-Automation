@@ -1,0 +1,163 @@
+name: B4 source repair helper
+
+on:
+  push:
+    branches:
+      - chatgpt/b4-source-repair-helper
+
+permissions:
+  contents: write
+
+jobs:
+  repair-validate-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/b4-navigation-writer-integration
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: python -m pip install -e '.[dev]'
+      - name: Apply reviewed B2/B3 compatibility repair
+        shell: python
+        run: |
+          from pathlib import Path
+
+          durable = Path("src/mining_automation/navigation/durable_route_evidence.py")
+          text = durable.read_text(encoding="utf-8")
+          if "class _VerifiedDurableRouteEvidence:" not in text:
+              text = text.replace(
+                  "from dataclasses import dataclass, field",
+                  "from dataclasses import InitVar, dataclass, field",
+                  1,
+              )
+
+              identity_anchor = '''@dataclass(frozen=True, slots=True)\nclass _AcquisitionFilesystemIdentity:\n    root_identity: tuple[int, ...]\n    tree_identity: tuple[tuple[str, bool, tuple[int, ...]], ...]\n'''
+              identity_addition = '''\n\n@dataclass(frozen=True, slots=True)\nclass _ReviewFilesystemIdentity:\n    root_identity: tuple[int, ...]\n    tree_identity: tuple[tuple[str, bool, tuple[int, ...]], ...]\n\n\n@dataclass(frozen=True, slots=True)\nclass _VerifiedDurableRouteEvidence:\n    \"\"\"Detached strict-intake detail for the deny-only release boundary.\"\"\"\n\n    package: FinalizedRouteEvidencePackage\n    review: RouteEvidenceReview\n    report: RouteEvidenceVerificationReport\n    expectation: DurableRouteEvidenceFilesystemExpectation\n    acquisition_filesystem_identity: _AcquisitionFilesystemIdentity\n    review_filesystem_identity: _ReviewFilesystemIdentity\n    activation_allowed: Literal[False] = field(default=False, init=False)\n    input_authority: Literal[False] = field(default=False, init=False)\n    _factory_token: InitVar[object | None] = None\n\n    def __post_init__(self, _factory_token: object | None) -> None:\n        if _factory_token is not _FACTORY_TOKEN:\n            raise ValueError(\"verified durable route evidence requires its strict loader\")\n        if type(self.package) is not FinalizedRouteEvidencePackage:\n            raise ValueError(\"verified durable route evidence requires an exact package\")\n        if type(self.review) is not RouteEvidenceReview:\n            raise ValueError(\"verified durable route evidence requires an exact review\")\n        if type(self.report) is not RouteEvidenceVerificationReport:\n            raise ValueError(\"verified durable route evidence requires an exact report\")\n        if type(self.expectation) is not DurableRouteEvidenceFilesystemExpectation:\n            raise ValueError(\"verified durable route evidence requires exact caller pins\")\n        if type(self.acquisition_filesystem_identity) is not _AcquisitionFilesystemIdentity:\n            raise ValueError(\"verified durable route evidence lacks acquisition identity\")\n        if type(self.review_filesystem_identity) is not _ReviewFilesystemIdentity:\n            raise ValueError(\"verified durable route evidence lacks review identity\")\n        if self.activation_allowed is not False or self.input_authority is not False:\n            raise ValueError(\"verified durable route evidence cannot carry authority\")\n'''
+              if identity_anchor not in text:
+                  raise SystemExit("missing acquisition identity insertion anchor")
+              text = text.replace(identity_anchor, identity_anchor + identity_addition, 1)
+
+              for function_name, expected_type, message in (
+                  (
+                      "_snapshot_acquisition_expectation",
+                      "DurableAcquisitionFilesystemExpectation",
+                      "durable acquisition expectation carries mutated authority fields",
+                  ),
+                  (
+                      "_snapshot_full_expectation",
+                      "DurableRouteEvidenceFilesystemExpectation",
+                      "durable route expectation carries mutated authority fields",
+                  ),
+              ):
+                  marker = (
+                      f"def {function_name}(\n"
+                      f"    value: {expected_type},\n"
+                      f") -> {expected_type}:\n"
+                      f"    if type(value) is not {expected_type}:\n"
+                      f"        raise TypeError(\"expectation must be {expected_type}\")\n"
+                  )
+                  if marker not in text:
+                      raise SystemExit(f"missing {function_name} guard anchor")
+                  guard = (
+                      "    if (\n"
+                      "        value.evidence_role != SYNTHETIC_ROUTE_EVIDENCE_ROLE\n"
+                      "        or value.activation_allowed is not False\n"
+                      "        or value.input_authority is not False\n"
+                      "    ):\n"
+                      f"        raise ValueError(\"{message}\")\n"
+                  )
+                  text = text.replace(marker, marker + guard, 1)
+
+              review_identity = '''\n\ndef _review_filesystem_identity(\n    root_signature: tuple[int, ...],\n    tree: Mapping[str, _TreeEntry],\n) -> _ReviewFilesystemIdentity:\n    return _ReviewFilesystemIdentity(\n        root_identity=_directory_signature_identity(root_signature),\n        tree_identity=tuple(\n            (\n                relative,\n                entry.is_directory,\n                (\n                    _directory_signature_identity(entry.signature)\n                    if entry.is_directory\n                    else entry.signature\n                ),\n            )\n            for relative, entry in sorted(tree.items())\n        ),\n    )\n'''
+              load_anchor = "\n\ndef load_durable_acquisition(\n"
+              if load_anchor not in text:
+                  raise SystemExit("missing load_durable_acquisition insertion anchor")
+              text = text.replace(load_anchor, review_identity + load_anchor, 1)
+
+              public_header = '''def load_and_verify_durable_synthetic_route_evidence(\n    acquisition_root: str | os.PathLike[str],\n    review_root: str | os.PathLike[str],\n    expectation: DurableRouteEvidenceFilesystemExpectation,\n) -> RouteEvidenceVerificationReport:\n    \"\"\"Verify exact separate roots without granting release or input authority.\"\"\"\n'''
+              detailed_header = '''def _load_and_verify_durable_synthetic_route_evidence_detailed(\n    acquisition_root: str | os.PathLike[str],\n    review_root: str | os.PathLike[str],\n    expectation: DurableRouteEvidenceFilesystemExpectation,\n) -> _VerifiedDurableRouteEvidence:\n    \"\"\"Verify exact roots and retain detached detail for deny-only binding.\"\"\"\n'''
+              if public_header not in text:
+                  raise SystemExit("missing public durable loader header")
+              text = text.replace(public_header, detailed_header, 1)
+
+              final_return = "    return report\n"
+              position = text.rfind(final_return)
+              if position < 0:
+                  raise SystemExit("missing durable loader terminal report return")
+              replacement = '''    return _VerifiedDurableRouteEvidence(\n        package=package,\n        review=review,\n        report=report,\n        expectation=owned_expectation,\n        acquisition_filesystem_identity=acquisition.filesystem_identity,\n        review_filesystem_identity=_review_filesystem_identity(root_signature, initial_tree),\n        _factory_token=_FACTORY_TOKEN,\n    )\n\n\ndef load_and_verify_durable_synthetic_route_evidence(\n    acquisition_root: str | os.PathLike[str],\n    review_root: str | os.PathLike[str],\n    expectation: DurableRouteEvidenceFilesystemExpectation,\n) -> RouteEvidenceVerificationReport:\n    \"\"\"Verify exact separate roots without granting release or input authority.\"\"\"\n\n    return _load_and_verify_durable_synthetic_route_evidence_detailed(\n        acquisition_root,\n        review_root,\n        expectation,\n    ).report\n'''
+              text = text[:position] + replacement + text[position + len(final_return):]
+              durable.write_text(text, encoding="utf-8")
+
+          tests = Path("tests/test_navigation_release_decision.py")
+          test_text = tests.read_text(encoding="utf-8")
+          acquisition_pin = (
+              "        acquisition_finalization_sha256=pins.acquisition_finalization_sha256,\n"
+          )
+          if "acquisition_physical_identity_sha256=pins.acquisition_physical_identity_sha256" not in test_text:
+              if acquisition_pin not in test_text:
+                  raise SystemExit("missing acquisition physical pin test anchor")
+              test_text = test_text.replace(
+                  acquisition_pin,
+                  acquisition_pin
+                  + "        acquisition_physical_identity_sha256=(\n"
+                  + "            pins.acquisition_physical_identity_sha256\n"
+                  + "        ),\n",
+                  1,
+              )
+          review_pin = (
+              "        review_finalization_sha256=review.review_finalization_sha256,\n"
+          )
+          if "review_physical_identity_sha256=review.review_physical_identity_sha256" not in test_text:
+              if review_pin not in test_text:
+                  raise SystemExit("missing review physical pin test anchor")
+              test_text = test_text.replace(
+                  review_pin,
+                  review_pin
+                  + "        review_physical_identity_sha256=(\n"
+                  + "            review.review_physical_identity_sha256\n"
+                  + "        ),\n",
+                  1,
+              )
+          old_count = "    assert call_count == 4\n"
+          new_count = (
+              "    # B3 physical identity rejects the mutation at the first repeated intake.\n"
+              "    assert call_count == 3\n"
+          )
+          if old_count in test_text:
+              test_text = test_text.replace(old_count, new_count, 1)
+          elif new_count not in test_text:
+              raise SystemExit("repeated-intake call-count contract is neither old nor repaired")
+          old_error = '        match="changed between repeated intake snapshots",\n'
+          new_error = '        match="durable acquisition physical identity differs",\n'
+          if old_error in test_text:
+              test_text = test_text.replace(old_error, new_error, 1)
+          elif new_error not in test_text:
+              raise SystemExit("repeated-intake error contract is neither old nor repaired")
+          tests.write_text(test_text, encoding="utf-8")
+      - name: Ruff
+        run: ruff check .
+      - name: Strict Linux mypy
+        run: mypy --strict --platform linux src
+      - name: Focused B4 durable and release tests
+        run: python -m pytest -q tests/test_navigation_durable_route_evidence.py tests/test_navigation_release_decision.py
+      - name: All navigation tests
+        run: python -m pytest -q tests/test_navigation*.py
+      - name: Full repository pytest
+        run: python -m pytest -q
+      - name: Commit source repair only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'crusader-row-command-center'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src/mining_automation/navigation/durable_route_evidence.py tests/test_navigation_release_decision.py
+          if git diff --cached --quiet; then
+            echo 'B4 source repair already present.'
+            exit 0
+          fi
+          git commit -m 'fix(navigation): integrate B2 release detail with B3 physical identity'
+          git push origin HEAD:chatgpt/b4-navigation-writer-integration
