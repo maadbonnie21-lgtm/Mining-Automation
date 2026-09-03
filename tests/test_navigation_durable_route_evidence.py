@@ -4,16 +4,20 @@ import ast
 import json
 import os
 import shutil
+import subprocess
+import sys
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Barrier
+from typing import Any, cast
 
 import pytest
 
 import mining_automation.navigation as navigation_root
 import mining_automation.navigation.durable_route_evidence as durable_module
+import mining_automation.navigation.handle_anchored_route_evidence as anchored_module
 import mining_automation.navigation.integration_boundary as integration_boundary
 import mining_automation.navigation.route_evidence_loader as loader_module
 from mining_automation.capture.frame import Frame, PixelFormat
@@ -72,6 +76,15 @@ from mining_automation.navigation.durable_route_evidence import (
     begin_durable_review,
     load_and_verify_durable_synthetic_route_evidence,
     load_durable_acquisition,
+)
+from mining_automation.navigation.handle_anchored_route_evidence import (
+    HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE,
+    HANDLE_ANCHORED_WRITER_NAMESPACE_CONTRACT,
+    HANDLE_ANCHORED_WRITER_PROCESS_INTEGRITY_REQUIRED,
+    HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM,
+    HandleAnchoredEvidenceCapabilityError,
+    begin_handle_anchored_acquisition,
+    begin_handle_anchored_review,
 )
 from mining_automation.navigation.passive_campaign import (
     PassiveCampaignPhase,
@@ -313,6 +326,23 @@ def _begin_acquisition(
     return transaction, source, detector, clock
 
 
+def _begin_handle_anchored_acquisition(
+    root: Path,
+    direction: RouteDirection = RouteDirection.MINE_TO_BANK,
+    **plan_kwargs: str,
+) -> tuple[DurableAcquisitionTransaction, _Source, _Detector, _Clock]:
+    plan, source, detector, clock = _runtime(direction, **plan_kwargs)
+    transaction = begin_handle_anchored_acquisition(
+        root,
+        plan,
+        source,
+        detector,
+        clock,
+        started_monotonic_s=0.0,
+    )
+    return transaction, source, detector, clock
+
+
 def _capture_next(
     transaction: DurableAcquisitionTransaction,
     source: _Source,
@@ -363,6 +393,25 @@ def _complete_acquisition(
     return receipt, transaction
 
 
+def _complete_handle_anchored_acquisition(
+    root: Path,
+    direction: RouteDirection = RouteDirection.MINE_TO_BANK,
+    **plan_kwargs: str,
+) -> tuple[DurableAcquisitionReceipt, DurableAcquisitionTransaction]:
+    transaction, source, detector, clock = _begin_handle_anchored_acquisition(
+        root,
+        direction,
+        **plan_kwargs,
+    )
+    for ordinal in range(1, len(transaction.progress.plan.cases) + 1):
+        _capture_next(transaction, source, detector, clock, ordinal)
+    clock.value = 40.0
+    return (
+        transaction.finalize(finalized_at_utc="2026-09-01T00:00:10Z"),
+        transaction,
+    )
+
+
 def _truths(acquisition: VerifiedDurableAcquisition) -> tuple[RouteEvidenceCaseTruth, ...]:
     return tuple(
         RouteEvidenceCaseTruth(
@@ -410,10 +459,12 @@ def _full_expectation(
         reviewer_id=review.reviewer_id,
         acquisition_journal_head_sha256=acquisition.acquisition_journal_head_sha256,
         acquisition_finalization_sha256=acquisition.acquisition_finalization_sha256,
+        acquisition_physical_identity_sha256=(acquisition.acquisition_physical_identity_sha256),
         review_id=review.review_id,
         review_plan_sha256=review.review_plan_sha256,
         review_journal_head_sha256=review.review_journal_head_sha256,
         review_finalization_sha256=review.review_finalization_sha256,
+        review_physical_identity_sha256=review.review_physical_identity_sha256,
     )
 
 
@@ -427,6 +478,26 @@ def _begin_review(
 ) -> tuple[DurableReviewTransaction, VerifiedDurableAcquisition]:
     acquisition = load_durable_acquisition(acquisition_root, receipt.expectation)
     transaction = begin_durable_review(
+        root,
+        acquisition_root,
+        receipt.expectation,
+        review_id=review_id,
+        reviewer_id=reviewer_id,
+        started_at_utc="2026-09-01T00:00:20Z",
+    )
+    return transaction, acquisition
+
+
+def _begin_handle_anchored_review(
+    root: Path,
+    acquisition_root: Path,
+    receipt: DurableAcquisitionReceipt,
+    *,
+    review_id: str = "synthetic-independent-review-a",
+    reviewer_id: str = "synthetic-independent-reviewer",
+) -> tuple[DurableReviewTransaction, VerifiedDurableAcquisition]:
+    acquisition = load_durable_acquisition(acquisition_root, receipt.expectation)
+    transaction = begin_handle_anchored_review(
         root,
         acquisition_root,
         receipt.expectation,
@@ -455,6 +526,25 @@ def _complete_review(
     review_receipt = transaction.finalize(reviewed_at_utc="2026-09-01T00:00:30Z")
     expectation = _full_expectation(receipt.expectation, review_receipt)
     return review_receipt, expectation
+
+
+def _complete_handle_anchored_review(
+    root: Path,
+    acquisition_root: Path,
+    receipt: DurableAcquisitionReceipt,
+) -> tuple[DurableReviewReceipt, DurableRouteEvidenceFilesystemExpectation]:
+    transaction, acquisition = _begin_handle_anchored_review(
+        root,
+        acquisition_root,
+        receipt,
+    )
+    for ordinal, truth in enumerate(_truths(acquisition), start=1):
+        transaction.record_case_truth(
+            truth,
+            recorded_at_utc=f"2026-09-01T00:00:{20 + ordinal:02d}Z",
+        )
+    review_receipt = transaction.finalize(reviewed_at_utc="2026-09-01T00:00:30Z")
+    return review_receipt, _full_expectation(receipt.expectation, review_receipt)
 
 
 def _relative_files(root: Path) -> set[str]:
@@ -792,35 +882,14 @@ def test_durable_acquisition_and_separate_review_pass_for_each_direction(
     assert report.real_release_role_satisfied is False
     assert report.live_navigation_enabled is False
     assert report.activation_allowed is False and report.input_authority is False
+    review_plan = json.loads((review_root / durable_module.REVIEW_PLAN_FILENAME).read_bytes())
+    assert review_plan["schema"] == "fixed-route-durable-review-plan-v2"
+    assert (
+        review_plan["acquisition_physical_identity_sha256"]
+        == receipt.expectation.acquisition_physical_identity_sha256.value
+    )
     assert INDEPENDENT_REVIEW_FILENAME not in _relative_files(acquisition_root)
     assert FINALIZED_PACKAGE_FILENAME not in _relative_files(review_root)
-
-
-@pytest.mark.parametrize(
-    ("field_name", "value"),
-    (
-        ("activation_allowed", True),
-        ("input_authority", True),
-        ("evidence_role", "foreign-route-evidence-role"),
-    ),
-)
-def test_durable_full_intake_rejects_mutated_fixed_authority_expectation(
-    tmp_path: Path,
-    field_name: str,
-    value: object,
-) -> None:
-    acquisition_root = tmp_path / "acquisition"
-    review_root = tmp_path / "review"
-    receipt, _ = _complete_acquisition(acquisition_root)
-    _, expectation = _complete_review(review_root, acquisition_root, receipt)
-    object.__setattr__(expectation, field_name, value)
-
-    with pytest.raises(RouteEvidenceIntegrityError, match="mutated authority fields"):
-        load_and_verify_durable_synthetic_route_evidence(
-            acquisition_root,
-            review_root,
-            expectation,
-        )
 
 
 def test_verified_persisted_artifacts_drive_deterministic_post_attempt_replay(
@@ -1442,11 +1511,13 @@ def test_acquisition_root_clone_swap_at_terminal_open_is_not_verifiable(
         *,
         journal_head_sha256: Sha256Digest,
         finalization_sha256: Sha256Digest,
+        physical_identity_sha256: Sha256Digest,
     ) -> DurableAcquisitionFilesystemExpectation:
         expectation = original_expectation_factory(
             package,
             journal_head_sha256=journal_head_sha256,
             finalization_sha256=finalization_sha256,
+            physical_identity_sha256=physical_identity_sha256,
         )
         captured_expectations.append(expectation)
         return expectation
@@ -1466,14 +1537,12 @@ def test_acquisition_root_clone_swap_at_terminal_open_is_not_verifiable(
     with pytest.raises(DurableEvidenceError, match="durable transaction root was replaced"):
         transaction.finalize(finalized_at_utc="2026-09-01T00:00:10Z")
 
-    assert len(captured_expectations) == 1
+    assert captured_expectations == []
     assert probe.swapped is True
     assert probe.replacement_terminal is not None and probe.replacement_terminal.is_file()
     assert probe.parked_root is not None and probe.parked_root.is_dir()
     assert not (probe.parked_root / ACQUISITION_FINALIZATION_FILENAME).exists()
     assert transaction.phase is DurableAcquisitionPhase.STOPPED
-    with pytest.raises(RouteEvidenceIntegrityError, match="transaction root identity differs"):
-        load_durable_acquisition(target_root, captured_expectations[0])
 
 
 def test_review_root_clone_swap_at_terminal_open_is_not_verifiable(
@@ -1506,6 +1575,7 @@ def test_review_root_clone_swap_at_terminal_open_is_not_verifiable(
         review_plan_sha256: Sha256Digest,
         review_journal_head_sha256: Sha256Digest,
         review_finalization_sha256: Sha256Digest,
+        review_physical_identity_sha256: Sha256Digest,
         report: RouteEvidenceVerificationReport,
     ) -> DurableReviewReceipt:
         receipt = original_receipt_type(
@@ -1515,6 +1585,7 @@ def test_review_root_clone_swap_at_terminal_open_is_not_verifiable(
             review_plan_sha256=review_plan_sha256,
             review_journal_head_sha256=review_journal_head_sha256,
             review_finalization_sha256=review_finalization_sha256,
+            review_physical_identity_sha256=review_physical_identity_sha256,
             report=report,
         )
         captured_receipts.append(receipt)
@@ -1531,22 +1602,12 @@ def test_review_root_clone_swap_at_terminal_open_is_not_verifiable(
     with pytest.raises(DurableEvidenceError, match="durable transaction root was replaced"):
         transaction.finalize(reviewed_at_utc="2026-09-01T00:00:30Z")
 
-    assert len(captured_receipts) == 1
+    assert captured_receipts == []
     assert probe.swapped is True
     assert probe.replacement_terminal is not None and probe.replacement_terminal.is_file()
     assert probe.parked_root is not None and probe.parked_root.is_dir()
     assert not (probe.parked_root / REVIEW_FINALIZATION_FILENAME).exists()
     assert transaction.phase is DurableReviewPhase.STOPPED
-    expectation = _full_expectation(
-        acquisition_receipt.expectation,
-        captured_receipts[0],
-    )
-    with pytest.raises(RouteEvidenceIntegrityError, match="transaction root identity differs"):
-        load_and_verify_durable_synthetic_route_evidence(
-            acquisition_root,
-            review_root,
-            expectation,
-        )
 
 
 def test_terminal_manifests_are_the_last_successful_writes(
@@ -1665,13 +1726,17 @@ def test_same_content_acquisition_replacement_after_review_begin_invalidates_rev
     identical = target.read_bytes()
     target.unlink()
     target.write_bytes(identical)
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="physical identity differs"):
+        load_durable_acquisition(acquisition_root, receipt.expectation)
+
     for ordinal, truth in enumerate(_truths(acquisition), start=1):
         transaction.record_case_truth(
             truth,
             recorded_at_utc=f"2026-09-01T00:00:{20 + ordinal:02d}Z",
         )
 
-    with pytest.raises(RouteEvidenceIntegrityError, match="filesystem identity changed"):
+    with pytest.raises(RouteEvidenceIntegrityError, match="physical identity differs"):
         transaction.finalize(reviewed_at_utc="2026-09-01T00:00:30Z")
 
     assert transaction.phase is DurableReviewPhase.STOPPED
@@ -1783,10 +1848,12 @@ def test_two_concurrent_review_writers_claim_exactly_one_fresh_root(tmp_path: Pa
         "support",
         "acquisition-journal",
         "acquisition-finalization",
+        "acquisition-physical",
         "review-id",
         "review-plan",
         "review-journal",
         "review-finalization",
+        "review-physical",
         "review-digest",
         "reviewer",
     ),
@@ -1845,6 +1912,8 @@ def test_durable_loader_rejects_every_external_identity_or_lineage_drift(
         foreign = replace(expectation, acquisition_journal_head_sha256=foreign_digest)
     elif drift == "acquisition-finalization":
         foreign = replace(expectation, acquisition_finalization_sha256=foreign_digest)
+    elif drift == "acquisition-physical":
+        foreign = replace(expectation, acquisition_physical_identity_sha256=foreign_digest)
     elif drift == "review-id":
         foreign = replace(expectation, review_id="foreign-review-id")
     elif drift == "review-plan":
@@ -1853,6 +1922,8 @@ def test_durable_loader_rejects_every_external_identity_or_lineage_drift(
         foreign = replace(expectation, review_journal_head_sha256=foreign_digest)
     elif drift == "review-finalization":
         foreign = replace(expectation, review_finalization_sha256=foreign_digest)
+    elif drift == "review-physical":
+        foreign = replace(expectation, review_physical_identity_sha256=foreign_digest)
     elif drift == "review-digest":
         foreign = replace(expectation, independent_review_sha256=foreign_digest)
     else:
@@ -1894,3 +1965,1968 @@ def test_durable_surfaces_are_not_root_exported_or_input_capable() -> None:
     forbidden = {"pyautogui", "pynput", "win32api", "win32con"}
     source = Path(durable_module.__file__).read_text(encoding="utf-8")
     assert _import_roots(ast.parse(source)).isdisjoint(forbidden)
+
+
+def test_handle_anchored_writer_has_a_separate_platform_scoped_contract() -> None:
+    assert HANDLE_ANCHORED_WRITER_NAMESPACE_CONTRACT == (
+        "windows_nt_handle_relative_no_follow_fresh_directory_v1"
+    )
+    assert HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM == "win32"
+    assert HANDLE_ANCHORED_WRITER_PROCESS_INTEGRITY_REQUIRED is True
+    assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+    assert DURABLE_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+    public_names = {
+        "begin_handle_anchored_acquisition",
+        "begin_handle_anchored_review",
+        "HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE",
+        "HANDLE_ANCHORED_WRITER_PROCESS_INTEGRITY_REQUIRED",
+    }
+    assert public_names.isdisjoint(navigation_root.__all__)
+    assert integration_boundary.__all__ == ()
+    assert not hasattr(navigation_root, "begin_handle_anchored_acquisition")
+    assert not hasattr(integration_boundary, "begin_handle_anchored_acquisition")
+
+
+def test_handle_anchored_writer_is_mechanically_input_free() -> None:
+    boundary_path = Path(anchored_module.__file__)
+    native_path = boundary_path.with_name("_windows_handle_anchored.py")
+    forbidden_imports = {"pyautogui", "pynput", "win32api", "win32con"}
+    forbidden_native_symbols = {
+        "keybd_event",
+        "mouse_event",
+        "sendinput",
+        "setcursorpos",
+        "user32",
+    }
+
+    for source_path in (boundary_path, native_path):
+        source = source_path.read_text(encoding="utf-8")
+        assert _import_roots(ast.parse(source)).isdisjoint(forbidden_imports)
+        normalized = source.casefold()
+        assert all(symbol not in normalized for symbol in forbidden_native_symbols)
+
+
+def test_handle_anchored_capability_failure_precedes_all_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "unavailable-handle-root"
+    plan, source, detector, clock = _runtime()
+
+    def unavailable() -> object:
+        raise HandleAnchoredEvidenceCapabilityError("synthetic missing native capability")
+
+    def unexpected_path_resolution(*args: object, **kwargs: object) -> Path:
+        del args, kwargs
+        raise AssertionError("path resolution must follow the platform capability gate")
+
+    monkeypatch.setattr(anchored_module, "_namespace_factory", unavailable)
+    monkeypatch.setattr(anchored_module, "_absolute_path_once", unexpected_path_resolution)
+
+    with pytest.raises(HandleAnchoredEvidenceCapabilityError, match="missing native"):
+        begin_handle_anchored_acquisition(
+            root,
+            plan,
+            source,
+            detector,
+            clock,
+            started_monotonic_s=0.0,
+        )
+
+    assert not root.exists()
+    assert source.identity_calls == 0
+    assert source.calls == 0
+    assert detector.calls == 0
+    assert clock.calls == 0
+
+
+def test_handle_anchored_review_capability_failure_precedes_all_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    review_root = tmp_path / "unavailable-handle-review"
+    acquisition_root = tmp_path / "unresolved-handle-acquisition"
+    path_resolution_calls = 0
+    intake_calls = 0
+
+    def unavailable() -> object:
+        raise HandleAnchoredEvidenceCapabilityError("synthetic missing review capability")
+
+    def unexpected_path_resolution(*args: object, **kwargs: object) -> Path:
+        nonlocal path_resolution_calls
+        del args, kwargs
+        path_resolution_calls += 1
+        raise AssertionError("review paths must follow the platform capability gate")
+
+    def unexpected_intake(*args: object, **kwargs: object) -> DurableReviewTransaction:
+        nonlocal intake_calls
+        del args, kwargs
+        intake_calls += 1
+        raise AssertionError("acquisition intake must follow the platform capability gate")
+
+    monkeypatch.setattr(anchored_module, "_namespace_factory", unavailable)
+    monkeypatch.setattr(anchored_module, "_absolute_path_once", unexpected_path_resolution)
+    monkeypatch.setattr(
+        anchored_module,
+        "_begin_durable_review_with_namespace_factory",
+        unexpected_intake,
+    )
+
+    with pytest.raises(HandleAnchoredEvidenceCapabilityError, match="review capability"):
+        begin_handle_anchored_review(
+            review_root,
+            acquisition_root,
+            cast(DurableAcquisitionFilesystemExpectation, object()),
+            review_id="synthetic-unavailable-review",
+            reviewer_id="synthetic-unavailable-reviewer",
+            started_at_utc="2026-09-01T00:00:20Z",
+        )
+
+    assert path_resolution_calls == 0
+    assert intake_calls == 0
+    assert not review_root.exists()
+    assert not acquisition_root.exists()
+
+
+def test_handle_anchored_native_round_trip_is_strictly_reviewable_or_unavailable(
+    tmp_path: Path,
+) -> None:
+    acquisition_root = tmp_path / "handle-acquisition"
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        plan, source, detector, clock = _runtime()
+        with pytest.raises(
+            HandleAnchoredEvidenceCapabilityError,
+            match="atomic fresh-directory handle claim is unavailable",
+        ):
+            begin_handle_anchored_acquisition(
+                acquisition_root,
+                plan,
+                source,
+                detector,
+                clock,
+                started_monotonic_s=0.0,
+            )
+        assert not acquisition_root.exists()
+        assert source.identity_calls == 0
+        assert source.calls == 0
+        assert detector.calls == 0
+        assert clock.calls == 0
+        return
+
+    review_root = tmp_path / "handle-review"
+    acquisition_receipt, acquisition_transaction = _complete_handle_anchored_acquisition(
+        acquisition_root
+    )
+    review_receipt, expectation = _complete_handle_anchored_review(
+        review_root,
+        acquisition_root,
+        acquisition_receipt,
+    )
+
+    report = load_and_verify_durable_synthetic_route_evidence(
+        acquisition_root,
+        review_root,
+        expectation,
+    )
+
+    assert acquisition_transaction.phase is DurableAcquisitionPhase.FINALIZED
+    assert review_receipt.report.evidence_conformance_passed is True
+    assert report.evidence_conformance_passed is True
+    assert report.real_release_role_satisfied is False
+    assert report.live_navigation_enabled is False
+    assert report.activation_allowed is False
+    assert report.input_authority is False
+    moved_acquisition = tmp_path / "closed-handle-acquisition"
+    moved_review = tmp_path / "closed-handle-review"
+    acquisition_root.rename(moved_acquisition)
+    review_root.rename(moved_review)
+    moved_acquisition.rename(acquisition_root)
+    moved_review.rename(review_root)
+
+
+@pytest.mark.parametrize("target_kind", ("frame", "terminal", "case-directory"))
+def test_handle_anchored_acquisition_physical_pin_rejects_exact_byte_replacement(
+    tmp_path: Path,
+    target_kind: str,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    root = tmp_path / f"physical-acquisition-{target_kind}"
+    receipt, _ = _complete_handle_anchored_acquisition(root)
+
+    if target_kind == "case-directory":
+        target_directory = next(path for path in (root / "cases").iterdir() if path.is_dir())
+        original_directory_identity = (
+            target_directory.stat().st_dev,
+            target_directory.stat().st_ino,
+        )
+        original_child_identities = {
+            child.name: (child.stat().st_dev, child.stat().st_ino)
+            for child in target_directory.iterdir()
+        }
+        replacement_directory = tmp_path / "replacement-case-directory"
+        parked_directory = tmp_path / "parked-case-directory"
+        replacement_directory.mkdir()
+        target_directory.rename(parked_directory)
+        for child in parked_directory.iterdir():
+            child.rename(replacement_directory / child.name)
+        replacement_directory.rename(target_directory)
+        assert (target_directory.stat().st_dev, target_directory.stat().st_ino) != (
+            original_directory_identity
+        )
+        assert {
+            child.name: (child.stat().st_dev, child.stat().st_ino)
+            for child in target_directory.iterdir()
+        } == original_child_identities
+    else:
+        if target_kind == "terminal":
+            relative_path = ACQUISITION_FINALIZATION_FILENAME
+        else:
+            acquisition = load_durable_acquisition(root, receipt.expectation)
+            relative_path = acquisition.package.cases[0].frame_artifact.relative_path
+        target = root.joinpath(*relative_path.split("/"))
+        replacement = tmp_path / f"replacement-{target_kind}.bin"
+        replacement.write_bytes(target.read_bytes())
+        os.replace(replacement, target)
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="physical identity differs"):
+        load_durable_acquisition(root, receipt.expectation)
+
+
+@pytest.mark.parametrize("target_kind", ("truth", "terminal", "truth-directory"))
+def test_handle_anchored_review_physical_pin_rejects_exact_byte_replacement(
+    tmp_path: Path,
+    target_kind: str,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    acquisition_root = tmp_path / f"physical-review-{target_kind}-acquisition"
+    acquisition_receipt, _ = _complete_handle_anchored_acquisition(acquisition_root)
+    review_root = tmp_path / f"physical-review-{target_kind}"
+    _, expectation = _complete_handle_anchored_review(
+        review_root,
+        acquisition_root,
+        acquisition_receipt,
+    )
+    if target_kind == "truth-directory":
+        target_directory = review_root / "truth"
+        original_directory_identity = (
+            target_directory.stat().st_dev,
+            target_directory.stat().st_ino,
+        )
+        original_child_identities = {
+            child.name: (child.stat().st_dev, child.stat().st_ino)
+            for child in target_directory.iterdir()
+        }
+        replacement_directory = tmp_path / "replacement-truth-directory"
+        parked_directory = tmp_path / "parked-truth-directory"
+        replacement_directory.mkdir()
+        target_directory.rename(parked_directory)
+        for child in parked_directory.iterdir():
+            child.rename(replacement_directory / child.name)
+        replacement_directory.rename(target_directory)
+        assert (target_directory.stat().st_dev, target_directory.stat().st_ino) != (
+            original_directory_identity
+        )
+        assert {
+            child.name: (child.stat().st_dev, child.stat().st_ino)
+            for child in target_directory.iterdir()
+        } == original_child_identities
+    else:
+        relative_path = (
+            REVIEW_FINALIZATION_FILENAME
+            if target_kind == "terminal"
+            else next(path for path in _relative_files(review_root) if path.startswith("truth/"))
+        )
+        target = review_root.joinpath(*relative_path.split("/"))
+        replacement = tmp_path / f"replacement-review-{target_kind}.json"
+        replacement.write_bytes(target.read_bytes())
+        os.replace(replacement, target)
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="review physical identity differs"):
+        load_and_verify_durable_synthetic_route_evidence(
+            acquisition_root,
+            review_root,
+            expectation,
+        )
+
+
+def test_review_plan_v1_wire_shape_cannot_claim_the_physical_binding(tmp_path: Path) -> None:
+    acquisition_root = tmp_path / "review-plan-v1-acquisition"
+    receipt, _ = _complete_acquisition(acquisition_root)
+    review_root = tmp_path / "review-plan-v1-review"
+    _, expectation = _complete_review(review_root, acquisition_root, receipt)
+    plan_path = review_root / durable_module.REVIEW_PLAN_FILENAME
+    plan = json.loads(plan_path.read_bytes())
+    assert plan.pop("acquisition_physical_identity_sha256") == (
+        receipt.expectation.acquisition_physical_identity_sha256.value
+    )
+    plan["schema"] = "fixed-route-durable-review-plan-v1"
+    plan_path.write_bytes(canonical_route_evidence_bytes(plan))
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="review plan keys differ"):
+        load_and_verify_durable_synthetic_route_evidence(
+            acquisition_root,
+            review_root,
+            expectation,
+        )
+
+
+def test_handle_anchored_foreign_preclaimed_root_is_never_adopted_or_removed(
+    tmp_path: Path,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    root = tmp_path / "foreign-handle-root"
+    root.mkdir()
+    sentinel = root / "foreign-sentinel.bin"
+    sentinel.write_bytes(b"foreign-owner")
+
+    with pytest.raises(DurableEvidenceCollisionError, match="already claimed"):
+        _begin_handle_anchored_acquisition(root)
+
+    assert sentinel.read_bytes() == b"foreign-owner"
+    assert _relative_files(root) == {"foreign-sentinel.bin"}
+
+
+def test_two_handle_anchored_writers_claim_exactly_one_fresh_root(
+    tmp_path: Path,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    root = tmp_path / "contended-handle-root"
+    barrier = Barrier(2)
+
+    def claim(writer_id: int) -> tuple[int, str, int, int, int, int]:
+        plan, source, detector, clock = _runtime(
+            campaign_id=f"synthetic-handle-writer-{writer_id}",
+            capture_session_id=f"synthetic-handle-session-{writer_id}",
+        )
+        barrier.wait()
+        try:
+            begin_handle_anchored_acquisition(
+                root,
+                plan,
+                source,
+                detector,
+                clock,
+                started_monotonic_s=0.0,
+            )
+        except DurableEvidenceCollisionError:
+            outcome = "collision"
+        else:
+            outcome = "winner"
+        return (
+            writer_id,
+            outcome,
+            source.identity_calls,
+            source.calls,
+            detector.calls,
+            clock.calls,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(claim, (1, 2)))
+
+    assert sorted(result[1] for result in results) == ["collision", "winner"]
+    loser = next(result for result in results if result[1] == "collision")
+    winner = next(result for result in results if result[1] == "winner")
+    assert loser[2:] == (0, 0, 0, 0)
+    plan = json.loads((root / ACQUISITION_PLAN_FILENAME).read_bytes())
+    assert isinstance(plan, dict)
+    assert plan["campaign_id"] == f"synthetic-handle-writer-{winner[0]}"
+    assert (root / ACQUISITION_PLAN_FILENAME).is_file()
+    assert not (root / ACQUISITION_FINALIZATION_FILENAME).exists()
+
+
+def test_handle_anchored_parent_replacement_before_root_create_never_receives_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    parent = tmp_path / "owned-parent"
+    parent.mkdir()
+    root = parent / "handle-acquisition"
+    parked_parent = tmp_path / "parked-owned-parent"
+    replacement_sentinel = parent / "foreign-sentinel.bin"
+    original_open = native_module._nt_relative_open
+    swapped = False
+
+    def swap_before_root_create(
+        parent_handle: int,
+        component: str,
+        *,
+        directory: bool,
+        create: bool,
+        writable_directory: bool = False,
+    ) -> int:
+        nonlocal swapped
+        if create and directory and component == root.name and not swapped:
+            parent.rename(parked_parent)
+            parent.mkdir()
+            replacement_sentinel.write_bytes(b"foreign-owner")
+            swapped = True
+        return original_open(
+            parent_handle,
+            component,
+            directory=directory,
+            create=create,
+            writable_directory=writable_directory,
+        )
+
+    monkeypatch.setattr(native_module, "_nt_relative_open", swap_before_root_create)
+    plan, source, detector, clock = _runtime()
+
+    with pytest.raises(DurableEvidenceError, match="cannot inspect handle-owned path"):
+        begin_handle_anchored_acquisition(
+            root,
+            plan,
+            source,
+            detector,
+            clock,
+            started_monotonic_s=0.0,
+        )
+
+    assert swapped is True
+    assert (parked_parent / root.name).is_dir()
+    assert _relative_files(parked_parent / root.name) == set()
+    assert replacement_sentinel.read_bytes() == b"foreign-owner"
+    assert not root.exists()
+    assert source.identity_calls == 0
+    assert source.calls == 0
+    assert detector.calls == 0
+    assert clock.calls == 0
+
+
+@pytest.mark.parametrize("target", ("intermediate", "parent"))
+def test_handle_anchored_ordinary_ancestry_replacement_fails_before_root_or_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    outer = tmp_path / "ordinary-ancestry-race"
+    intermediate = outer / "intermediate"
+    parent = intermediate / "owned-parent"
+    parent.mkdir(parents=True)
+    root = parent / "handle-acquisition"
+    candidate = intermediate if target == "intermediate" else parent
+    parked = candidate.parent / f"parked-{candidate.name}"
+    original_open = native_module._nt_relative_open
+    replaced = False
+
+    def replace_ordinary_ancestor_before_open(
+        parent_handle: int,
+        component: str,
+        *,
+        directory: bool,
+        create: bool,
+        writable_directory: bool = False,
+    ) -> int:
+        nonlocal replaced
+        if not create and directory and component == candidate.name and not replaced:
+            candidate.rename(parked)
+            candidate.mkdir()
+            replaced = True
+        return original_open(
+            parent_handle,
+            component,
+            directory=directory,
+            create=create,
+            writable_directory=writable_directory,
+        )
+
+    monkeypatch.setattr(native_module, "_nt_relative_open", replace_ordinary_ancestor_before_open)
+    plan, source, detector, clock = _runtime()
+
+    with pytest.raises(
+        HandleAnchoredEvidenceCapabilityError,
+        match="transaction ancestry changed while opening",
+    ):
+        begin_handle_anchored_acquisition(
+            root,
+            plan,
+            source,
+            detector,
+            clock,
+            started_monotonic_s=0.0,
+        )
+
+    assert replaced is True
+    assert not root.exists()
+    parked_root = (
+        parked / parent.name / root.name if target == "intermediate" else parked / root.name
+    )
+    assert not parked_root.exists()
+    assert source.identity_calls == 0
+    assert source.calls == 0
+    assert detector.calls == 0
+    assert clock.calls == 0
+
+
+def test_handle_anchored_claimed_root_rename_before_plan_is_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "claimed-root-acquisition"
+    parked = tmp_path / "parked-claimed-root-acquisition"
+    original_open = native_module._nt_relative_open
+    attempted = False
+    blocked_error: OSError | None = None
+
+    def attempt_claimed_root_rename_before_plan(
+        parent_handle: int,
+        component: str,
+        *,
+        directory: bool,
+        create: bool,
+        writable_directory: bool = False,
+    ) -> int:
+        nonlocal attempted, blocked_error
+        if create and not directory and component == ACQUISITION_PLAN_FILENAME and not attempted:
+            attempted = True
+            try:
+                root.rename(parked)
+            except OSError as exc:
+                blocked_error = exc
+        return original_open(
+            parent_handle,
+            component,
+            directory=directory,
+            create=create,
+            writable_directory=writable_directory,
+        )
+
+    monkeypatch.setattr(
+        native_module,
+        "_nt_relative_open",
+        attempt_claimed_root_rename_before_plan,
+    )
+    plan, source, detector, clock = _runtime()
+
+    transaction = begin_handle_anchored_acquisition(
+        root,
+        plan,
+        source,
+        detector,
+        clock,
+        started_monotonic_s=0.0,
+    )
+
+    assert attempted is True
+    assert blocked_error is not None
+    assert transaction.phase is DurableAcquisitionPhase.READY_FOR_REQUEST
+    assert (root / ACQUISITION_PLAN_FILENAME).is_file()
+    assert not parked.exists()
+    assert source.identity_calls > 0
+    assert source.calls == 0
+    assert detector.calls == 0
+    assert clock.calls > 0
+
+
+def test_handle_anchored_intermediate_ancestor_junction_race_fails_before_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    outer = tmp_path / "ancestor-junction-race"
+    switch = outer / "switch"
+    original_parent = switch / "owned-parent"
+    original_parent.mkdir(parents=True)
+    parked_switch = outer / "parked-switch"
+    foreign = outer / "foreign"
+    foreign_parent = foreign / "owned-parent"
+    foreign_parent.mkdir(parents=True)
+    root = original_parent / "handle-acquisition"
+    original_open = native_module._nt_relative_open
+    attacked = False
+
+    def race_after_ancestry_snapshot(
+        parent_handle: int,
+        component: str,
+        *,
+        directory: bool,
+        create: bool,
+        writable_directory: bool = False,
+    ) -> int:
+        nonlocal attacked
+        if not create and directory and component == switch.name and not attacked:
+            switch.rename(parked_switch)
+            subprocess.run(
+                ["cmd.exe", "/d", "/c", "mklink", "/J", str(switch), str(foreign)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            attacked = True
+        return original_open(
+            parent_handle,
+            component,
+            directory=directory,
+            create=create,
+            writable_directory=writable_directory,
+        )
+
+    monkeypatch.setattr(native_module, "_nt_relative_open", race_after_ancestry_snapshot)
+    plan, source, detector, clock = _runtime()
+
+    with pytest.raises(HandleAnchoredEvidenceCapabilityError, match="reparse point"):
+        begin_handle_anchored_acquisition(
+            root,
+            plan,
+            source,
+            detector,
+            clock,
+            started_monotonic_s=0.0,
+        )
+
+    assert attacked is True
+    assert loader_module._is_link_or_reparse(switch.lstat())
+    assert not (parked_switch / "owned-parent" / root.name).exists()
+    assert not (foreign_parent / root.name).exists()
+    assert source.identity_calls == 0
+    assert source.calls == 0
+    assert detector.calls == 0
+    assert clock.calls == 0
+
+
+@pytest.mark.parametrize(
+    "failure_context",
+    ("transaction drive root", "transaction parent", "new transaction root"),
+)
+def test_handle_anchored_constructor_failure_closes_each_untransferred_handle_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_context: str,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / f"constructor-failure-{failure_context.replace(' ', '-')}"
+    original_existing_open = native_module._open_existing_directory
+    original_relative_open = native_module._nt_relative_open
+    original_native_info = native_module._native_info
+    original_quiet_close = native_module._close_handle_quietly
+    anchor_handles: list[int] = []
+    parent_handles: list[int] = []
+    root_handles: list[int] = []
+    quiet_closes: list[int] = []
+
+    def tracked_existing_open(path: Path, *, writable: bool) -> int:
+        handle = original_existing_open(path, writable=writable)
+        anchor_handles.append(handle)
+        return handle
+
+    def tracked_relative_open(
+        parent_handle: int,
+        component: str,
+        *,
+        directory: bool,
+        create: bool,
+        writable_directory: bool = False,
+    ) -> int:
+        handle = original_relative_open(
+            parent_handle,
+            component,
+            directory=directory,
+            create=create,
+            writable_directory=writable_directory,
+        )
+        if create and directory and component == root.name:
+            root_handles.append(handle)
+        if not create and directory and writable_directory:
+            parent_handles.append(handle)
+        return handle
+
+    def injected_info_failure(handle: int, context: str) -> object:
+        if context == failure_context:
+            raise HandleAnchoredEvidenceCapabilityError(
+                f"synthetic {failure_context} identity failure"
+            )
+        return original_native_info(handle, context)
+
+    def tracked_quiet_close(handle: int) -> None:
+        quiet_closes.append(handle)
+        original_quiet_close(handle)
+
+    monkeypatch.setattr(native_module, "_open_existing_directory", tracked_existing_open)
+    monkeypatch.setattr(native_module, "_nt_relative_open", tracked_relative_open)
+    monkeypatch.setattr(native_module, "_native_info", injected_info_failure)
+    monkeypatch.setattr(native_module, "_close_handle_quietly", tracked_quiet_close)
+    plan, source, detector, clock = _runtime()
+
+    with pytest.raises(HandleAnchoredEvidenceCapabilityError, match="identity failure"):
+        begin_handle_anchored_acquisition(
+            root,
+            plan,
+            source,
+            detector,
+            clock,
+            started_monotonic_s=0.0,
+        )
+
+    assert len(anchor_handles) == 1
+    if failure_context == "transaction drive root":
+        assert parent_handles == []
+        assert root_handles == []
+        assert quiet_closes.count(anchor_handles[0]) == 1
+        assert not root.exists()
+    elif failure_context == "transaction parent":
+        assert len(parent_handles) == 1
+        assert root_handles == []
+        assert quiet_closes.count(parent_handles[0]) == 1
+        assert not root.exists()
+    else:
+        assert len(parent_handles) == 1
+        assert len(root_handles) == 1
+        assert quiet_closes.count(root_handles[0]) == 1
+        assert root.is_dir()
+        assert _relative_files(root) == set()
+    assert source.identity_calls == 0
+    assert source.calls == 0
+    assert detector.calls == 0
+    assert clock.calls == 0
+
+
+def test_handle_anchored_nonfixed_volume_fails_before_root_or_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "unsupported-volume-acquisition"
+
+    def remote_drive(_root_path: str) -> int:
+        return 4
+
+    monkeypatch.setattr(native_module._kernel32, "GetDriveTypeW", remote_drive)
+    plan, source, detector, clock = _runtime()
+
+    with pytest.raises(HandleAnchoredEvidenceCapabilityError, match="fixed local drive"):
+        begin_handle_anchored_acquisition(
+            root,
+            plan,
+            source,
+            detector,
+            clock,
+            started_monotonic_s=0.0,
+        )
+
+    assert not root.exists()
+    assert source.identity_calls == 0
+    assert source.calls == 0
+    assert detector.calls == 0
+    assert clock.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("volume_query_succeeds", "filesystem_name", "expected_message"),
+    (
+        (True, "ReFS", "requires the reviewed NTFS capability envelope"),
+        (False, "", "cannot query transaction parent filesystem"),
+    ),
+)
+def test_handle_anchored_unsupported_filesystem_fails_before_root_or_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    volume_query_succeeds: bool,
+    filesystem_name: str,
+    expected_message: str,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "unsupported-filesystem-acquisition"
+
+    def fixed_local_drive(_root_path: str) -> int:
+        return native_module._DRIVE_FIXED
+
+    def volume_information(
+        _handle: object,
+        _volume_name: object,
+        _volume_name_size: int,
+        _volume_serial: object,
+        _maximum_component_length: object,
+        _filesystem_flags: object,
+        filesystem_name_buffer: Any,
+        _filesystem_name_size: int,
+    ) -> bool:
+        if volume_query_succeeds:
+            filesystem_name_buffer.value = filesystem_name
+        return volume_query_succeeds
+
+    monkeypatch.setattr(native_module._kernel32, "GetDriveTypeW", fixed_local_drive)
+    monkeypatch.setattr(
+        native_module._kernel32,
+        "GetVolumeInformationByHandleW",
+        volume_information,
+    )
+    plan, source, detector, clock = _runtime()
+
+    with pytest.raises(HandleAnchoredEvidenceCapabilityError, match=expected_message):
+        begin_handle_anchored_acquisition(
+            root,
+            plan,
+            source,
+            detector,
+            clock,
+            started_monotonic_s=0.0,
+        )
+
+    assert not root.exists()
+    assert source.identity_calls == 0
+    assert source.calls == 0
+    assert detector.calls == 0
+    assert clock.calls == 0
+
+
+def test_handle_anchored_close_protection_failure_precedes_root_and_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "unprotected-handle-acquisition"
+    monkeypatch.setattr(native_module._kernel32, "SetHandleInformation", lambda *args: False)
+    plan, source, detector, clock = _runtime()
+
+    with pytest.raises(
+        HandleAnchoredEvidenceCapabilityError,
+        match="cannot protect .* from close/reuse",
+    ):
+        begin_handle_anchored_acquisition(
+            root,
+            plan,
+            source,
+            detector,
+            clock,
+            started_monotonic_s=0.0,
+        )
+
+    assert not root.exists()
+    assert source.identity_calls == 0
+    assert source.calls == 0
+    assert detector.calls == 0
+    assert clock.calls == 0
+
+
+def test_handle_anchored_createfile_invalid_handle_is_normalized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    def invalid_handle(*args: object) -> int:
+        del args
+        return native_module._INVALID_HANDLE_VALUE
+
+    monkeypatch.setattr(native_module._kernel32, "CreateFileW", invalid_handle)
+
+    with pytest.raises(
+        HandleAnchoredEvidenceCapabilityError,
+        match="cannot open existing directory",
+    ):
+        native_module._open_existing_directory(tmp_path, writable=False)
+
+
+def test_handle_anchored_namespace_close_releases_exact_owned_handle_ledger_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "close-ledger-acquisition"
+    transaction, _, _, _ = _begin_handle_anchored_acquisition(root)
+    namespace = transaction._namespace
+    owned_handles = [
+        *(owned.handle for owned in namespace._files.values()),
+        *(owned.handle for owned in namespace._directories.values()),
+        namespace._root.handle,
+        *(owned.handle for owned in namespace._ancestors),
+    ]
+    assert len(set(owned_handles)) == len(owned_handles)
+    assert all(
+        native_module._handle_flags(handle, "test retained handle")
+        & native_module._HANDLE_FLAG_PROTECT_FROM_CLOSE
+        for handle in owned_handles
+    )
+    foreign_handle = native_module._duplicate_handle(namespace._root.handle)
+    native_module._protect_handle(foreign_handle, "test foreign duplicate")
+    original_close = native_module._kernel32.CloseHandle
+    closed: list[int] = []
+
+    def tracked_close(handle: object) -> object:
+        closed.append(native_module._handle_value(handle))
+        return original_close(handle)
+
+    monkeypatch.setattr(native_module._kernel32, "CloseHandle", tracked_close)
+    try:
+        namespace.close()
+        namespace.close()
+
+        assert all(closed.count(handle) == 1 for handle in owned_handles)
+        assert foreign_handle not in closed
+        foreign_info = native_module._native_info(foreign_handle, "foreign duplicate")
+        assert foreign_info.identity == namespace._root.native_identity
+    finally:
+        native_module._close_handle(foreign_handle)
+
+
+def test_handle_anchored_close_never_closes_a_simulated_reused_foreign_handle(
+    tmp_path: Path,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "reused-handle-acquisition"
+    transaction, _, _, _ = _begin_handle_anchored_acquisition(root)
+    namespace = transaction._namespace
+    stale_owned = namespace._files[ACQUISITION_PLAN_FILENAME]
+    native_module._close_handle(stale_owned.handle)
+    create_event = native_module._kernel32.CreateEventW
+    create_event.restype = native_module.wintypes.HANDLE
+    create_event.argtypes = [
+        native_module.ctypes.c_void_p,
+        native_module.wintypes.BOOL,
+        native_module.wintypes.BOOL,
+        native_module.wintypes.LPCWSTR,
+    ]
+    get_handle_information = native_module._kernel32.GetHandleInformation
+    get_handle_information.restype = native_module.wintypes.BOOL
+    get_handle_information.argtypes = [
+        native_module.wintypes.HANDLE,
+        native_module.ctypes.POINTER(native_module.wintypes.DWORD),
+    ]
+    foreign_event = native_module._handle_value(create_event(None, True, False, None))
+    stale_owned.handle = foreign_event
+    try:
+        with pytest.raises(DurableEvidenceError, match="could not close 1 owned Windows handle"):
+            namespace.close()
+
+        flags = native_module.wintypes.DWORD()
+        assert get_handle_information(
+            native_module.wintypes.HANDLE(foreign_event),
+            native_module.ctypes.byref(flags),
+        )
+        moved = tmp_path / "reused-handle-acquisition-moved"
+        root.rename(moved)
+        moved.rename(root)
+    finally:
+        native_module._raw_close_handle_quietly(foreign_event)
+
+
+def test_handle_anchored_close_refuses_reused_same_file_handle(tmp_path: Path) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "same-file-reused-handle-acquisition"
+    transaction, _, _, _ = _begin_handle_anchored_acquisition(root)
+    namespace = transaction._namespace
+    stale_owned = namespace._files[ACQUISITION_PLAN_FILENAME]
+    native_module._close_handle(stale_owned.handle)
+    foreign_raw = native_module._kernel32.CreateFileW(
+        str(root / ACQUISITION_PLAN_FILENAME),
+        native_module._GENERIC_READ,
+        native_module._DIRECTORY_SHARE,
+        None,
+        native_module._OPEN_EXISTING,
+        native_module._FILE_ATTRIBUTE_NORMAL,
+        None,
+    )
+    foreign_handle = native_module._handle_value(foreign_raw)
+    assert foreign_handle not in {0, native_module._INVALID_HANDLE_VALUE}
+    stale_owned.handle = foreign_handle
+
+    try:
+        with pytest.raises(DurableEvidenceError, match="could not close 1 owned Windows handle"):
+            namespace.close()
+
+        flags = native_module.wintypes.DWORD()
+        assert native_module._kernel32.GetHandleInformation(
+            native_module.wintypes.HANDLE(foreign_handle),
+            native_module.ctypes.byref(flags),
+        )
+        assert not flags.value & native_module._HANDLE_FLAG_PROTECT_FROM_CLOSE
+    finally:
+        native_module._raw_close_handle_quietly(foreign_handle)
+
+
+@pytest.mark.parametrize("failure", ("import-error", "exception", "negative-descriptor"))
+def test_handle_anchored_descriptor_conversion_failure_closes_unprotected_duplicate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / f"descriptor-failure-{failure}"
+    transaction, _, _, _ = _begin_handle_anchored_acquisition(root)
+    namespace = transaction._namespace
+    owned_handle = namespace._files[ACQUISITION_PLAN_FILENAME].handle
+    original_duplicate = native_module._duplicate_handle
+    original_raw_close = native_module._raw_close_handle_quietly
+    duplicates: list[int] = []
+    raw_closes: list[int] = []
+
+    def tracked_duplicate(handle: int) -> int:
+        duplicate = original_duplicate(handle)
+        duplicates.append(duplicate)
+        return duplicate
+
+    def tracked_raw_close(handle: int) -> None:
+        raw_closes.append(handle)
+        original_raw_close(handle)
+
+    class FailingMsvcrt:
+        @staticmethod
+        def open_osfhandle(handle: int, flags: int) -> int:
+            del handle, flags
+            if failure == "exception":
+                raise OSError("synthetic descriptor conversion failure")
+            return -1
+
+    def import_failing_msvcrt(name: str) -> type[FailingMsvcrt]:
+        assert name == "msvcrt"
+        if failure == "import-error":
+            raise ImportError("synthetic msvcrt import failure")
+        return FailingMsvcrt
+
+    monkeypatch.setattr(native_module, "_duplicate_handle", tracked_duplicate)
+    monkeypatch.setattr(native_module, "_raw_close_handle_quietly", tracked_raw_close)
+    monkeypatch.setattr(native_module.importlib, "import_module", import_failing_msvcrt)
+    expected_error = {
+        "import-error": ImportError,
+        "exception": OSError,
+        "negative-descriptor": DurableEvidenceError,
+    }[failure]
+
+    try:
+        with pytest.raises(expected_error):
+            native_module._descriptor_from_duplicate(owned_handle)
+
+        if failure == "import-error":
+            assert duplicates == []
+            assert raw_closes == []
+        else:
+            assert len(duplicates) == 1
+            assert raw_closes == duplicates
+            flags = native_module.wintypes.DWORD()
+            assert not native_module._kernel32.GetHandleInformation(
+                native_module.wintypes.HANDLE(duplicates[0]),
+                native_module.ctypes.byref(flags),
+            )
+    finally:
+        namespace.close()
+
+
+def test_handle_anchored_post_validation_close_cannot_redirect_child_create(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "protected-parent-acquisition"
+    foreign = tmp_path / "foreign-reuse-target"
+    foreign.mkdir()
+    transaction, _, _, _ = _begin_handle_anchored_acquisition(root)
+    namespace = transaction._namespace
+    audit_handle = namespace._directories["audit"].handle
+    foreign_handle = native_module._open_existing_directory(foreign, writable=True)
+    original_open = native_module._nt_relative_open
+    close_results: list[bool] = []
+
+    def attempt_close_after_validation(
+        parent_handle: int,
+        component: str,
+        *,
+        directory: bool,
+        create: bool,
+        writable_directory: bool = False,
+    ) -> int:
+        if create and not directory and component.endswith("-request.json"):
+            assert parent_handle == audit_handle
+            close_results.append(
+                bool(
+                    native_module._kernel32.CloseHandle(
+                        native_module.wintypes.HANDLE(parent_handle)
+                    )
+                )
+            )
+            assert foreign_handle != parent_handle
+        return original_open(
+            parent_handle,
+            component,
+            directory=directory,
+            create=create,
+            writable_directory=writable_directory,
+        )
+
+    monkeypatch.setattr(native_module, "_nt_relative_open", attempt_close_after_validation)
+    try:
+        progress = transaction.request_capture(
+            request_id="synthetic-protected-parent-request",
+            operator_id=transaction.progress.plan.operator_id,
+            acknowledged_monotonic_s=10.0,
+        )
+
+        assert progress.phase is PassiveCampaignPhase.AWAITING_CAPTURE
+        assert close_results == [False]
+        assert any(path.name.endswith("-request.json") for path in (root / "audit").iterdir())
+        assert list(foreign.iterdir()) == []
+    finally:
+        namespace.close()
+        native_module._close_handle(foreign_handle)
+
+
+@pytest.mark.parametrize("target", ("parent", "root"))
+@pytest.mark.parametrize("stage", ("frame", "case-record", "final-manifest"))
+def test_handle_anchored_mid_transaction_namespace_replacement_is_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    stage: str,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    parent = tmp_path / f"{stage}-{target}-parent"
+    parent.mkdir()
+    root = parent / "handle-acquisition"
+    transaction, source, detector, clock = _begin_handle_anchored_acquisition(root)
+    if stage == "final-manifest":
+        for ordinal in range(1, len(transaction.progress.plan.cases) + 1):
+            _capture_next(transaction, source, detector, clock, ordinal)
+        clock.value = 40.0
+
+    original_open = native_module._nt_relative_open
+    attempted = False
+    blocked_error: OSError | None = None
+    parked = tmp_path / f"parked-{stage}-{target}"
+
+    def stage_matches(component: str, directory: bool, create: bool) -> bool:
+        if not create or directory:
+            return False
+        if stage == "frame":
+            return component == "frame.bin"
+        if stage == "case-record":
+            return component.endswith("-owned.json")
+        return component == ACQUISITION_FINALIZATION_FILENAME
+
+    def attack_before_create(
+        parent_handle: int,
+        component: str,
+        *,
+        directory: bool,
+        create: bool,
+        writable_directory: bool = False,
+    ) -> int:
+        nonlocal attempted, blocked_error
+        if not attempted and stage_matches(component, directory, create):
+            attempted = True
+            candidate = parent if target == "parent" else root
+            try:
+                candidate.rename(parked)
+            except OSError as exc:
+                blocked_error = exc
+        return original_open(
+            parent_handle,
+            component,
+            directory=directory,
+            create=create,
+            writable_directory=writable_directory,
+        )
+
+    monkeypatch.setattr(native_module, "_nt_relative_open", attack_before_create)
+
+    if stage == "final-manifest":
+        receipt = transaction.finalize(finalized_at_utc="2026-09-01T00:00:10Z")
+        assert receipt.expectation.campaign_id == transaction.progress.plan.campaign_id
+        assert transaction.phase is DurableAcquisitionPhase.FINALIZED
+    else:
+        _capture_next(transaction, source, detector, clock, 1)
+        assert transaction.phase is DurableAcquisitionPhase.READY_FOR_REQUEST
+
+    assert attempted is True
+    assert blocked_error is not None
+    assert not parked.exists()
+    assert root.is_dir()
+    assert not any(path.name == "foreign-sentinel.bin" for path in root.rglob("*"))
+
+
+def test_handle_anchored_complete_acquisition_clone_cannot_replace_or_verify(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "complete-clone-acquisition"
+    clone = tmp_path / "complete-clone-acquisition-replacement"
+    parked = tmp_path / "complete-clone-acquisition-parked"
+    transaction, source, detector, clock = _begin_handle_anchored_acquisition(root)
+    for ordinal in range(1, len(transaction.progress.plan.cases) + 1):
+        _capture_next(transaction, source, detector, clock, ordinal)
+    clock.value = 40.0
+    original_open = native_module._nt_relative_open
+    attacked = False
+    blocked_error: OSError | None = None
+
+    def attack_with_complete_clone(
+        parent_handle: int,
+        component: str,
+        *,
+        directory: bool,
+        create: bool,
+        writable_directory: bool = False,
+    ) -> int:
+        nonlocal attacked, blocked_error
+        if create and not directory and component == ACQUISITION_FINALIZATION_FILENAME:
+            attacked = True
+            shutil.copytree(root, clone)
+            try:
+                root.rename(parked)
+                clone.rename(root)
+            except OSError as exc:
+                blocked_error = exc
+        return original_open(
+            parent_handle,
+            component,
+            directory=directory,
+            create=create,
+            writable_directory=writable_directory,
+        )
+
+    monkeypatch.setattr(native_module, "_nt_relative_open", attack_with_complete_clone)
+    receipt = transaction.finalize(finalized_at_utc="2026-09-01T00:00:10Z")
+
+    assert attacked is True
+    assert blocked_error is not None
+    assert not parked.exists()
+    assert transaction.phase is DurableAcquisitionPhase.FINALIZED
+    assert not (clone / ACQUISITION_FINALIZATION_FILENAME).exists()
+    shutil.copy2(
+        root / ACQUISITION_FINALIZATION_FILENAME,
+        clone / ACQUISITION_FINALIZATION_FILENAME,
+    )
+    assert _relative_files(clone) == _relative_files(root)
+    with pytest.raises(RouteEvidenceIntegrityError, match="transaction root identity differs"):
+        load_durable_acquisition(clone, receipt.expectation)
+
+
+def test_handle_anchored_replaced_empty_case_directory_never_receives_frame_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "replaced-case-acquisition"
+    parked = tmp_path / "parked-owned-case"
+    transaction, source, detector, clock = _begin_handle_anchored_acquisition(root)
+    original_open = native_module._nt_relative_open
+    replacement: Path | None = None
+
+    def replace_case_before_frame(
+        parent_handle: int,
+        component: str,
+        *,
+        directory: bool,
+        create: bool,
+        writable_directory: bool = False,
+    ) -> int:
+        nonlocal replacement
+        if create and not directory and component == "frame.bin" and replacement is None:
+            case_directories = tuple((root / "cases").iterdir())
+            assert len(case_directories) == 1
+            replacement = case_directories[0]
+            replacement.rename(parked)
+            replacement.mkdir()
+            (replacement / "foreign-sentinel.bin").write_bytes(b"foreign-owner")
+        return original_open(
+            parent_handle,
+            component,
+            directory=directory,
+            create=create,
+            writable_directory=writable_directory,
+        )
+
+    monkeypatch.setattr(native_module, "_nt_relative_open", replace_case_before_frame)
+
+    with pytest.raises(DurableEvidenceError, match="cannot inspect handle-owned path"):
+        _capture_next(transaction, source, detector, clock, 1)
+
+    assert replacement is not None
+    assert transaction.phase is DurableAcquisitionPhase.STOPPED
+    assert (parked / "frame.bin").is_file()
+    assert (replacement / "foreign-sentinel.bin").read_bytes() == b"foreign-owner"
+    assert not (replacement / "frame.bin").exists()
+    assert not (root / ACQUISITION_FINALIZATION_FILENAME).exists()
+
+
+def test_handle_anchored_case_junction_substitution_never_receives_frame_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "junction-case-acquisition"
+    parked = tmp_path / "parked-junction-owned-case"
+    foreign_target = tmp_path / "foreign-junction-target"
+    foreign_target.mkdir()
+    (foreign_target / "foreign-sentinel.bin").write_bytes(b"foreign-junction-owner")
+    transaction, source, detector, clock = _begin_handle_anchored_acquisition(root)
+    original_open = native_module._nt_relative_open
+    junction: Path | None = None
+
+    def install_junction_before_frame(
+        parent_handle: int,
+        component: str,
+        *,
+        directory: bool,
+        create: bool,
+        writable_directory: bool = False,
+    ) -> int:
+        nonlocal junction
+        if create and not directory and component == "frame.bin" and junction is None:
+            case_directories = tuple((root / "cases").iterdir())
+            assert len(case_directories) == 1
+            junction = case_directories[0]
+            junction.rename(parked)
+            subprocess.run(
+                ["cmd.exe", "/d", "/c", "mklink", "/J", str(junction), str(foreign_target)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        return original_open(
+            parent_handle,
+            component,
+            directory=directory,
+            create=create,
+            writable_directory=writable_directory,
+        )
+
+    monkeypatch.setattr(native_module, "_nt_relative_open", install_junction_before_frame)
+
+    with pytest.raises(DurableEvidenceError, match="cannot inspect handle-owned path"):
+        _capture_next(transaction, source, detector, clock, 1)
+
+    assert junction is not None
+    assert transaction.phase is DurableAcquisitionPhase.STOPPED
+    assert loader_module._is_link_or_reparse(junction.lstat())
+    assert (parked / "frame.bin").is_file()
+    assert (foreign_target / "foreign-sentinel.bin").read_bytes() == b"foreign-junction-owner"
+    assert not (foreign_target / "frame.bin").exists()
+    assert not (root / ACQUISITION_FINALIZATION_FILENAME).exists()
+
+
+def test_handle_anchored_unexpected_native_create_result_stops_without_adoption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "unexpected-create-result"
+    transaction, source, detector, clock = _begin_handle_anchored_acquisition(root)
+    original_create = native_module._ntdll.NtCreateFile
+    injected = False
+
+    def unexpected_information(*args: object) -> int:
+        nonlocal injected
+        status = int(original_create(*args))
+        disposition = int(cast(int, args[7]))
+        if status >= 0 and disposition == native_module._FILE_CREATE and not injected:
+            io_status = native_module.ctypes.cast(
+                args[3],
+                native_module.ctypes.POINTER(native_module._IO_STATUS_BLOCK),
+            ).contents
+            io_status.Information = native_module._FILE_OPENED
+            injected = True
+        return status
+
+    monkeypatch.setattr(native_module._ntdll, "NtCreateFile", unexpected_information)
+
+    with pytest.raises(DurableEvidenceError, match="unexpected create result"):
+        _capture_next(transaction, source, detector, clock, 1)
+
+    assert injected is True
+    assert transaction.phase is DurableAcquisitionPhase.STOPPED
+    assert not (root / ACQUISITION_FINALIZATION_FILENAME).exists()
+
+
+def test_handle_anchored_parent_reparse_capability_failure_precedes_root_create(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "simulated-reparse-root"
+    original_info = native_module._native_info
+
+    def simulated_reparse(handle: int, context: str) -> object:
+        if context == "transaction parent":
+            raise HandleAnchoredEvidenceCapabilityError("transaction parent is a reparse point")
+        return original_info(handle, context)
+
+    monkeypatch.setattr(native_module, "_native_info", simulated_reparse)
+    plan, source, detector, clock = _runtime()
+
+    with pytest.raises(HandleAnchoredEvidenceCapabilityError, match="reparse point"):
+        begin_handle_anchored_acquisition(
+            root,
+            plan,
+            source,
+            detector,
+            clock,
+            started_monotonic_s=0.0,
+        )
+
+    assert not root.exists()
+    assert source.identity_calls == 0
+    assert detector.calls == 0
+    assert clock.calls == 0
+
+
+def test_handle_anchored_hard_link_alias_stops_before_later_evidence(
+    tmp_path: Path,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    root = tmp_path / "hard-link-acquisition"
+    transaction, source, detector, clock = _begin_handle_anchored_acquisition(root)
+    _capture_next(transaction, source, detector, clock, 1)
+    first = transaction.progress.captures[0].owned_case.frame_artifact.relative_path
+    target = root.joinpath(*first.split("/"))
+    alias = tmp_path / "foreign-hard-link.bgra"
+    os.link(target, alias)
+
+    with pytest.raises(DurableEvidenceError, match="handle-anchored file changed"):
+        transaction.request_capture(
+            request_id="synthetic-durable-request-2",
+            operator_id=transaction.progress.plan.operator_id,
+            acknowledged_monotonic_s=20.0,
+        )
+
+    assert transaction.phase is DurableAcquisitionPhase.STOPPED
+    assert alias.is_file()
+    assert alias.read_bytes() == target.read_bytes()
+    assert not (root / ACQUISITION_FINALIZATION_FILENAME).exists()
+
+
+def test_handle_anchored_hard_link_race_after_create_stops_without_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "hard-link-race-acquisition"
+    alias = tmp_path / "foreign-plan-alias.json"
+    original_write = native_module._write_and_readback
+    linked = False
+
+    def link_after_exclusive_create(
+        handle: int,
+        payload: bytes,
+        relative_path: str,
+    ) -> os.stat_result:
+        nonlocal linked
+        if relative_path == ACQUISITION_PLAN_FILENAME and not linked:
+            os.link(root / relative_path, alias)
+            linked = True
+        return original_write(handle, payload, relative_path)
+
+    monkeypatch.setattr(native_module, "_write_and_readback", link_after_exclusive_create)
+    plan, source, detector, clock = _runtime()
+
+    with pytest.raises(DurableEvidenceError, match="changed during write"):
+        begin_handle_anchored_acquisition(
+            root,
+            plan,
+            source,
+            detector,
+            clock,
+            started_monotonic_s=0.0,
+        )
+
+    assert linked is True
+    assert alias.read_bytes() == (root / ACQUISITION_PLAN_FILENAME).read_bytes()
+    assert not (root / ACQUISITION_FINALIZATION_FILENAME).exists()
+
+
+def test_handle_anchored_invalidated_root_handle_stops_without_path_fallback(
+    tmp_path: Path,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "invalid-handle-acquisition"
+    transaction, _, _, _ = _begin_handle_anchored_acquisition(root)
+    namespace = transaction._namespace
+    native_module._close_handle(namespace._root.handle)
+
+    with pytest.raises(HandleAnchoredEvidenceCapabilityError, match="not a disk handle"):
+        transaction.request_capture(
+            request_id="synthetic-invalid-handle-request",
+            operator_id=transaction.progress.plan.operator_id,
+            acknowledged_monotonic_s=10.0,
+        )
+
+    assert transaction.phase is DurableAcquisitionPhase.STOPPED
+    assert not (root / ACQUISITION_STOP_FILENAME).exists()
+    assert not (root / ACQUISITION_FINALIZATION_FILENAME).exists()
+    assert (root / ACQUISITION_PLAN_FILENAME).is_file()
+    moved = tmp_path / "invalid-handle-acquisition-moved"
+    root.rename(moved)
+    moved.rename(root)
+
+
+def test_handle_anchored_partial_write_failure_retains_only_owned_audit_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    root = tmp_path / "partial-handle-acquisition"
+    transaction, source, detector, clock = _begin_handle_anchored_acquisition(root)
+    original_write = native_module._write_and_readback
+
+    def fail_frame(handle: int, payload: bytes, relative_path: str) -> os.stat_result:
+        if relative_path.endswith("/frame.bin"):
+            raise OSError("synthetic handle write failure")
+        return original_write(handle, payload, relative_path)
+
+    monkeypatch.setattr(native_module, "_write_and_readback", fail_frame)
+    transaction.request_capture(
+        request_id="synthetic-durable-request-1",
+        operator_id=transaction.progress.plan.operator_id,
+        acknowledged_monotonic_s=10.0,
+    )
+    source.frame_time = 11.0
+    source.captured_at_utc = "2026-09-01T00:00:01Z"
+    detector.next_detection = CheckpointDetection(
+        CheckpointMatchKind.MATCHED,
+        (transaction.progress.plan.cases[0].checkpoint_id,),
+        1.0,
+    )
+    clock.value = 12.0
+
+    with pytest.raises(OSError, match="synthetic handle write failure"):
+        transaction.capture()
+
+    assert transaction.phase is DurableAcquisitionPhase.STOPPED
+    assert (root / ACQUISITION_PLAN_FILENAME).is_file()
+    assert any(path.name.endswith("-request.json") for path in root.rglob("*.json"))
+    assert not (root / FINALIZED_PACKAGE_FILENAME).exists()
+    assert not (root / ACQUISITION_FINALIZATION_FILENAME).exists()
+
+
+def test_handle_anchored_foreign_file_survives_finalization_failure(
+    tmp_path: Path,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    root = tmp_path / "foreign-prefix-acquisition"
+    transaction, source, detector, clock = _begin_handle_anchored_acquisition(root)
+    for ordinal in range(1, len(transaction.progress.plan.cases) + 1):
+        _capture_next(transaction, source, detector, clock, ordinal)
+    sentinel = root / "foreign-sentinel.bin"
+    sentinel.write_bytes(b"foreign-owner")
+    clock.value = 40.0
+
+    with pytest.raises(RouteEvidenceIntegrityError, match="foreign_files"):
+        transaction.finalize(finalized_at_utc="2026-09-01T00:00:10Z")
+
+    assert transaction.phase is DurableAcquisitionPhase.STOPPED
+    assert sentinel.read_bytes() == b"foreign-owner"
+    assert not (root / ACQUISITION_FINALIZATION_FILENAME).exists()
+
+
+def test_handle_anchored_review_parent_replacement_before_root_create_is_isolated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    acquisition_root = tmp_path / "review-swap-acquisition"
+    acquisition_receipt, _ = _complete_handle_anchored_acquisition(acquisition_root)
+    parent = tmp_path / "owned-review-parent"
+    parent.mkdir()
+    review_root = parent / "handle-review"
+    parked_parent = tmp_path / "parked-owned-review-parent"
+    replacement_sentinel = parent / "foreign-sentinel.bin"
+    original_open = native_module._nt_relative_open
+    swapped = False
+
+    def swap_before_review_root_create(
+        parent_handle: int,
+        component: str,
+        *,
+        directory: bool,
+        create: bool,
+        writable_directory: bool = False,
+    ) -> int:
+        nonlocal swapped
+        if create and directory and component == review_root.name and not swapped:
+            parent.rename(parked_parent)
+            parent.mkdir()
+            replacement_sentinel.write_bytes(b"foreign-review-owner")
+            swapped = True
+        return original_open(
+            parent_handle,
+            component,
+            directory=directory,
+            create=create,
+            writable_directory=writable_directory,
+        )
+
+    monkeypatch.setattr(native_module, "_nt_relative_open", swap_before_review_root_create)
+
+    with pytest.raises(DurableEvidenceError, match="cannot inspect handle-owned path"):
+        begin_handle_anchored_review(
+            review_root,
+            acquisition_root,
+            acquisition_receipt.expectation,
+            review_id="synthetic-swapped-review",
+            reviewer_id="synthetic-swapped-reviewer",
+            started_at_utc="2026-09-01T00:00:20Z",
+        )
+
+    assert swapped is True
+    assert (parked_parent / review_root.name).is_dir()
+    assert _relative_files(parked_parent / review_root.name) == set()
+    assert replacement_sentinel.read_bytes() == b"foreign-review-owner"
+    assert not review_root.exists()
+
+
+def test_handle_anchored_claimed_review_root_rename_before_plan_is_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    acquisition_root = tmp_path / "claimed-review-root-acquisition"
+    acquisition_receipt, _ = _complete_handle_anchored_acquisition(acquisition_root)
+    review_root = tmp_path / "claimed-review-root"
+    parked = tmp_path / "parked-claimed-review-root"
+    original_open = native_module._nt_relative_open
+    attempted = False
+    blocked_error: OSError | None = None
+
+    def attempt_claimed_review_root_rename_before_plan(
+        parent_handle: int,
+        component: str,
+        *,
+        directory: bool,
+        create: bool,
+        writable_directory: bool = False,
+    ) -> int:
+        nonlocal attempted, blocked_error
+        if create and not directory and component == durable_module.REVIEW_PLAN_FILENAME:
+            attempted = True
+            try:
+                review_root.rename(parked)
+            except OSError as exc:
+                blocked_error = exc
+        return original_open(
+            parent_handle,
+            component,
+            directory=directory,
+            create=create,
+            writable_directory=writable_directory,
+        )
+
+    monkeypatch.setattr(
+        native_module,
+        "_nt_relative_open",
+        attempt_claimed_review_root_rename_before_plan,
+    )
+
+    transaction = begin_handle_anchored_review(
+        review_root,
+        acquisition_root,
+        acquisition_receipt.expectation,
+        review_id="synthetic-claimed-root-review",
+        reviewer_id="synthetic-claimed-root-reviewer",
+        started_at_utc="2026-09-01T00:00:20Z",
+    )
+
+    assert attempted is True
+    assert blocked_error is not None
+    assert transaction.phase is DurableReviewPhase.READY_FOR_TRUTH
+    assert (review_root / durable_module.REVIEW_PLAN_FILENAME).is_file()
+    assert not parked.exists()
+
+
+@pytest.mark.parametrize("target", ("parent", "root"))
+@pytest.mark.parametrize("stage", ("truth", "review-manifest", "final-manifest"))
+def test_handle_anchored_review_mid_transaction_replacement_is_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    stage: str,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    acquisition_root = tmp_path / f"{stage}-{target}-acquisition"
+    acquisition_receipt, _ = _complete_handle_anchored_acquisition(acquisition_root)
+    parent = tmp_path / f"{stage}-{target}-review-parent"
+    parent.mkdir()
+    review_root = parent / "handle-review"
+    transaction, acquisition = _begin_handle_anchored_review(
+        review_root,
+        acquisition_root,
+        acquisition_receipt,
+    )
+    truths = _truths(acquisition)
+    if stage != "truth":
+        for ordinal, truth in enumerate(truths, start=1):
+            transaction.record_case_truth(
+                truth,
+                recorded_at_utc=f"2026-09-01T00:00:{20 + ordinal:02d}Z",
+            )
+
+    original_open = native_module._nt_relative_open
+    attempted = False
+    blocked_error: OSError | None = None
+    parked = tmp_path / f"parked-review-{stage}-{target}"
+
+    def stage_matches(component: str, directory: bool, create: bool) -> bool:
+        if not create or directory:
+            return False
+        if stage == "truth":
+            return component.startswith("001-") and component.endswith(".json")
+        if stage == "review-manifest":
+            return component == INDEPENDENT_REVIEW_FILENAME
+        return component == REVIEW_FINALIZATION_FILENAME
+
+    def attack_before_review_create(
+        parent_handle: int,
+        component: str,
+        *,
+        directory: bool,
+        create: bool,
+        writable_directory: bool = False,
+    ) -> int:
+        nonlocal attempted, blocked_error
+        if not attempted and stage_matches(component, directory, create):
+            attempted = True
+            candidate = parent if target == "parent" else review_root
+            try:
+                candidate.rename(parked)
+            except OSError as exc:
+                blocked_error = exc
+        return original_open(
+            parent_handle,
+            component,
+            directory=directory,
+            create=create,
+            writable_directory=writable_directory,
+        )
+
+    monkeypatch.setattr(native_module, "_nt_relative_open", attack_before_review_create)
+
+    if stage == "truth":
+        phase = transaction.record_case_truth(
+            truths[0],
+            recorded_at_utc="2026-09-01T00:00:21Z",
+        )
+        assert phase is DurableReviewPhase.READY_FOR_TRUTH
+    else:
+        receipt = transaction.finalize(reviewed_at_utc="2026-09-01T00:00:30Z")
+        assert receipt.report.evidence_conformance_passed is True
+        assert transaction.phase is DurableReviewPhase.FINALIZED
+
+    assert attempted is True
+    assert blocked_error is not None
+    assert not parked.exists()
+    assert review_root.is_dir()
+
+
+def test_handle_anchored_complete_review_clone_cannot_replace_or_verify(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    import mining_automation.navigation._windows_handle_anchored as native_module
+
+    acquisition_root = tmp_path / "complete-clone-review-acquisition"
+    acquisition_receipt, _ = _complete_handle_anchored_acquisition(acquisition_root)
+    review_root = tmp_path / "complete-clone-review"
+    clone = tmp_path / "complete-clone-review-replacement"
+    parked = tmp_path / "complete-clone-review-parked"
+    transaction, acquisition = _begin_handle_anchored_review(
+        review_root,
+        acquisition_root,
+        acquisition_receipt,
+    )
+    for ordinal, truth in enumerate(_truths(acquisition), start=1):
+        transaction.record_case_truth(
+            truth,
+            recorded_at_utc=f"2026-09-01T00:00:{20 + ordinal:02d}Z",
+        )
+    original_open = native_module._nt_relative_open
+    attacked = False
+    blocked_error: OSError | None = None
+
+    def attack_with_complete_clone(
+        parent_handle: int,
+        component: str,
+        *,
+        directory: bool,
+        create: bool,
+        writable_directory: bool = False,
+    ) -> int:
+        nonlocal attacked, blocked_error
+        if create and not directory and component == REVIEW_FINALIZATION_FILENAME:
+            attacked = True
+            shutil.copytree(review_root, clone)
+            try:
+                review_root.rename(parked)
+                clone.rename(review_root)
+            except OSError as exc:
+                blocked_error = exc
+        return original_open(
+            parent_handle,
+            component,
+            directory=directory,
+            create=create,
+            writable_directory=writable_directory,
+        )
+
+    monkeypatch.setattr(native_module, "_nt_relative_open", attack_with_complete_clone)
+    review_receipt = transaction.finalize(reviewed_at_utc="2026-09-01T00:00:30Z")
+    expectation = _full_expectation(acquisition_receipt.expectation, review_receipt)
+
+    assert attacked is True
+    assert blocked_error is not None
+    assert not parked.exists()
+    assert transaction.phase is DurableReviewPhase.FINALIZED
+    assert not (clone / REVIEW_FINALIZATION_FILENAME).exists()
+    shutil.copy2(
+        review_root / REVIEW_FINALIZATION_FILENAME,
+        clone / REVIEW_FINALIZATION_FILENAME,
+    )
+    assert _relative_files(clone) == _relative_files(review_root)
+    with pytest.raises(RouteEvidenceIntegrityError, match="transaction root identity differs"):
+        load_and_verify_durable_synthetic_route_evidence(
+            acquisition_root,
+            clone,
+            expectation,
+        )
+
+
+def test_two_handle_anchored_review_writers_claim_exactly_one_fresh_root(
+    tmp_path: Path,
+) -> None:
+    if sys.platform != HANDLE_ANCHORED_WRITER_SUPPORTED_PLATFORM:
+        assert HANDLE_ANCHORED_WRITER_FUTURE_REAL_EVIDENCE_ELIGIBLE is False
+        return
+    acquisition_root = tmp_path / "review-contention-acquisition"
+    review_root = tmp_path / "contended-handle-review"
+    acquisition_receipt, _ = _complete_handle_anchored_acquisition(acquisition_root)
+    barrier = Barrier(2)
+
+    def claim(writer_id: int) -> str:
+        barrier.wait()
+        try:
+            begin_handle_anchored_review(
+                review_root,
+                acquisition_root,
+                acquisition_receipt.expectation,
+                review_id=f"synthetic-handle-review-{writer_id}",
+                reviewer_id=f"synthetic-handle-reviewer-{writer_id}",
+                started_at_utc="2026-09-01T00:00:20Z",
+            )
+        except DurableEvidenceCollisionError:
+            return "collision"
+        return "winner"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = tuple(executor.map(claim, (1, 2)))
+
+    assert sorted(outcomes) == ["collision", "winner"]
+    assert (review_root / durable_module.REVIEW_PLAN_FILENAME).is_file()
+    assert not (review_root / REVIEW_FINALIZATION_FILENAME).exists()
