@@ -1,0 +1,66 @@
+name: Lead A11 title-fix readiness migration
+
+on:
+  push:
+    branches: [chatgpt/lead-a11-title-readiness-migration]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/a11-resource-live-backend-title-fix-v2
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Pin exact Resource title-fix head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "1a53e8f6c3a39a7a3b3c12c8c6b9520a7c54ecab"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Migrate exact-head readiness binding expectation
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('tests/test_resource_release_live_readiness.py')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              '"git_blob_sha": "0a68a8cd346a0b2482dbdbb864d02284a04ef9b7"':
+                  '"git_blob_sha": "b699c0086d5350c430ee84ca019b4c8089b0cda7"',
+              '"50649a0195e2dea8e9dac645689dd4274efeea4c3ef80eaebbe40b271072aafd"':
+                  '"7329f5ed63d7430fc2e8831749ecd5e96fc510fce0616d26cde18c86c827da3c"',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected readiness binding token not found exactly once: {old}')
+              text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8', newline='\n')
+      - name: Exact scope audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git diff --name-only)" = "tests/test_resource_release_live_readiness.py"
+      - name: Install
+        run: python -m pip install -e '.[dev]'
+      - name: Ruff migrated test
+        run: ruff check tests/test_resource_release_live_readiness.py
+      - name: Exact formerly failing test
+        run: python -m pytest -q tests/test_resource_release_live_readiness.py::test_campaign_and_profile_working_bytes_equal_exact_head_blobs
+      - name: Resource readiness suite
+        run: python -m pytest -q tests/test_resource_release_live_readiness.py tests/test_resource_release_campaign.py
+      - name: Commit and push test-only migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- tests/test_resource_release_live_readiness.py
+          git commit -m 'test(resource): bind title-fix readiness to exact source blob'
+          git push origin HEAD:chatgpt/a11-resource-live-backend-title-fix-v2
