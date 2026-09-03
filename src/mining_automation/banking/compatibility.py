@@ -1,9 +1,10 @@
 """Read-only endpoint compatibility contracts for banking integration.
 
 Navigation may prove arrival, but it cannot prove that the bank interface is
-OPEN or that the mining view is supported. Inventory may describe a category,
-but only an exact independently released projection may provide known slot
-state. These adapters deliberately issue no action authority.
+OPEN or that the mining view is supported. Generic Inventory compatibility is
+structurally non-released: only a future adapter consuming the genuine
+source-owned C release receipt may provide known slot state. These adapters
+issue no action authority.
 """
 
 from __future__ import annotations
@@ -63,13 +64,14 @@ class NavigationArrivalReceipt:
     input_authority: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
-        for value, name in (
+        text_fields: tuple[tuple[object, str], ...] = (
             (self.route_id, "route_id"),
             (self.route_version, "route_version"),
             (self.route_session_id, "route_session_id"),
             (self.endpoint_id, "endpoint_id"),
             (self.arrival_cycle_id, "arrival_cycle_id"),
-        ):
+        )
+        for value, name in text_fields:
             _text(value, name)
         if type(self.endpoint) is not EndpointKind:
             raise ValueError("endpoint must be exact")
@@ -111,6 +113,13 @@ class BankArrivalHandoff:
 
 @dataclass(frozen=True, slots=True)
 class InventoryReleaseProjection:
+    """Non-authorizing Inventory compatibility metadata.
+
+    This type deliberately cannot represent a verified C release. The future
+    banking adapter must consume the genuine accepted source-owned Inventory
+    receipt rather than upgrading this generic projection.
+    """
+
     receipt_sha256: str
     release_source_sha: str
     capture_source_id: str
@@ -120,24 +129,26 @@ class InventoryReleaseProjection:
     frame_sha256: str
     inventory: InventoryState
     confidence: float
-    release_verified: bool
+    release_verified: Literal[False] = field(default=False, init=False)
     input_authority: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
-        for value, name in (
+        digest_fields: tuple[tuple[object, str], ...] = (
             (self.receipt_sha256, "receipt_sha256"),
             (self.frame_sha256, "frame_sha256"),
-        ):
+        )
+        for value, name in digest_fields:
             _digest(value, name)
         if type(self.release_source_sha) is not str or not re.fullmatch(
             r"[0-9a-f]{40}", self.release_source_sha
         ):
             raise ValueError("release_source_sha must be lowercase Git SHA")
-        for value, name in (
+        text_fields: tuple[tuple[object, str], ...] = (
             (self.capture_source_id, "capture_source_id"),
             (self.capture_session_id, "capture_session_id"),
             (self.cycle_id, "cycle_id"),
-        ):
+        )
+        for value, name in text_fields:
             _text(value, name)
         if type(self.frame_id) is not int or self.frame_id <= 0:
             raise ValueError("frame_id must be a positive exact int")
@@ -154,8 +165,8 @@ class InventoryReleaseProjection:
             raise ValueError("confidence must be a finite exact float")
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError("confidence must be within 0..1")
-        if type(self.release_verified) is not bool:
-            raise ValueError("release_verified must be exact bool")
+        if self.release_verified is not False:
+            raise ValueError("generic inventory projection cannot claim release")
         if self.input_authority is not False:
             raise ValueError("inventory projection cannot carry input authority")
 
@@ -173,19 +184,13 @@ def handoff_navigation_arrival(receipt: NavigationArrivalReceipt) -> BankArrival
 
 
 def bind_inventory_for_banking(projection: InventoryReleaseProjection) -> InventoryState:
+    """Keep generic compatibility fail-closed until genuine C release exists."""
+
     if type(projection) is not InventoryReleaseProjection:
         raise TypeError("inventory projection must be exact")
     InventoryReleaseProjection.__post_init__(projection)
-    if not projection.release_verified:
-        return InventoryState.unknown("inventory release receipt is not verified")
-    if projection.confidence < 0.8:
-        return InventoryState.unknown("inventory confidence is below 0.8")
-    if projection.inventory.occupied_slots is None:
-        return InventoryState.unknown(
-            projection.inventory.reason or "inventory remains UNKNOWN"
-        )
     return InventoryState(
-        occupied_slots=projection.inventory.occupied_slots,
+        occupied_slots=None,
         capacity=INVENTORY_CAPACITY,
-        reason=projection.inventory.reason,
+        confidence=0.0,
     )
