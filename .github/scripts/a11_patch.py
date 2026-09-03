@@ -1,0 +1,167 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+SOURCE_PATH = Path("src/mining_automation/perception/resource_release_campaign.py")
+TEST_PATH = Path("tests/test_resource_release_live_readiness.py")
+
+OLD_GATE = "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = False"
+NEW_GATE = "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = True"
+MARKER = "_A11_ENABLED_HEAD_TEST_MIGRATION = True"
+
+
+def replace_once(text: str, old: str, new: str, *, label: str) -> str:
+    if text.count(old) != 1:
+        raise RuntimeError(f"unexpected {label} anchor count: {text.count(old)}")
+    return text.replace(old, new, 1)
+
+
+def patch_source() -> bool:
+    source = SOURCE_PATH.read_text(encoding="utf-8")
+    if source.count(NEW_GATE) == 1 and source.count(OLD_GATE) == 0:
+        return False
+    if source.count(OLD_GATE) != 1 or source.count(NEW_GATE) != 0:
+        raise RuntimeError("unexpected Resource live-gate source shape")
+    SOURCE_PATH.write_text(
+        source.replace(OLD_GATE, NEW_GATE, 1),
+        encoding="utf-8",
+        newline="\n",
+    )
+    return True
+
+
+def patch_tests() -> bool:
+    tests = TEST_PATH.read_text(encoding="utf-8")
+    if MARKER in tests:
+        return False
+
+    constant_anchor = "_REAL_GIT_BLOB_BINDING = readiness._git_blob_binding\n"
+    constant_block = (
+        constant_anchor
+        + "_REAL_SOURCE_GATE_BINDING = readiness._source_gate_binding\n"
+        + f"{MARKER}\n"
+    )
+    tests = replace_once(
+        tests,
+        constant_anchor,
+        constant_block,
+        label="readiness constant",
+    )
+
+    fixture_anchor = (
+        '    monkeypatch.setattr(readiness, "_git_blob_binding", fake_blob_binding)\n'
+    )
+    fixture_block = fixture_anchor + """
+
+    def frozen_source_gate_binding(root: Path) -> dict[str, object]:
+        del root
+        return {
+            "source_path": readiness._CAMPAIGN_SOURCE_PATH,
+            "source_sha256": readiness._EXPECTED_CAMPAIGN_SOURCE_SHA256,
+            "git_blob_sha": "a" * 40,
+            "gate_name": readiness._SOURCE_GATE_NAME,
+            "gate_value": False,
+            "assignment_form": "single_literal_false",
+        }
+
+    monkeypatch.setattr(
+        readiness, "_source_gate_binding", frozen_source_gate_binding
+    )
+"""
+    tests = replace_once(
+        tests,
+        fixture_anchor,
+        fixture_block,
+        label="readiness fixture",
+    )
+
+    restore_anchor = (
+        '    repository_root = _repository_root(tmp_path)\n'
+        '    runtime_output = tmp_path / "runtime.json"\n'
+    )
+    restore_block = (
+        '    repository_root = _repository_root(tmp_path)\n'
+        '    monkeypatch.setattr(\n'
+        '        readiness, "_source_gate_binding", _REAL_SOURCE_GATE_BINDING\n'
+        '    )\n'
+        '    runtime_output = tmp_path / "runtime.json"\n'
+    )
+    tests = replace_once(
+        tests,
+        restore_anchor,
+        restore_block,
+        label="runtime/source gate restore",
+    )
+
+    new_test_anchor = (
+        "\ndef test_preparation_never_constructs_session_or_capture_backend(\n"
+    )
+    new_test = """
+
+def test_a11_enabled_head_changes_only_live_gate_and_preserves_safety() -> None:
+    source_path = Path(campaign.__file__).resolve(strict=True)
+    current_source = source_path.read_text(encoding="utf-8")
+    accepted_source = subprocess.run(
+        [
+            "git",
+            "show",
+            "0d215457fb4b037eedc74cb776a3cf1f5f58a19f:"
+            "src/mining_automation/perception/resource_release_campaign.py",
+        ],
+        cwd=_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    old_gate = "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = False"
+    new_gate = "LIVE_RESOURCE_CAMPAIGN_AUTHORIZED: Final[bool] = True"
+    assert accepted_source.count(old_gate) == 1
+    assert new_gate not in accepted_source
+    assert current_source.count(new_gate) == 1
+    assert old_gate not in current_source
+    assert current_source.replace(new_gate, old_gate, 1) == accepted_source
+    assert campaign.LIVE_RESOURCE_CAMPAIGN_AUTHORIZED is True
+
+    profile = readiness.load_varrock_east_iron_profile()
+    assert {item.maximum_distance for item in profile.scene_landmarks} == {0.12}
+    assert len(profile.scene_landmarks) == 6
+    assert profile.minimum_landmark_quorum == 5
+    assert profile.minimum_landmark_zones == 3
+    assert len(
+        {
+            item.zone(profile.frame_width, profile.frame_height).value
+            for item in profile.scene_landmarks
+        }
+    ) == 3
+    assert profile.frame_width == 1005
+    assert profile.frame_height == 1078
+    assert profile.pixel_format.value == "bgra8888"
+    assert campaign._REQUIRED_REPORTED_DPI == 96
+    assert len(campaign.CAMPAIGN_PLAN) == 15
+    assert all(value is False for value in readiness._authority().values())
+"""
+    tests = replace_once(
+        tests,
+        new_test_anchor,
+        new_test + new_test_anchor,
+        label="enabled-head test insertion",
+    )
+
+    TEST_PATH.write_text(tests, encoding="utf-8", newline="\n")
+    return True
+
+
+def main() -> None:
+    changed_source = patch_source()
+    changed_tests = patch_tests()
+    if changed_source != changed_tests:
+        raise RuntimeError(
+            "A11 source/test migration must be applied together or already complete"
+        )
+    print(
+        "A11 patch applied" if changed_source else "A11 patch already present"
+    )
+
+
+if __name__ == "__main__":
+    main()
