@@ -74,9 +74,9 @@ def test_windows_command_freezes_uuidv4_and_exact_proposal_file_order() -> None:
     assert re.search(uuid_pattern, source)
     positions = [source.index(path) for path in _ALLOWLIST]
     assert positions == sorted(positions)
-    # The command checks this once in the embedded proposal builder and once
-    # again after PowerShell reloads the written proposal. The detached L2
-    # worktree status checks independently prove that no source write occurred.
+    # The command checks each non-authorizing field once in the embedded
+    # proposal builder and once again after PowerShell reloads the proposal.
+    # Detached-L2 status checks independently prove that no source write occurs.
     assert source.count("source_registry_modified") == 2
-    assert source.count("activation_allowed") >= 4
-    assert source.count("promotion_allowed") >= 4
+    assert source.count("activation_allowed") == 2
+    assert source.count("promotion_allowed") == 2
