@@ -1,0 +1,603 @@
+Obtaining file:///home/runner/work/Mining-Automation/Mining-Automation
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Checking if build backend supports build_editable: started
+  Checking if build backend supports build_editable: finished with status 'done'
+  Getting requirements to build editable: started
+  Getting requirements to build editable: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): started
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Collecting pytest~=9.1.1 (from mining-automation==0.1.0.dev0)
+  Downloading pytest-9.1.1-py3-none-any.whl.metadata (7.6 kB)
+Collecting pytest-cov~=7.1.0 (from mining-automation==0.1.0.dev0)
+  Downloading pytest_cov-7.1.0-py3-none-any.whl.metadata (32 kB)
+Collecting ruff~=0.16.3 (from mining-automation==0.1.0.dev0)
+  Downloading ruff-0.16.6-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (26 kB)
+Collecting mypy~=2.3.1 (from mining-automation==0.1.0.dev0)
+  Downloading mypy-2.3.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.4 kB)
+Collecting typing_extensions>=4.6.0 (from mypy~=2.3.1->mining-automation==0.1.0.dev0)
+  Downloading typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting mypy_extensions>=1.0.0 (from mypy~=2.3.1->mining-automation==0.1.0.dev0)
+  Downloading mypy_extensions-1.1.0-py3-none-any.whl.metadata (1.1 kB)
+Collecting pathspec>=1.0.0 (from mypy~=2.3.1->mining-automation==0.1.0.dev0)
+  Downloading pathspec-1.1.1-py3-none-any.whl.metadata (14 kB)
+Collecting librt>=0.13.0 (from mypy~=2.3.1->mining-automation==0.1.0.dev0)
+  Downloading librt-0.15.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (1.3 kB)
+Collecting ast-serialize<1.0.0,>=0.6.0 (from mypy~=2.3.1->mining-automation==0.1.0.dev0)
+  Downloading ast_serialize-0.9.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (1.4 kB)
+Collecting iniconfig>=1.0.1 (from pytest~=9.1.1->mining-automation==0.1.0.dev0)
+  Downloading iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)
+Collecting packaging>=22 (from pytest~=9.1.1->mining-automation==0.1.0.dev0)
+  Using cached packaging-26.3-py3-none-any.whl.metadata (3.5 kB)
+Collecting pluggy<2,>=1.5 (from pytest~=9.1.1->mining-automation==0.1.0.dev0)
+  Downloading pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)
+Collecting pygments>=2.7.2 (from pytest~=9.1.1->mining-automation==0.1.0.dev0)
+  Downloading pygments-2.21.0-py3-none-any.whl.metadata (2.5 kB)
+Collecting coverage>=7.10.6 (from coverage[toml]>=7.10.6->pytest-cov~=7.1.0->mining-automation==0.1.0.dev0)
+  Downloading coverage-7.16.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (8.6 kB)
+Downloading mypy-2.3.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (15.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 15.3/15.3 MB 51.1 MB/s  0:00:00
+Downloading ast_serialize-0.9.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (1.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.3/1.3 MB 242.4 MB/s  0:00:00
+Downloading pytest-9.1.1-py3-none-any.whl (386 kB)
+Downloading pluggy-1.6.0-py3-none-any.whl (20 kB)
+Downloading pytest_cov-7.1.0-py3-none-any.whl (22 kB)
+Downloading ruff-0.16.6-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (10.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 10.3/10.3 MB 128.6 MB/s  0:00:00
+Downloading coverage-7.16.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (257 kB)
+Downloading iniconfig-2.3.0-py3-none-any.whl (7.5 kB)
+Downloading librt-0.15.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (531 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 531.9/531.9 kB 111.5 MB/s  0:00:00
+Downloading mypy_extensions-1.1.0-py3-none-any.whl (5.0 kB)
+Using cached packaging-26.3-py3-none-any.whl (129 kB)
+Downloading pathspec-1.1.1-py3-none-any.whl (57 kB)
+Downloading pygments-2.21.0-py3-none-any.whl (1.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.3/1.3 MB 196.3 MB/s  0:00:00
+Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+Building wheels for collected packages: mining-automation
+  Building editable for mining-automation (pyproject.toml): started
+  Building editable for mining-automation (pyproject.toml): finished with status 'done'
+  Created wheel for mining-automation: filename=mining_automation-0.1.0.dev0-0.editable-py3-none-any.whl size=2621 sha256=515180b158d5c48b64b1133b8559038f95525761fdbd4c40e4da5aac9143a243
+  Stored in directory: /tmp/pip-ephem-wheel-cache-s8xa9l7p/wheels/3f/4e/a7/c4d02697a6c48e719aab9eecb6d7a1333e6e92a4118e90603d
+Successfully built mining-automation
+Installing collected packages: typing_extensions, ruff, pygments, pluggy, pathspec, packaging, mypy_extensions, mining-automation, librt, iniconfig, coverage, ast-serialize, pytest, mypy, pytest-cov
+
+Successfully installed ast-serialize-0.9.0 coverage-7.16.0 iniconfig-2.3.0 librt-0.15.0 mining-automation-0.1.0.dev0 mypy-2.3.1 mypy_extensions-1.1.0 packaging-26.3 pathspec-1.1.1 pluggy-1.6.0 pygments-2.21.0 pytest-9.1.1 pytest-cov-7.1.0 ruff-0.16.6 typing_extensions-4.16.0
+All checks passed!
+Success: no issues found in 46 source files
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.1.1, pluggy-1.6.0 -- /opt/hostedtoolcache/Python/3.12.14/x64/bin/python
+cachedir: .pytest_cache
+rootdir: /home/runner/work/Mining-Automation/Mining-Automation
+configfile: pyproject.toml
+plugins: cov-7.1.0
+collecting ... collected 569 items
+
+tests/test_navigation.py::test_direction_plans_are_independent_linear_contracts PASSED [  0%]
+tests/test_navigation.py::test_route_plan_rejects_malformed_linear_manifests[<lambda>-direction] PASSED [  0%]
+tests/test_navigation.py::test_route_plan_rejects_malformed_linear_manifests[<lambda>-departure and arrival] PASSED [  0%]
+tests/test_navigation.py::test_route_plan_rejects_malformed_linear_manifests[<lambda>-unique0] PASSED [  0%]
+tests/test_navigation.py::test_route_plan_rejects_malformed_linear_manifests[<lambda>-departure, transit] PASSED [  0%]
+tests/test_navigation.py::test_route_plan_rejects_malformed_linear_manifests[<lambda>-exactly one step] PASSED [  1%]
+tests/test_navigation.py::test_route_plan_rejects_malformed_linear_manifests[<lambda>-adjacent] PASSED [  1%]
+tests/test_navigation.py::test_route_plan_rejects_malformed_linear_manifests[<lambda>-unique1] PASSED [  1%]
+tests/test_navigation.py::test_route_identity_rejects_noncanonical_identifiers[] PASSED [  1%]
+tests/test_navigation.py::test_route_identity_rejects_noncanonical_identifiers[ route] PASSED [  1%]
+tests/test_navigation.py::test_route_identity_rejects_noncanonical_identifiers[route ] PASSED [  1%]
+tests/test_navigation.py::test_route_identity_rejects_noncanonical_identifiers[1] PASSED [  2%]
+tests/test_navigation.py::test_route_identity_rejects_noncanonical_identifiers[None] PASSED [  2%]
+tests/test_navigation.py::test_observation_match_cardinality_is_typed[unknown-candidates0] PASSED [  2%]
+tests/test_navigation.py::test_observation_match_cardinality_is_typed[matched-candidates1] PASSED [  2%]
+tests/test_navigation.py::test_observation_match_cardinality_is_typed[matched-candidates2] PASSED [  2%]
+tests/test_navigation.py::test_observation_match_cardinality_is_typed[ambiguous-candidates3] PASSED [  2%]
+tests/test_navigation.py::test_observation_match_cardinality_is_typed[ambiguous-candidates4] PASSED [  3%]
+tests/test_navigation.py::test_observation_rejects_invalid_confidence[-0.1] PASSED [  3%]
+tests/test_navigation.py::test_observation_rejects_invalid_confidence[1.1] PASSED [  3%]
+tests/test_navigation.py::test_observation_rejects_invalid_confidence[nan] PASSED [  3%]
+tests/test_navigation.py::test_observation_rejects_invalid_confidence[inf] PASSED [  3%]
+tests/test_navigation.py::test_observation_rejects_invalid_confidence[True] PASSED [  4%]
+tests/test_navigation.py::test_frame_provenance_requires_positive_frame_identity_and_exact_geometry PASSED [  4%]
+tests/test_navigation.py::test_public_nested_contracts_fail_with_value_error PASSED [  4%]
+tests/test_navigation.py::test_start_route_has_no_implicit_location_evidence PASSED [  4%]
+tests/test_navigation.py::test_happy_path_requires_every_checkpoint_and_consumes_each_step_evidence[mine_to_bank] PASSED [  4%]
+tests/test_navigation.py::test_happy_path_requires_every_checkpoint_and_consumes_each_step_evidence[bank_to_mine] PASSED [  4%]
+tests/test_navigation.py::test_prepared_step_is_data_only_and_clears_current_location_evidence PASSED [  5%]
+tests/test_navigation.py::test_wrong_route_identity_stops[route_change0-route_id_mismatch] PASSED [  5%]
+tests/test_navigation.py::test_wrong_route_identity_stops[route_change1-route_version_mismatch] PASSED [  5%]
+tests/test_navigation.py::test_wrong_route_identity_stops[route_change2-direction_mismatch] PASSED [  5%]
+tests/test_navigation.py::test_provenance_mismatch_stops_before_checkpoint_interpretation PASSED [  5%]
+tests/test_navigation.py::test_initial_checkpoint_requires_fresh_post_start_frame[observation0-100.1-invalid_frame_time] PASSED [  5%]
+tests/test_navigation.py::test_initial_checkpoint_requires_fresh_post_start_frame[observation1-100.0-evidence_not_after_boundary] PASSED [  6%]
+tests/test_navigation.py::test_initial_checkpoint_requires_fresh_post_start_frame[observation2-100.7-stale_frame] PASSED [  6%]
+tests/test_navigation.py::test_next_checkpoint_rejects_repeated_out_of_order_queued_and_stale_frames[10-100.3-repeated_frame] PASSED [  6%]
+tests/test_navigation.py::test_next_checkpoint_rejects_repeated_out_of_order_queued_and_stale_frames[9-100.3-out_of_order_frame] PASSED [  6%]
+tests/test_navigation.py::test_next_checkpoint_rejects_repeated_out_of_order_queued_and_stale_frames[11-99.9-out_of_order_frame] PASSED [  6%]
+tests/test_navigation.py::test_next_checkpoint_rejects_repeated_out_of_order_queued_and_stale_frames[11-100.1-evidence_not_after_boundary] PASSED [  7%]
+tests/test_navigation.py::test_next_checkpoint_rejects_repeated_out_of_order_queued_and_stale_frames[11-100.3-stale_frame] PASSED [  7%]
+tests/test_navigation.py::test_higher_frame_id_at_exact_step_boundary_is_not_causal_proof PASSED [  7%]
+tests/test_navigation.py::test_higher_frame_id_with_same_capture_timestamp_cannot_cross_boundary PASSED [  7%]
+tests/test_navigation.py::test_unknown_ambiguous_and_low_confidence_never_continue[unknown-candidates0-0.0-unknown_checkpoint] PASSED [  7%]
+tests/test_navigation.py::test_unknown_ambiguous_and_low_confidence_never_continue[ambiguous-candidates1-0.99-ambiguous_checkpoint] PASSED [  7%]
+tests/test_navigation.py::test_unknown_ambiguous_and_low_confidence_never_continue[matched-None-0.89-low_confidence] PASSED [  8%]
+tests/test_navigation.py::test_skipped_and_foreign_checkpoints_stop[synthetic-m2b-transit-skipped_checkpoint] PASSED [  8%]
+tests/test_navigation.py::test_skipped_and_foreign_checkpoints_stop[synthetic-foreign-unexpected_checkpoint] PASSED [  8%]
+tests/test_navigation.py::test_prior_checkpoint_after_step_is_out_of_order PASSED [  8%]
+tests/test_navigation.py::test_checkpoint_cannot_advance_before_step_evidence_is_consumed PASSED [  8%]
+tests/test_navigation.py::test_step_preparation_requires_current_fresh_evidence_and_is_single_use PASSED [  8%]
+tests/test_navigation.py::test_stop_and_arrival_are_absorbing PASSED     [  9%]
+tests/test_navigation.py::test_progress_rejects_mid_run_context_replacement PASSED [  9%]
+tests/test_navigation.py::test_evaluation_time_cannot_move_backwards PASSED [  9%]
+tests/test_navigation.py::test_zero_confidence_policy_cannot_be_configured PASSED [  9%]
+tests/test_navigation.py::test_route_is_incomplete_without_explicit_terminal_observation PASSED [  9%]
+tests/test_navigation.py::test_invalid_public_progress_and_transition_construction_is_rejected PASSED [ 10%]
+tests/test_navigation.py::test_prepared_transition_binds_step_target_and_time_to_resulting_progress PASSED [ 10%]
+tests/test_navigation.py::test_terminal_progress_still_rejects_context_replacement PASSED [ 10%]
+tests/test_navigation.py::test_direct_progress_history_must_use_the_bound_source PASSED [ 10%]
+tests/test_navigation.py::test_direct_ready_proposal_and_arrival_require_confident_fresh_evidence PASSED [ 10%]
+tests/test_navigation.py::test_committed_synthetic_replays_pass_deterministically[synthetic_mine_to_bank.json] PASSED [ 10%]
+tests/test_navigation.py::test_committed_synthetic_replays_pass_deterministically[synthetic_bank_to_mine.json] PASSED [ 11%]
+tests/test_navigation.py::test_replay_report_rejects_proposals_from_another_provenance_context PASSED [ 11%]
+tests/test_navigation.py::test_replay_cli_emits_stable_machine_report PASSED [ 11%]
+tests/test_navigation.py::test_manifest_rejects_malformed_or_scope_claiming_data[extra_root_key] PASSED [ 11%]
+tests/test_navigation.py::test_manifest_rejects_malformed_or_scope_claiming_data[wrong_schema] PASSED [ 11%]
+tests/test_navigation.py::test_manifest_rejects_malformed_or_scope_claiming_data[non_synthetic_role] PASSED [ 11%]
+tests/test_navigation.py::test_manifest_rejects_malformed_or_scope_claiming_data[boolean_frame_id] PASSED [ 12%]
+tests/test_navigation.py::test_manifest_rejects_malformed_or_scope_claiming_data[reversed_endpoints] PASSED [ 12%]
+tests/test_navigation.py::test_manifest_rejects_malformed_or_scope_claiming_data[reversed_steps] PASSED [ 12%]
+tests/test_navigation.py::test_manifest_rejects_malformed_or_scope_claiming_data[duplicate_checkpoint] PASSED [ 12%]
+tests/test_navigation.py::test_manifest_rejects_malformed_or_scope_claiming_data[missing_events] PASSED [ 12%]
+tests/test_navigation.py::test_manifest_rejects_malformed_or_scope_claiming_data[event_before_start] PASSED [ 13%]
+tests/test_navigation.py::test_manifest_rejects_malformed_or_scope_claiming_data[decreasing_event_time] PASSED [ 13%]
+tests/test_navigation.py::test_manifest_rejects_malformed_or_scope_claiming_data[nonterminal_final_phase] PASSED [ 13%]
+tests/test_navigation.py::test_manifest_rejects_malformed_or_scope_claiming_data[unexpected_event_key] PASSED [ 13%]
+tests/test_navigation.py::test_manifest_rejects_duplicate_keys_and_malformed_json[{"schema_version": 1, "schema_version": 1}] PASSED [ 13%]
+tests/test_navigation.py::test_manifest_rejects_duplicate_keys_and_malformed_json[{"schema_version": 1,] PASSED [ 13%]
+tests/test_navigation.py::test_manifest_rejects_nonstandard_numbers PASSED [ 14%]
+tests/test_navigation.py::test_navigation_identifiers_reject_control_characters PASSED [ 14%]
+tests/test_navigation.py::test_manifest_rejects_unrepresentable_large_number PASSED [ 14%]
+tests/test_navigation.py::test_manifest_normalizes_json_integer_conversion_failures PASSED [ 14%]
+tests/test_navigation.py::test_manifest_normalizes_json_recursion_failures PASSED [ 14%]
+tests/test_navigation.py::test_replay_harness_accepts_expected_fail_closed_scenarios[wrong_direction-direction_mismatch] PASSED [ 14%]
+tests/test_navigation.py::test_replay_harness_accepts_expected_fail_closed_scenarios[wrong_initial_version-route_version_mismatch] PASSED [ 15%]
+tests/test_navigation.py::test_replay_harness_accepts_expected_fail_closed_scenarios[provenance_mismatch-provenance_mismatch] PASSED [ 15%]
+tests/test_navigation.py::test_replay_harness_accepts_expected_fail_closed_scenarios[unknown-unknown_checkpoint] PASSED [ 15%]
+tests/test_navigation.py::test_replay_harness_accepts_expected_fail_closed_scenarios[ambiguous-ambiguous_checkpoint] PASSED [ 15%]
+tests/test_navigation.py::test_replay_harness_accepts_expected_fail_closed_scenarios[skipped-skipped_checkpoint] PASSED [ 15%]
+tests/test_navigation.py::test_replay_harness_accepts_expected_fail_closed_scenarios[foreign-unexpected_checkpoint] PASSED [ 15%]
+tests/test_navigation.py::test_replay_harness_accepts_expected_fail_closed_scenarios[stale-stale_frame] PASSED [ 16%]
+tests/test_navigation.py::test_replay_harness_preserves_adversarial_frame_identity[repeated-repeated_frame] PASSED [ 16%]
+tests/test_navigation.py::test_replay_harness_preserves_adversarial_frame_identity[out_of_order-out_of_order_frame] PASSED [ 16%]
+tests/test_navigation.py::test_replay_harness_preserves_adversarial_frame_identity[pre_step_queue-evidence_not_after_boundary] PASSED [ 16%]
+tests/test_navigation.py::test_replay_harness_preserves_adversarial_frame_identity[equal_step_boundary-evidence_not_after_boundary] PASSED [ 16%]
+tests/test_navigation.py::test_replay_harness_preserves_adversarial_frame_identity[prior_checkpoint-out_of_order_checkpoint] PASSED [ 17%]
+tests/test_navigation.py::test_replay_harness_preserves_adversarial_frame_identity[mid_route_skip-skipped_checkpoint] PASSED [ 17%]
+tests/test_navigation.py::test_replay_harness_preserves_adversarial_frame_identity[mid_route_source_replacement-provenance_mismatch] PASSED [ 17%]
+tests/test_navigation.py::test_replay_harness_preserves_adversarial_frame_identity[route_version_change-route_version_mismatch] PASSED [ 17%]
+tests/test_navigation.py::test_replay_harness_rehearses_late_and_duplicate_attempt_outcomes[stale_attempt_receipt-stale_attempt_receipt] PASSED [ 17%]
+tests/test_navigation.py::test_replay_harness_rehearses_late_and_duplicate_attempt_outcomes[duplicate_attempt_receipt-duplicate_attempt_receipt] PASSED [ 17%]
+tests/test_navigation.py::test_replay_reports_incomplete_route_and_expectation_mismatch PASSED [ 18%]
+tests/test_navigation.py::test_navigation_package_has_no_controller_worldstate_or_input_dependency PASSED [ 18%]
+tests/test_navigation_causality.py::test_full_route_requires_one_source_receipt_per_step_and_retains_causal_history PASSED [ 18%]
+tests/test_navigation_causality.py::test_missing_receipt_stops_instead_of_advancing_to_checkpoint PASSED [ 18%]
+tests/test_navigation_causality.py::test_checkpoint_observation_cannot_bypass_pending_receipt PASSED [ 18%]
+tests/test_navigation_causality.py::test_receipt_before_step_preparation_is_not_expected PASSED [ 18%]
+tests/test_navigation_causality.py::test_receipt_route_identity_mismatch_stops[route0-route_id_mismatch] PASSED [ 19%]
+tests/test_navigation_causality.py::test_receipt_route_identity_mismatch_stops[route1-route_version_mismatch] PASSED [ 19%]
+tests/test_navigation_causality.py::test_receipt_route_identity_mismatch_stops[route2-direction_mismatch] PASSED [ 19%]
+tests/test_navigation_causality.py::test_receipt_for_wrong_step_stops PASSED [ 19%]
+tests/test_navigation_causality.py::test_receipt_for_wrong_attempt_id_stops PASSED [ 19%]
+tests/test_navigation_causality.py::test_receipt_source_identity_mismatch_stops[source_id-synthetic-other-source] PASSED [ 20%]
+tests/test_navigation_causality.py::test_receipt_source_identity_mismatch_stops[version-synthetic-v2] PASSED [ 20%]
+tests/test_navigation_causality.py::test_receipt_source_identity_mismatch_stops[session_id-synthetic-other-session] PASSED [ 20%]
+tests/test_navigation_causality.py::test_receipt_preparation_boundary_must_match_pending_proposal PASSED [ 20%]
+tests/test_navigation_causality.py::test_future_receipt_boundary_stops PASSED [ 20%]
+tests/test_navigation_causality.py::test_delayed_receipt_stops_as_stale PASSED [ 20%]
+tests/test_navigation_causality.py::test_duplicate_receipt_identity_stops_even_when_timestamp_changes PASSED [ 21%]
+tests/test_navigation_causality.py::test_duplicate_attempt_id_on_later_step_stops PASSED [ 21%]
+tests/test_navigation_causality.py::test_checkpoint_frame_captured_before_receipt_boundary_cannot_advance PASSED [ 21%]
+tests/test_navigation_causality.py::test_unexpected_checkpoint_after_attempt_stops PASSED [ 21%]
+tests/test_navigation_causality.py::test_interruption_stops_and_is_absorbing_for_all_causal_operations PASSED [ 21%]
+tests/test_navigation_causality.py::test_completed_attempt_rejects_receipt_for_different_proposal PASSED [ 21%]
+tests/test_navigation_causality.py::test_direct_construction_rejects_missing_completed_attempt_history PASSED [ 22%]
+tests/test_navigation_causality.py::test_direct_construction_rejects_unrelated_last_provenance PASSED [ 22%]
+tests/test_navigation_causality.py::test_direct_construction_rejects_awaiting_receipt_boundary_mismatch PASSED [ 22%]
+tests/test_navigation_causality.py::test_direct_construction_rejects_ready_boundary_before_latest_receipt PASSED [ 22%]
+tests/test_navigation_causality.py::test_direct_construction_rejects_arrival_boundary_before_latest_receipt PASSED [ 22%]
+tests/test_navigation_causality.py::test_direct_construction_rejects_pending_proposal_with_pre_receipt_frame PASSED [ 23%]
+tests/test_navigation_causality.py::test_direct_construction_rejects_stopped_state_with_future_attempt_history PASSED [ 23%]
+tests/test_navigation_causality.py::test_offline_session_rehearsal_rejects_pre_or_equal_boundary_frame_delivered_later[10.19] PASSED [ 23%]
+tests/test_navigation_causality.py::test_offline_session_rehearsal_rejects_pre_or_equal_boundary_frame_delivered_later[10.2] PASSED [ 23%]
+tests/test_navigation_causality.py::test_offline_session_timeout_reasons_are_phase_specific_and_stop_inner_progress PASSED [ 23%]
+tests/test_navigation_causality.py::test_offline_duplicate_interruption_and_mid_route_skip_all_stop PASSED [ 23%]
+tests/test_navigation_causality.py::test_external_stop_converts_inner_progress_to_absorbing_core_stop PASSED [ 24%]
+tests/test_navigation_causality.py::test_offline_route_recovery_enforces_complete_global_lineage_without_aba PASSED [ 24%]
+tests/test_navigation_causality.py::test_offline_route_restart_requires_strict_chronology_and_one_current_head PASSED [ 24%]
+tests/test_navigation_causality.py::test_offline_sequencer_cannot_be_directly_constructed_copied_or_pickled PASSED [ 24%]
+tests/test_navigation_causality.py::test_offline_module_has_no_stateless_start_or_restart_bypass PASSED [ 24%]
+tests/test_navigation_causality.py::test_offline_events_cannot_be_backdated[interrupt] PASSED [ 24%]
+tests/test_navigation_causality.py::test_offline_events_cannot_be_backdated[timeout] PASSED [ 25%]
+tests/test_navigation_causality.py::test_offline_session_times_reject_lossy_integer_conversion PASSED [ 25%]
+tests/test_navigation_causality.py::test_offline_session_times_reject_float_subclass_operator_overrides PASSED [ 25%]
+tests/test_navigation_causality.py::test_navigation_causality_contracts_reject_primitive_subclass_operators PASSED [ 25%]
+tests/test_navigation_causality.py::test_pure_reducer_owns_observation_and_receipt_ingress PASSED [ 25%]
+tests/test_navigation_causality.py::test_offline_sequencer_owns_ingress_and_detaches_public_state PASSED [ 26%]
+tests/test_navigation_causality.py::test_offline_public_transitions_commit_one_serialized_head PASSED [ 26%]
+tests/test_navigation_causality.py::test_offline_restart_preserves_route_and_source_semantics PASSED [ 26%]
+tests/test_navigation_causality.py::test_attempt_ids_cannot_be_reused_after_explicit_restart PASSED [ 26%]
+tests/test_navigation_causality.py::test_old_checkpoint_source_cannot_enter_fresh_recovery_session PASSED [ 26%]
+tests/test_navigation_causality.py::test_route_session_replacement_stops_even_after_arrival_then_remains_absorbing PASSED [ 26%]
+tests/test_navigation_causality.py::test_stop_route_stops_arrived_progress_and_is_absorbing PASSED [ 27%]
+tests/test_navigation_causality.py::test_shared_navigation_identifiers_reject_unicode_surrogate_code_points PASSED [ 27%]
+tests/test_navigation_checkpoint_evidence.py::test_detector_evidence_binds_exact_owned_frame_then_advances_reducer PASSED [ 27%]
+tests/test_navigation_checkpoint_evidence.py::test_unknown_and_ambiguous_are_valid_evidence_but_never_progress[detection0-unknown_checkpoint] PASSED [ 27%]
+tests/test_navigation_checkpoint_evidence.py::test_unknown_and_ambiguous_are_valid_evidence_but_never_progress[detection1-ambiguous_checkpoint] PASSED [ 27%]
+tests/test_navigation_checkpoint_evidence.py::test_detector_and_profile_drift_are_rejected_before_evidence_exists[detector0-source0-identity] PASSED [ 27%]
+tests/test_navigation_checkpoint_evidence.py::test_detector_and_profile_drift_are_rejected_before_evidence_exists[detector1-source1-profile] PASSED [ 28%]
+tests/test_navigation_checkpoint_evidence.py::test_detector_and_profile_drift_are_rejected_before_evidence_exists[detector2-source2-profile] PASSED [ 28%]
+tests/test_navigation_checkpoint_evidence.py::test_profile_content_digest_changes_with_every_binding_field PASSED [ 28%]
+tests/test_navigation_checkpoint_evidence.py::test_frame_geometry_format_and_payload_shape_are_checked_before_detection PASSED [ 28%]
+tests/test_navigation_checkpoint_evidence.py::test_detector_output_must_be_typed_and_inside_its_profile PASSED [ 28%]
+tests/test_navigation_checkpoint_evidence.py::test_detector_exception_is_typed_and_preserves_cause PASSED [ 28%]
+tests/test_navigation_checkpoint_evidence.py::test_detector_metadata_change_during_execution_is_rejected PASSED [ 29%]
+tests/test_navigation_checkpoint_evidence.py::test_post_detect_metadata_callback_cannot_rewrite_returned_detection PASSED [ 29%]
+tests/test_navigation_checkpoint_evidence.py::test_detector_cannot_mutate_the_expected_source_during_execution[detector] PASSED [ 29%]
+tests/test_navigation_checkpoint_evidence.py::test_detector_cannot_mutate_the_expected_source_during_execution[profile] PASSED [ 29%]
+tests/test_navigation_checkpoint_evidence.py::test_malformed_expected_source_mutation_remains_a_typed_contract_failure PASSED [ 29%]
+tests/test_navigation_checkpoint_evidence.py::test_detector_cannot_mutate_the_owned_frame_during_execution PASSED [ 30%]
+tests/test_navigation_checkpoint_evidence.py::test_binder_rejects_same_ref_with_different_bytes_and_same_bytes_with_different_ref PASSED [ 30%]
+tests/test_navigation_checkpoint_evidence.py::test_binder_rejects_foreign_source_and_profile_route_binding_without_mutating_progress PASSED [ 30%]
+tests/test_navigation_checkpoint_evidence.py::test_checkpoint_evidence_api_has_no_caller_checkpoint_label_or_live_dependency PASSED [ 30%]
+tests/test_navigation_durable_route_evidence.py::test_durable_acquisition_and_separate_review_pass_for_each_direction[mine_to_bank] PASSED [ 30%]
+tests/test_navigation_durable_route_evidence.py::test_durable_acquisition_and_separate_review_pass_for_each_direction[bank_to_mine] PASSED [ 30%]
+tests/test_navigation_durable_route_evidence.py::test_durable_full_intake_rejects_mutated_fixed_authority_expectation[activation_allowed-True] PASSED [ 31%]
+tests/test_navigation_durable_route_evidence.py::test_durable_full_intake_rejects_mutated_fixed_authority_expectation[input_authority-True] PASSED [ 31%]
+tests/test_navigation_durable_route_evidence.py::test_durable_full_intake_rejects_mutated_fixed_authority_expectation[evidence_role-foreign-route-evidence-role] PASSED [ 31%]
+tests/test_navigation_durable_route_evidence.py::test_verified_persisted_artifacts_drive_deterministic_post_attempt_replay PASSED [ 31%]
+tests/test_navigation_durable_route_evidence.py::test_persisted_causality_replay_stops_for_missing_foreign_or_nonfresh_evidence[missing-receipt-attempt_receipt_required] PASSED [ 31%]
+tests/test_navigation_durable_route_evidence.py::test_persisted_causality_replay_stops_for_missing_foreign_or_nonfresh_evidence[foreign-receipt-attempt_id_mismatch] PASSED [ 31%]
+tests/test_navigation_durable_route_evidence.py::test_persisted_causality_replay_stops_for_missing_foreign_or_nonfresh_evidence[frame-at-receipt-boundary-evidence_not_after_boundary] PASSED [ 32%]
+tests/test_navigation_durable_route_evidence.py::test_review_cannot_begin_before_acquisition_finalization PASSED [ 32%]
+tests/test_navigation_durable_route_evidence.py::test_operator_cannot_be_the_independent_reviewer PASSED [ 32%]
+tests/test_navigation_durable_route_evidence.py::test_review_truth_must_be_exactly_ordered_fresh_and_single_use[out-of-order] PASSED [ 32%]
+tests/test_navigation_durable_route_evidence.py::test_review_truth_must_be_exactly_ordered_fresh_and_single_use[repeated-truth] PASSED [ 32%]
+tests/test_navigation_durable_route_evidence.py::test_review_truth_must_be_exactly_ordered_fresh_and_single_use[repeated-time] PASSED [ 33%]
+tests/test_navigation_durable_route_evidence.py::test_late_capture_write_failure_retains_nonreviewable_partial_audit PASSED [ 33%]
+tests/test_navigation_durable_route_evidence.py::test_two_concurrent_writers_claim_exactly_one_fresh_root PASSED [ 33%]
+tests/test_navigation_durable_route_evidence.py::test_foreign_preclaimed_root_and_sentinel_are_never_adopted_or_removed PASSED [ 33%]
+tests/test_navigation_durable_route_evidence.py::test_acquisition_manifest_collision_preserves_foreign_bytes_and_stops PASSED [ 33%]
+tests/test_navigation_durable_route_evidence.py::test_review_manifest_collision_preserves_foreign_bytes_and_stops PASSED [ 33%]
+tests/test_navigation_durable_route_evidence.py::test_loader_rejects_reversed_route_and_caller_owned_identity_drift[reverse-route] PASSED [ 34%]
+tests/test_navigation_durable_route_evidence.py::test_loader_rejects_reversed_route_and_caller_owned_identity_drift[source] PASSED [ 34%]
+tests/test_navigation_durable_route_evidence.py::test_loader_rejects_reversed_route_and_caller_owned_identity_drift[campaign] PASSED [ 34%]
+tests/test_navigation_durable_route_evidence.py::test_runtime_source_identity_drift_stops_without_persisting_case PASSED [ 34%]
+tests/test_navigation_durable_route_evidence.py::test_persisted_artifact_mutation_invalidates_previously_verified_transaction PASSED [ 34%]
+tests/test_navigation_durable_route_evidence.py::test_loader_deterministically_rejects_reparse_alias_without_platform_skip PASSED [ 34%]
+tests/test_navigation_durable_route_evidence.py::test_loader_rejects_hardlink_alias_to_foreign_bytes PASSED [ 35%]
+tests/test_navigation_durable_route_evidence.py::test_writer_contract_requires_trusted_parent_and_is_not_real_evidence_eligible PASSED [ 35%]
+tests/test_navigation_durable_route_evidence.py::test_acquisition_parent_swap_at_path_open_cannot_finalize_or_verify PASSED [ 35%]
+tests/test_navigation_durable_route_evidence.py::test_review_parent_swap_at_path_open_cannot_finalize_or_verify PASSED [ 35%]
+tests/test_navigation_durable_route_evidence.py::test_acquisition_root_clone_swap_at_terminal_open_is_not_verifiable PASSED [ 35%]
+tests/test_navigation_durable_route_evidence.py::test_review_root_clone_swap_at_terminal_open_is_not_verifiable PASSED [ 36%]
+tests/test_navigation_durable_route_evidence.py::test_terminal_manifests_are_the_last_successful_writes PASSED [ 36%]
+tests/test_navigation_durable_route_evidence.py::test_exception_after_terminal_manifest_never_appends_a_stop_record PASSED [ 36%]
+tests/test_navigation_durable_route_evidence.py::test_same_content_replacement_before_finalization_is_not_adopted PASSED [ 36%]
+tests/test_navigation_durable_route_evidence.py::test_same_content_acquisition_replacement_after_review_begin_invalidates_review PASSED [ 36%]
+tests/test_navigation_durable_route_evidence.py::test_stateful_pathlike_values_are_snapshotted_once_per_public_operation PASSED [ 36%]
+tests/test_navigation_durable_route_evidence.py::test_nested_review_root_is_rejected_before_reservation PASSED [ 37%]
+tests/test_navigation_durable_route_evidence.py::test_two_concurrent_review_writers_claim_exactly_one_fresh_root PASSED [ 37%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[route-version] PASSED [ 37%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[route-plan] PASSED [ 37%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[detector] PASSED [ 37%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[profile] PASSED [ 37%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[session] PASSED [ 38%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[build] PASSED [ 38%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[width] PASSED [ 38%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[configuration] PASSED [ 38%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[environment] PASSED [ 38%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[support] PASSED [ 39%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[acquisition-journal] PASSED [ 39%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[acquisition-finalization] PASSED [ 39%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[acquisition-physical] PASSED [ 39%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[review-id] PASSED [ 39%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[review-plan] PASSED [ 39%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[review-journal] PASSED [ 40%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[review-finalization] PASSED [ 40%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[review-physical] PASSED [ 40%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[review-digest] PASSED [ 40%]
+tests/test_navigation_durable_route_evidence.py::test_durable_loader_rejects_every_external_identity_or_lineage_drift[reviewer] PASSED [ 40%]
+tests/test_navigation_durable_route_evidence.py::test_stale_persisted_request_predecessor_cannot_be_promoted PASSED [ 40%]
+tests/test_navigation_durable_route_evidence.py::test_durable_surfaces_are_not_root_exported_or_input_capable PASSED [ 41%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_writer_has_a_separate_platform_scoped_contract PASSED [ 41%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_writer_is_mechanically_input_free PASSED [ 41%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_capability_failure_precedes_all_effects PASSED [ 41%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_review_capability_failure_precedes_all_effects PASSED [ 41%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_native_round_trip_is_strictly_reviewable_or_unavailable PASSED [ 42%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_acquisition_physical_pin_rejects_exact_byte_replacement[frame] PASSED [ 42%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_acquisition_physical_pin_rejects_exact_byte_replacement[terminal] PASSED [ 42%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_acquisition_physical_pin_rejects_exact_byte_replacement[case-directory] PASSED [ 42%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_review_physical_pin_rejects_exact_byte_replacement[truth] PASSED [ 42%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_review_physical_pin_rejects_exact_byte_replacement[terminal] PASSED [ 42%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_review_physical_pin_rejects_exact_byte_replacement[truth-directory] PASSED [ 43%]
+tests/test_navigation_durable_route_evidence.py::test_review_plan_v1_wire_shape_cannot_claim_the_physical_binding PASSED [ 43%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_foreign_preclaimed_root_is_never_adopted_or_removed PASSED [ 43%]
+tests/test_navigation_durable_route_evidence.py::test_two_handle_anchored_writers_claim_exactly_one_fresh_root PASSED [ 43%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_parent_replacement_before_root_create_never_receives_evidence PASSED [ 43%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_ordinary_ancestry_replacement_fails_before_root_or_source[intermediate] PASSED [ 43%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_ordinary_ancestry_replacement_fails_before_root_or_source[parent] PASSED [ 44%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_claimed_root_rename_before_plan_is_blocked PASSED [ 44%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_intermediate_ancestor_junction_race_fails_before_root PASSED [ 44%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_constructor_failure_closes_each_untransferred_handle_once[transaction drive root] PASSED [ 44%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_constructor_failure_closes_each_untransferred_handle_once[transaction parent] PASSED [ 44%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_constructor_failure_closes_each_untransferred_handle_once[new transaction root] PASSED [ 44%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_nonfixed_volume_fails_before_root_or_source PASSED [ 45%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_unsupported_filesystem_fails_before_root_or_source[True-ReFS-requires the reviewed NTFS capability envelope] PASSED [ 45%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_unsupported_filesystem_fails_before_root_or_source[False--cannot query transaction parent filesystem] PASSED [ 45%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_close_protection_failure_precedes_root_and_source PASSED [ 45%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_createfile_invalid_handle_is_normalized PASSED [ 45%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_namespace_close_releases_exact_owned_handle_ledger_once PASSED [ 46%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_close_never_closes_a_simulated_reused_foreign_handle PASSED [ 46%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_close_refuses_reused_same_file_handle PASSED [ 46%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_descriptor_conversion_failure_closes_unprotected_duplicate[import-error] PASSED [ 46%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_descriptor_conversion_failure_closes_unprotected_duplicate[exception] PASSED [ 46%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_descriptor_conversion_failure_closes_unprotected_duplicate[negative-descriptor] PASSED [ 46%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_post_validation_close_cannot_redirect_child_create PASSED [ 47%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_mid_transaction_namespace_replacement_is_blocked[frame-parent] PASSED [ 47%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_mid_transaction_namespace_replacement_is_blocked[frame-root] PASSED [ 47%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_mid_transaction_namespace_replacement_is_blocked[case-record-parent] PASSED [ 47%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_mid_transaction_namespace_replacement_is_blocked[case-record-root] PASSED [ 47%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_mid_transaction_namespace_replacement_is_blocked[final-manifest-parent] PASSED [ 47%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_mid_transaction_namespace_replacement_is_blocked[final-manifest-root] PASSED [ 48%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_complete_acquisition_clone_cannot_replace_or_verify PASSED [ 48%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_replaced_empty_case_directory_never_receives_frame_bytes PASSED [ 48%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_case_junction_substitution_never_receives_frame_bytes PASSED [ 48%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_unexpected_native_create_result_stops_without_adoption PASSED [ 48%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_parent_reparse_capability_failure_precedes_root_create PASSED [ 49%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_hard_link_alias_stops_before_later_evidence PASSED [ 49%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_hard_link_race_after_create_stops_without_receipt PASSED [ 49%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_invalidated_root_handle_stops_without_path_fallback PASSED [ 49%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_partial_write_failure_retains_only_owned_audit_prefix PASSED [ 49%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_foreign_file_survives_finalization_failure PASSED [ 49%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_review_parent_replacement_before_root_create_is_isolated PASSED [ 50%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_claimed_review_root_rename_before_plan_is_blocked PASSED [ 50%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_review_mid_transaction_replacement_is_blocked[truth-parent] PASSED [ 50%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_review_mid_transaction_replacement_is_blocked[truth-root] PASSED [ 50%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_review_mid_transaction_replacement_is_blocked[review-manifest-parent] PASSED [ 50%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_review_mid_transaction_replacement_is_blocked[review-manifest-root] PASSED [ 50%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_review_mid_transaction_replacement_is_blocked[final-manifest-parent] PASSED [ 51%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_review_mid_transaction_replacement_is_blocked[final-manifest-root] PASSED [ 51%]
+tests/test_navigation_durable_route_evidence.py::test_handle_anchored_complete_review_clone_cannot_replace_or_verify PASSED [ 51%]
+tests/test_navigation_durable_route_evidence.py::test_two_handle_anchored_review_writers_claim_exactly_one_fresh_root PASSED [ 51%]
+tests/test_navigation_passive_campaign.py::test_direction_session_finalizes_exact_source_frames_without_input[mine_to_bank] PASSED [ 51%]
+tests/test_navigation_passive_campaign.py::test_direction_session_finalizes_exact_source_frames_without_input[bank_to_mine] PASSED [ 52%]
+tests/test_navigation_passive_campaign.py::test_operator_acknowledgement_only_requests_the_exact_next_capture PASSED [ 52%]
+tests/test_navigation_passive_campaign.py::test_nonmatch_detector_output_is_owned_without_retry_or_truth[detection0] PASSED [ 52%]
+tests/test_navigation_passive_campaign.py::test_nonmatch_detector_output_is_owned_without_retry_or_truth[detection1] PASSED [ 52%]
+tests/test_navigation_passive_campaign.py::test_single_writer_latches_failure_and_stale_snapshot_cannot_fork PASSED [ 52%]
+tests/test_navigation_passive_campaign.py::test_one_request_invokes_source_once_and_exception_cannot_retry PASSED [ 52%]
+tests/test_navigation_passive_campaign.py::test_malformed_source_or_detector_failure_latches_stop[True] PASSED [ 53%]
+tests/test_navigation_passive_campaign.py::test_malformed_source_or_detector_failure_latches_stop[False] PASSED [ 53%]
+tests/test_navigation_passive_campaign.py::test_source_identity_toctou_and_foreign_result_stop PASSED [ 53%]
+tests/test_navigation_passive_campaign.py::test_stale_equal_future_and_timeout_capture_events_fail_closed[0.0-2.0-frame_not_after_request] PASSED [ 53%]
+tests/test_navigation_passive_campaign.py::test_stale_equal_future_and_timeout_capture_events_fail_closed[3.0-2.0-frame_from_future] PASSED [ 53%]
+tests/test_navigation_passive_campaign.py::test_stale_equal_future_and_timeout_capture_events_fail_closed[1.0-31.0-capture_timeout] PASSED [ 53%]
+tests/test_navigation_passive_campaign.py::test_bound_clock_records_completion_and_detects_late_callbacks PASSED [ 54%]
+tests/test_navigation_passive_campaign.py::test_detector_delay_past_expiry_cannot_use_an_earlier_clock_read PASSED [ 54%]
+tests/test_navigation_passive_campaign.py::test_public_snapshots_cannot_rewrite_internal_capture_or_finalization PASSED [ 54%]
+tests/test_navigation_passive_campaign.py::test_public_and_source_request_mutation_cannot_change_issued_request PASSED [ 54%]
+tests/test_navigation_passive_campaign.py::test_duplicate_capture_id_stops_without_dropping_first_capture PASSED [ 54%]
+tests/test_navigation_passive_campaign.py::test_failure_after_complete_prevents_finalization_and_double_finalization PASSED [ 55%]
+tests/test_navigation_passive_campaign.py::test_backdated_finalization_latches_stop PASSED [ 55%]
+tests/test_navigation_passive_campaign.py::test_malformed_finalization_latches_stop_and_cannot_retry PASSED [ 55%]
+tests/test_navigation_passive_campaign.py::test_equal_metadata_adapter_replacement_stops_finalization PASSED [ 55%]
+tests/test_navigation_passive_campaign.py::test_detector_equality_spoof_cannot_satisfy_exact_finalization_contract PASSED [ 55%]
+tests/test_navigation_passive_campaign.py::test_nonincreasing_capture_utc_stops_before_detector_and_cannot_retry PASSED [ 55%]
+tests/test_navigation_passive_campaign.py::test_equal_time_next_acknowledgement_stops_before_source_invocation PASSED [ 56%]
+tests/test_navigation_passive_campaign.py::test_base_exception_latches_interruption_before_propagation[source] PASSED [ 56%]
+tests/test_navigation_passive_campaign.py::test_base_exception_latches_interruption_before_propagation[detector] PASSED [ 56%]
+tests/test_navigation_passive_campaign.py::test_source_callback_cannot_reenter_or_resurrect_campaign[stop] PASSED [ 56%]
+tests/test_navigation_passive_campaign.py::test_source_callback_cannot_reenter_or_resurrect_campaign[reenter] PASSED [ 56%]
+tests/test_navigation_passive_campaign.py::test_detector_cannot_replace_bound_source_after_initial_capture_check PASSED [ 56%]
+tests/test_navigation_passive_campaign.py::test_detector_cannot_relabel_source_result_after_capture PASSED [ 57%]
+tests/test_navigation_passive_campaign.py::test_explicit_restart_requires_fresh_lineage_and_blocks_aba PASSED [ 57%]
+tests/test_navigation_passive_campaign.py::test_restart_clears_old_pending_request_and_retains_retired_audit PASSED [ 57%]
+tests/test_navigation_passive_campaign.py::test_restart_callback_cannot_fork_or_overwrite_the_stopped_head PASSED [ 57%]
+tests/test_navigation_passive_campaign.py::test_restart_rejects_backdating_same_session_and_direction_reversal PASSED [ 57%]
+tests/test_navigation_passive_campaign.py::test_sequencer_cannot_be_copied_deepcopied_or_pickled PASSED [ 57%]
+tests/test_navigation_passive_campaign.py::test_monotonic_inputs_require_exact_floats_without_rounding_or_subclasses PASSED [ 58%]
+tests/test_navigation_passive_campaign.py::test_acquisition_transcript_is_hash_chained_into_reviewed_package PASSED [ 58%]
+tests/test_navigation_passive_campaign.py::test_independent_review_uses_separate_fixture_truth_and_disagreement_fails PASSED [ 58%]
+tests/test_navigation_passive_campaign.py::test_new_campaign_surfaces_are_not_root_exported_or_input_capable PASSED [ 58%]
+tests/test_navigation_release_decision.py::test_exact_pair_is_deterministic_bound_and_permanently_denied PASSED [ 58%]
+tests/test_navigation_release_decision.py::test_valid_reviewer_rejection_returns_deterministic_denial PASSED [ 59%]
+tests/test_navigation_release_decision.py::test_typed_causal_graph_rejects_truncation_reuse_and_provenance_splices PASSED [ 59%]
+tests/test_navigation_release_decision.py::test_typed_release_graph_rejects_nonbool_endpoint_reviewer_and_matrix_splices PASSED [ 59%]
+tests/test_navigation_release_decision.py::test_incomplete_or_nonfresh_post_attempt_chain_is_retained_as_denial[interrupted] PASSED [ 59%]
+tests/test_navigation_release_decision.py::test_incomplete_or_nonfresh_post_attempt_chain_is_retained_as_denial[equal-boundary] PASSED [ 59%]
+tests/test_navigation_release_decision.py::test_direction_result_or_slot_cannot_cross_satisfy PASSED [ 59%]
+tests/test_navigation_release_decision.py::test_source_session_or_route_plan_drift_fails_closed PASSED [ 60%]
+tests/test_navigation_release_decision.py::test_every_direction_lineage_pin_must_be_independent[campaign_id-campaign id] PASSED [ 60%]
+tests/test_navigation_release_decision.py::test_every_direction_lineage_pin_must_be_independent[capture_session_id-capture session] PASSED [ 60%]
+tests/test_navigation_release_decision.py::test_every_direction_lineage_pin_must_be_independent[route_plan_sha256-route plan] PASSED [ 60%]
+tests/test_navigation_release_decision.py::test_every_direction_lineage_pin_must_be_independent[finalized_package_sha256-finalized package] PASSED [ 60%]
+tests/test_navigation_release_decision.py::test_every_direction_lineage_pin_must_be_independent[acquisition_head_sha256-acquisition head] PASSED [ 60%]
+tests/test_navigation_release_decision.py::test_every_direction_lineage_pin_must_be_independent[acquisition_journal_head_sha256-acquisition journal] PASSED [ 61%]
+tests/test_navigation_release_decision.py::test_every_direction_lineage_pin_must_be_independent[acquisition_finalization_sha256-acquisition finalization] PASSED [ 61%]
+tests/test_navigation_release_decision.py::test_every_direction_lineage_pin_must_be_independent[review_id-review id] PASSED [ 61%]
+tests/test_navigation_release_decision.py::test_every_direction_lineage_pin_must_be_independent[independent_review_sha256-independent review] PASSED [ 61%]
+tests/test_navigation_release_decision.py::test_every_direction_lineage_pin_must_be_independent[review_plan_sha256-review plan] PASSED [ 61%]
+tests/test_navigation_release_decision.py::test_every_direction_lineage_pin_must_be_independent[review_journal_head_sha256-review journal] PASSED [ 62%]
+tests/test_navigation_release_decision.py::test_every_direction_lineage_pin_must_be_independent[review_finalization_sha256-review finalization] PASSED [ 62%]
+tests/test_navigation_release_decision.py::test_every_transaction_root_must_be_independent PASSED [ 62%]
+tests/test_navigation_release_decision.py::test_asymmetric_endpoint_contract_is_rejected PASSED [ 62%]
+tests/test_navigation_release_decision.py::test_same_opaque_route_name_version_and_reviewer_are_allowed PASSED [ 62%]
+tests/test_navigation_release_decision.py::test_each_stateful_pathlike_is_evaluated_once PASSED [ 62%]
+tests/test_navigation_release_decision.py::test_repeated_pair_intake_rejects_metadata_change_between_snapshots FAILED [ 63%]
+
+=================================== FAILURES ===================================
+_____ test_repeated_pair_intake_rejects_metadata_change_between_snapshots ______
+
+tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_repeated_pair_intake_reje0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f8d1eaf01a0>
+
+    def test_repeated_pair_intake_rejects_metadata_change_between_snapshots(
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        evidence = _build_pair(tmp_path)
+        original_loader = release_module._load_and_verify_durable_synthetic_route_evidence_detailed
+        call_count = 0
+    
+        def racing_loader(
+            acquisition_root: str | os.PathLike[str],
+            review_root: str | os.PathLike[str],
+            expectation: DurableRouteEvidenceFilesystemExpectation,
+        ) -> object:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 3:
+                plan_path = evidence.mine_to_bank.acquisition_root / ACQUISITION_PLAN_FILENAME
+                current = plan_path.stat()
+                os.utime(
+                    plan_path,
+                    ns=(current.st_atime_ns, current.st_mtime_ns + 10_000_000),
+                )
+            return original_loader(acquisition_root, review_root, expectation)
+    
+        monkeypatch.setattr(
+            release_module,
+            "_load_and_verify_durable_synthetic_route_evidence_detailed",
+            racing_loader,
+        )
+>       with pytest.raises(
+            RouteEvidenceIntegrityError,
+            match="changed between repeated intake snapshots",
+        ):
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'changed between repeated intake snapshots'
+E         Actual message: 'durable acquisition physical identity differs'
+
+tests/test_navigation_release_decision.py:2014: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_navigation_release_decision.py::test_repeated_pair_intake_rejects_metadata_change_between_snapshots - AssertionError: Regex pattern did not match.
+  Expected regex: 'changed between repeated intake snapshots'
+  Actual message: 'durable acquisition physical identity differs'
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+======================== 1 failed, 358 passed in 26.71s ========================
+........................................................................ [  6%]
+........................................................................ [ 13%]
+........................................................................ [ 19%]
+........................................................................ [ 26%]
+........................................................................ [ 33%]
+........................................................................ [ 39%]
+........................................................................ [ 46%]
+........................................................................ [ 53%]
+........................F............................................... [ 59%]
+........................................................................ [ 66%]
+........................................................................ [ 73%]
+........................................................................ [ 79%]
+........................................................................ [ 86%]
+........................................................................ [ 93%]
+................................................................s....... [ 99%]
+...                                                                      [100%]
+=================================== FAILURES ===================================
+_____ test_repeated_pair_intake_rejects_metadata_change_between_snapshots ______
+
+tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-1/test_repeated_pair_intake_reje0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fd64b97b830>
+
+    def test_repeated_pair_intake_rejects_metadata_change_between_snapshots(
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        evidence = _build_pair(tmp_path)
+        original_loader = release_module._load_and_verify_durable_synthetic_route_evidence_detailed
+        call_count = 0
+    
+        def racing_loader(
+            acquisition_root: str | os.PathLike[str],
+            review_root: str | os.PathLike[str],
+            expectation: DurableRouteEvidenceFilesystemExpectation,
+        ) -> object:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 3:
+                plan_path = evidence.mine_to_bank.acquisition_root / ACQUISITION_PLAN_FILENAME
+                current = plan_path.stat()
+                os.utime(
+                    plan_path,
+                    ns=(current.st_atime_ns, current.st_mtime_ns + 10_000_000),
+                )
+            return original_loader(acquisition_root, review_root, expectation)
+    
+        monkeypatch.setattr(
+            release_module,
+            "_load_and_verify_durable_synthetic_route_evidence_detailed",
+            racing_loader,
+        )
+>       with pytest.raises(
+            RouteEvidenceIntegrityError,
+            match="changed between repeated intake snapshots",
+        ):
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'changed between repeated intake snapshots'
+E         Actual message: 'durable acquisition physical identity differs'
+
+tests/test_navigation_release_decision.py:2014: AssertionError
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.12.14-final-0 _______________
+
+Name                                                                 Stmts   Miss  Cover   Missing
+--------------------------------------------------------------------------------------------------
+src/mining_automation/__init__.py                                        2      0   100%
+src/mining_automation/app.py                                             7      7     0%   1-12
+src/mining_automation/capture/__init__.py                                6      0   100%
+src/mining_automation/capture/backend.py                                18      0   100%
+src/mining_automation/capture/errors.py                                 16      0   100%
+src/mining_automation/capture/frame.py                                  82      0   100%
+src/mining_automation/capture/source.py                                164      0   100%
+src/mining_automation/capture/testing.py                                87      0   100%
+src/mining_automation/capture/windows/__init__.py                        5      0   100%
+src/mining_automation/capture/windows/_win32_calls.py                  182    182     0%   17-416
+src/mining_automation/capture/windows/backend.py                        48      0   100%
+src/mining_automation/capture/windows/bmp.py                            13      0   100%
+src/mining_automation/capture/windows/dpi.py                             7      0   100%
+src/mining_automation/capture/windows/gdi_resources.py                  94      6    94%   51, 53, 91, 127, 129, 178
+src/mining_automation/capture/windows/geometry.py                        6      0   100%
+src/mining_automation/capture/windows/testing.py                        33      0   100%
+src/mining_automation/capture/windows/win32_api.py                      43      0   100%
+src/mining_automation/capture/windows/window_selector.py                17      0   100%
+src/mining_automation/contracts.py                                     165      0   100%
+src/mining_automation/controller.py                                     33     12    64%   32, 44, 52, 64-76
+src/mining_automation/diagnostics.py                                    21      2    90%   17, 24
+src/mining_automation/navigation/__init__.py                             6      0   100%
+src/mining_automation/navigation/_windows_handle_anchored.py           647    647     0%   7-1185
+src/mining_automation/navigation/checkpoint_evidence.py                127     20    84%   150, 152, 176, 192-193, 197, 204-205, 209, 213, 250-251, 259, 267, 301, 305, 307, 309, 313, 321
+src/mining_automation/navigation/cli.py                                 23      3    87%   32-34
+src/mining_automation/navigation/contracts.py                          639     83    87%   102, 107, 143, 162, 164, 166, 168, 170, 174, 295, 306, 317, 331, 342, 359, 376, 378, 384, 386, 410, 412, 414, 426, 439, 461, 475, 477, 483, 487, 495, 519, 521, 527, 529, 531, 538, 551, 553, 572, 584, 586, 604, 606, 618, 637, 647, 659, 661, 663, 665, 674, 701, 703, 708, 716, 740, 746, 748, 750, 756, 781, 783, 796, 821, 823, 829, 831, 836, 849, 861, 864, 873, 886, 899, 995, 1074, 1076, 1079, 1093, 1096, 1105, 1107, 1116
+src/mining_automation/navigation/durable_route_evidence.py             922    171    81%   202, 204, 206, 234, 266, 268, 270, 272, 274, 276, 278, 280, 296, 298, 300, 302, 342, 344, 425, 440, 443-444, 450, 463-464, 468-469, 471, 492-493, 496, 541, 545-550, 555, 565, 568, 573-578, 583, 599, 601, 603, 607, 610, 614-619, 628, 636-638, 648, 683, 697, 700-701, 703, 961, 964, 1022, 1028, 1069, 1141, 1146, 1153, 1219, 1224, 1226, 1245, 1255, 1257, 1259, 1277, 1291, 1361, 1380, 1383-1384, 1387, 1390-1391, 1395, 1413-1414, 1436-1440, 1442, 1454-1460, 1474, 1516-1523, 1529-1534, 1542, 1593-1597, 1603-1604, 1664-1670, 1711, 1733, 1736-1737, 1740, 1743-1744, 1752, 1772-1773, 1786, 1805, 1829-1839, 1846-1848, 1850-1851, 1853-1854, 1862, 1866, 1932-1933, 1986, 2010-2015, 2068, 2084, 2094, 2129, 2145, 2147, 2149, 2177, 2190, 2198, 2210, 2229
+src/mining_automation/navigation/endurance_rehearsal.py                475     78    84%   53, 64, 112, 114, 116, 119, 123, 130, 136, 142, 182, 193, 202, 221, 231, 237, 281, 283, 285, 287, 289, 294, 296, 307, 309, 311, 314, 321, 333, 346, 351, 358, 366, 378, 380-390, 423, 425, 431, 433, 436, 438, 443, 451, 466, 565, 571, 585-586, 588, 597, 607, 620-621, 623, 631, 634-635, 787, 814, 820, 885, 895, 908, 930-931, 938, 969, 1007, 1014, 1019
+src/mining_automation/navigation/handle_anchored_route_evidence.py      30      9    70%   66-72, 87-88, 111-112
+src/mining_automation/navigation/integration_boundary.py                 1      0   100%
+src/mining_automation/navigation/machine.py                            229     18    92%   56, 62, 66, 85, 88, 92, 96, 124, 134, 214, 216, 316, 318, 468, 541, 543, 545, 611
+src/mining_automation/navigation/offline_route_session.py              291     31    89%   91, 93, 95, 101, 106, 136, 138, 140, 142, 148, 150, 153, 167, 178, 180, 186, 191, 197, 213, 279, 299, 365, 389, 447, 458-467, 504, 548, 652, 661
+src/mining_automation/navigation/passive_campaign.py                   824    144    83%   105, 125-126, 128, 146, 148, 157, 217, 221, 245, 250, 255, 293, 297, 299, 301, 310, 314, 328, 330, 333, 352, 354, 357, 361, 365, 367, 386, 388, 393, 431, 435, 454, 456, 460, 473, 485, 487, 503, 510, 517, 550, 556, 614, 620, 629, 648, 658, 680, 690, 752, 758, 771, 773, 784, 786, 808, 822, 831, 883, 896, 931, 960, 962-963, 994, 1024, 1026, 1034, 1067-1068, 1070, 1073, 1080-1081, 1083, 1098, 1112-1113, 1115, 1120-1121, 1148, 1153, 1173, 1204, 1209, 1216-1217, 1222, 1246, 1248, 1263, 1265, 1268-1269, 1280, 1306, 1308, 1323, 1381, 1401, 1413, 1416-1417, 1428, 1440, 1478, 1480, 1487-1488, 1492-1493, 1503, 1516, 1518, 1520, 1637, 1677-1686, 1694-1698, 1702-1707, 1757-1762, 1796-1797, 1834-1841, 1849-1854, 1893, 1905, 1919
+src/mining_automation/navigation/release_decision.py                   751    112    85%   171, 173, 175, 177, 179, 206, 208, 210, 212, 242, 244, 246, 252, 254, 256, 285, 287, 289, 291, 300, 307, 309, 314, 316, 349, 351, 353, 355, 360, 362, 368, 424, 426, 437, 439, 441, 449, 451, 457, 471, 481, 483, 490, 565, 567, 569, 571, 579, 581, 589, 591, 600-601, 618, 634, 638, 645, 653, 661, 715, 717, 719, 724, 726, 733, 742, 791, 793, 795, 802, 804, 806, 826, 828, 830, 843, 851, 888, 893, 898, 922, 954, 957, 965, 972, 1003, 1005, 1012, 1034, 1042, 1122, 1137, 1229, 1616, 1624, 1661, 1669-1670, 1672, 1682, 1707, 1721, 1730-1731, 1733, 1742-1743, 1761, 1841, 1861, 1945, 1964
+src/mining_automation/navigation/replay.py                             534     64    88%   105, 107, 115, 150, 152, 165, 177, 181, 202, 204, 208, 210, 222, 246, 268, 274, 276, 284, 322, 330, 332, 334, 343, 350, 352, 354, 368, 388, 394, 396, 401, 431, 437, 439, 442, 469, 484, 572, 622-627, 659, 686, 706, 715, 743, 884, 886, 888, 891, 899-900, 903-904, 1095, 1191, 1341, 1347, 1378, 1384, 1394, 1397-1398, 1424
+src/mining_automation/navigation/round_trip_rehearsal.py               467     62    87%   92, 145, 153, 157, 199, 201, 203, 210, 212, 218, 220, 229, 234, 242, 249, 266, 328, 333, 340, 348, 358, 365, 373, 380, 450, 455, 460, 472, 478, 486, 491, 538, 540, 547, 552, 557, 633, 694, 705, 708, 753, 823, 829, 861, 864, 871, 882, 889, 893, 896, 903, 906, 917, 927, 957, 1092, 1156, 1193, 1206-1207, 1209, 1211
+src/mining_automation/navigation/route_evidence.py                     945    101    89%   141, 162, 172, 179, 186, 206, 218, 224, 237, 263-264, 266, 279, 293, 313, 333-334, 378, 425, 446, 474, 525, 549, 640, 646, 652, 662, 664, 719, 724, 756, 762, 837, 839, 944, 1042, 1046, 1053, 1057, 1059, 1061, 1064, 1067, 1081, 1211, 1218, 1220, 1226, 1230, 1232, 1234, 1239, 1241, 1251, 1313, 1317, 1405, 1409, 1421, 1426, 1428, 1437, 1441, 1517, 1521, 1523, 1527, 1531, 1555, 1557, 1559, 1596, 1600, 1606, 1609, 1655, 1657, 1661, 1664, 1705, 1711, 1713, 1715, 1719, 1721, 1723, 1725, 1732, 1735, 1798, 1813, 1861, 1874, 1877, 1889, 1894, 1905, 2011, 2013, 2015, 2105
+src/mining_automation/navigation/route_evidence_loader.py              560     74    87%   130, 149, 164-165, 178, 180, 184, 193, 195, 208, 223, 243, 252-253, 255, 267-268, 274-275, 299-300, 320-321, 343-344, 391-392, 409-410, 436-437, 465-466, 550-551, 641, 655-656, 782, 792, 842-843, 989, 1001, 1006-1007, 1015, 1017, 1021-1022, 1034, 1038-1039, 1048, 1059-1060, 1071, 1082, 1106, 1131, 1135, 1157-1158, 1189, 1197, 1200, 1210, 1221, 1229, 1238, 1248, 1250, 1262, 1269
+src/mining_automation/perception/__init__.py                             6      0   100%
+src/mining_automation/perception/cli.py                                 56      2    96%   73-74
+src/mining_automation/perception/detector.py                            67      2    97%   112-113
+src/mining_automation/perception/errors.py                              11      0   100%
+src/mining_automation/perception/evaluation.py                         220      3    99%   58, 62, 471
+src/mining_automation/perception/replay.py                             389     34    91%   56, 101, 161, 164, 180, 182, 184, 207, 212, 218, 220, 229, 231, 253, 255, 258, 260, 263, 275, 277, 296, 298, 302, 309, 357, 580-581, 597-598, 613, 652-653, 664-665
+src/mining_automation/perception/testing.py                             15      0   100%
+src/mining_automation/scheduling.py                                     31      3    90%   21, 27, 31
+--------------------------------------------------------------------------------------------------
+TOTAL                                                                 9315   1870    80%
+=========================== short test summary info ============================
+FAILED tests/test_navigation_release_decision.py::test_repeated_pair_intake_rejects_metadata_change_between_snapshots - AssertionError: Regex pattern did not match.
+  Expected regex: 'changed between repeated intake snapshots'
+  Actual message: 'durable acquisition physical identity differs'
+1 failed, 1081 passed, 1 skipped in 1620.50s (0:27:00)
