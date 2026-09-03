@@ -1,0 +1,40 @@
+name: Lead banking D2 audit
+
+on:
+  push:
+    branches: [chatgpt/lead-banking-d2-audit]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 0fa2e11587aa336a5602422dc2f64d71d779d5eb
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Exact frozen topology and non-activation audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "0fa2e11587aa336a5602422dc2f64d71d779d5eb"
+          test "$(git merge-base ff3a9357566d19210981461b46e504d474393ab5 HEAD)" = "ff3a9357566d19210981461b46e504d474393ab5"
+          test -z "$(git diff --name-only ff3a9357566d19210981461b46e504d474393ab5 HEAD | grep -Ev '^(docs/BANKING.md|src/mining_automation/banking/|tests/test_banking_)' || true)"
+          test -z "$(grep -R -n -E 'pyautogui|SendInput|mouse_event|keyboard|RuneLite' src/mining_automation/banking || true)"
+      - name: Banking adversarial and compatibility regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          ruff check src/mining_automation/banking tests/test_banking_*.py
+          mypy src
+          pytest -q tests/test_banking_*.py
+          python - <<'PY'
+          from mining_automation.banking import integration_boundary
+          assert getattr(integration_boundary, '__all__', None) == []
+          PY
