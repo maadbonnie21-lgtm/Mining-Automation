@@ -25,12 +25,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Verify frozen C8A branch remains exact L2 and untouched
+      - name: Verify exact frozen L2 and exact proposal-prep head
         shell: bash
         run: |
           set -euo pipefail
           test "$(git -C frozen-c8a rev-parse HEAD)" = "66c7e9536539979bc60e17f02f026eb64ebf0768"
           test -z "$(git -C frozen-c8a status --porcelain=v1 --untracked-files=all)"
+          test "$(git -C target rev-parse HEAD)" = "4fd677e85b940440f8185ffe8fea7fff18454997"
+          test -z "$(git -C target status --porcelain=v1 --untracked-files=all)"
       - name: Install
         working-directory: target
         run: python -m pip install -e '.[dev]'
