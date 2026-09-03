@@ -44,6 +44,9 @@ jobs:
           for line in lines[run_index + 1 :]:
               if line.startswith("      - name:"):
                   break
+              if line == "":
+                  script_lines.append("")
+                  continue
               if not line.startswith("          "):
                   raise SystemExit(
                       f"unexpected embedded repair indentation: {line!r}"
@@ -66,6 +69,7 @@ jobs:
 
           for obsolete in (
               ".github/workflows/b4-finalize-integration.yml",
+              ".github/b4-finalizer-trigger",
               ".github/b4-finalizer-trigger",
           ):
               Path(obsolete).unlink(missing_ok=True)
