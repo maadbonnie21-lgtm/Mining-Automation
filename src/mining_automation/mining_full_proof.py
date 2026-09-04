@@ -39,7 +39,7 @@ def _mapping(value: object, label: str) -> Mapping[str, object]:
 
 
 def _sequence(value: object, label: str) -> Sequence[object]:
-    if type(value) not in {list, tuple}:
+    if not isinstance(value, (list, tuple)):
         raise MiningFullProofError(f"{label} must be an exact list or tuple")
     return value
 
