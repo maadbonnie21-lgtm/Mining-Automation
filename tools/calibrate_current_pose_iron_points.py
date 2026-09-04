@@ -11,11 +11,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from run_proven_mining_loop import mine_hover_signature
+
 from mining_automation.capture import CaptureSource
 from mining_automation.capture.windows import WindowsCaptureBackend
 from mining_automation.controlled_mining_runner import RealWin32MiningInputDevice
 from mining_automation.validation.windows_camera import RealWindowsCameraApi
-from run_proven_mining_loop import mine_hover_signature
 
 HWND = 3736178
 OUTPUT = Path("diagnostics/three-rock-continuous-20260903/current-pose-hover-calibration")

@@ -12,9 +12,7 @@ Safety invariants:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-import time
 from pathlib import Path
 
 # Ensure src is in sys.path
@@ -24,13 +22,11 @@ from mining_automation.capture import CaptureSource
 from mining_automation.capture.windows import WindowsCaptureBackend
 from mining_automation.controlled_mining_runner import (
     DEFAULT_WINDOW_TITLE_SUBSTRING,
-    ControlledMiningOutcome,
     DryRunWin32MiningInputDevice,
     ProductionMiningPerceptionEvaluator,
     RealWin32MiningInputDevice,
     execute_one_controlled_attempt,
 )
-from mining_automation.mining_slice import MiningOnlyStopReason, MiningProgressKind
 
 
 def build_parser() -> argparse.ArgumentParser:

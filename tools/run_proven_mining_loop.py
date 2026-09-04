@@ -8,7 +8,6 @@ import json
 import os
 import sys
 import time
-from dataclasses import asdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -16,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from mining_automation.capture import CaptureSource
 from mining_automation.capture.windows import WindowsCaptureBackend
 from mining_automation.controlled_mining_runner import (
-    RealWin32MiningInputDevice,
     ProductionMiningPerceptionEvaluator,
+    RealWin32MiningInputDevice,
 )
 from mining_automation.mining_slice import (
     INVENTORY_CAPACITY,
@@ -28,7 +27,6 @@ from mining_automation.mining_slice import (
     begin_mining_only_session,
 )
 from mining_automation.validation.windows_camera import RealWindowsCameraApi
-
 
 HWND = 3736178
 NEUTRAL_POINT = (100, 100)

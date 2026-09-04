@@ -14,6 +14,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from run_proven_mining_loop import mine_hover_signature
+
 from mining_automation.capture import CaptureSource, Frame, PixelFormat, RawFrame
 from mining_automation.capture.windows import WindowsCaptureBackend
 from mining_automation.controlled_mining_runner import (
@@ -22,7 +24,6 @@ from mining_automation.controlled_mining_runner import (
     RealWin32MiningInputDevice,
 )
 from mining_automation.mining_slice import (
-    InventoryPerceptionEnvelope,
     MiningOnlyPhase,
     PerceptionEpoch,
     ResourcePerceptionEnvelope,
@@ -48,9 +49,6 @@ from mining_automation.perception.scene_landmarks import (
     macro_zone_for_region,
 )
 from mining_automation.validation.windows_camera import RealWindowsCameraApi
-
-from run_proven_mining_loop import mine_hover_signature
-
 
 HWND = 3736178
 WIDTH = 1005

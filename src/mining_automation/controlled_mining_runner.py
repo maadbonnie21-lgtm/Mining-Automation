@@ -33,28 +33,24 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
 import sys
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final, Protocol, runtime_checkable
 
-from .capture import CaptureError, CaptureSource, Frame, PixelFormat
-from .contracts import InventoryState, ResourceState
+from .capture import Frame, PixelFormat
+from .contracts import InventoryState
 from .mining_slice import (
     INVENTORY_CAPACITY,
     INVENTORY_PUBLICATION_FLOOR,
-    MAX_MINING_PERCEPTION_AGE_S,
     AtomicMiningWorldState,
     InventoryPerceptionEnvelope,
     MiningAttemptDispatchReceipt,
     MiningAttemptProposal,
-    MiningOnlyDecision,
     MiningOnlyPhase,
-    MiningOnlySession,
     MiningOnlyStopReason,
     MiningProgressKind,
     PerceptionEpoch,
@@ -523,13 +519,13 @@ class ProductionMiningPerceptionEvaluator:
         from .perception.inventory.geometry import InventoryGridLayout, Region
         from .perception.inventory.localization import InventoryFrameProfile
         from .perception.inventory.positive_classifier_v3 import (
-            InventoryPositiveV3DevelopmentAnalyzer,
             SUPPORTED_COLUMN_STRIDE,
             SUPPORTED_FRAME_HEIGHT,
             SUPPORTED_FRAME_WIDTH,
             SUPPORTED_PROFILE_ID,
             SUPPORTED_REGION,
             SUPPORTED_ROW_STRIDE,
+            InventoryPositiveV3DevelopmentAnalyzer,
         )
 
         if self._inventory_analyzer is None:
