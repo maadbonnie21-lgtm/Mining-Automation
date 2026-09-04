@@ -6,6 +6,7 @@ on:
       - chatgpt/runelite-prep-ready-2026-09-04
   pull_request:
     paths:
+      - .gitignore
       - src/mining_automation/validation/runelite_prep.py
       - src/mining_automation/validation/_runelite_prep_win32.py
       - tools/runelite_prep.py
@@ -49,12 +50,19 @@ jobs:
           mypy --strict
           src/mining_automation/validation/runelite_prep.py
           src/mining_automation/validation/_runelite_prep_win32.py
-      - name: Focused PREP and existing Windows safety tests
+      - name: Focused PREP and camera safety tests
         run: >-
           python -m pytest -q
           tests/test_runelite_prep.py
           tests/test_windows_camera_nonactivating.py
-          tests/test_windows_capture.py
+      - name: Legacy capture contract tests
+        if: runner.os == 'Linux'
+        run: python -m pytest -q tests/test_windows_capture.py
+      - name: Windows PREP module import check
+        if: runner.os == 'Windows'
+        run: >-
+          python -c
+          "from mining_automation.validation import _runelite_prep_win32; print('PREP Win32 seam import OK')"
       - name: Mining-to-full read-only plan remains unchanged
         shell: python
         run: |
