@@ -1,0 +1,142 @@
+{
+  "success": true,
+  "stop_reason": "ore_3_verified",
+  "events": [
+    {
+      "iteration": 1,
+      "kind": "clean_reacquisition",
+      "frame": "diagnostics\\different-rock-ore3-20260903\\ore-01-clean.bgra",
+      "resource_view": "supported",
+      "inventory_occupied": 2,
+      "inventory_confidence": 1.0,
+      "phase": "ready",
+      "stop_reason": "none",
+      "test_excluded_target_id": "varrock-east-iron-northwest"
+    },
+    {
+      "iteration": 1,
+      "kind": "hover_proof",
+      "target_id": "varrock-east-iron-southwest",
+      "target_region": [
+        440,
+        545,
+        20,
+        20
+      ],
+      "client_point": [
+        450,
+        555
+      ],
+      "screen_point": [
+        564,
+        694
+      ],
+      "frame": "diagnostics\\different-rock-ore3-20260903\\ore-01-hover.bgra",
+      "proven_mine_iron_rocks": true,
+      "cyan_pixels": 195,
+      "cyan_bbox": [
+        43,
+        7,
+        109,
+        16
+      ],
+      "white_prefix_pixels": 110,
+      "white_prefix_bbox": [
+        7,
+        7,
+        36,
+        16
+      ]
+    },
+    {
+      "iteration": 1,
+      "kind": "single_click",
+      "receipt": {
+        "dispatch_id": "dispatch-8490a4d90f71",
+        "click_count": 1,
+        "dispatched_monotonic_s": 1797092.875
+      },
+      "audit": {
+        "target_hwnd": 3736178,
+        "foreground_hwnd": 3736178,
+        "foreground_matches_target": true,
+        "detector_region": [
+          440,
+          545,
+          20,
+          20
+        ],
+        "detector_client_point": [
+          450,
+          555
+        ],
+        "physical_client_origin": [
+          1,
+          0
+        ],
+        "screen_click_point": [
+          564,
+          694
+        ],
+        "reverse_detector_client_point": [
+          450,
+          555
+        ],
+        "coordinate_round_trip_exact": true
+      }
+    },
+    {
+      "iteration": 1,
+      "kind": "passive_verification",
+      "index": 1,
+      "frame": "diagnostics\\different-rock-ore3-20260903\\ore-01-passive-01.bgra",
+      "inventory_occupied": 2,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null
+    },
+    {
+      "iteration": 1,
+      "kind": "passive_verification",
+      "index": 2,
+      "frame": "diagnostics\\different-rock-ore3-20260903\\ore-01-passive-02.bgra",
+      "inventory_occupied": 2,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null
+    },
+    {
+      "iteration": 1,
+      "kind": "passive_verification",
+      "index": 3,
+      "frame": "diagnostics\\different-rock-ore3-20260903\\ore-01-passive-03.bgra",
+      "inventory_occupied": 2,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null
+    },
+    {
+      "iteration": 1,
+      "kind": "passive_verification",
+      "index": 4,
+      "frame": "diagnostics\\different-rock-ore3-20260903\\ore-01-passive-04.bgra",
+      "inventory_occupied": 3,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null
+    },
+    {
+      "iteration": 1,
+      "kind": "post_ore_reacquisition",
+      "frame": "diagnostics\\different-rock-ore3-20260903\\ore-03-reacquired.bgra",
+      "resource_view": "supported",
+      "inventory_occupied": 3,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null
+    }
+  ]
+}

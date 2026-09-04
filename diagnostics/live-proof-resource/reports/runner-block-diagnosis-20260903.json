@@ -1,0 +1,165 @@
+{
+  "anchors": [
+    {
+      "actual_mean_rgb": [
+        127.60590277777777,
+        124.88194444444444,
+        67.35590277777777
+      ],
+      "anchor_id": "grass-west",
+      "expected_mean_rgb": [
+        80.411458,
+        82.079861,
+        34.185764
+      ],
+      "region": [
+        50,
+        80,
+        48,
+        48
+      ],
+      "similarity": 0.0
+    },
+    {
+      "actual_mean_rgb": [
+        121.81597222222223,
+        121.26736111111111,
+        64.71527777777777
+      ],
+      "anchor_id": "grass-center",
+      "expected_mean_rgb": [
+        70.258681,
+        77.246528,
+        34.888889
+      ],
+      "region": [
+        360,
+        120,
+        48,
+        48
+      ],
+      "similarity": 0.0
+    },
+    {
+      "actual_mean_rgb": [
+        117.4875,
+        109.3875,
+        55.2275
+      ],
+      "anchor_id": "east-slope",
+      "expected_mean_rgb": [
+        86.1525,
+        85.3875,
+        31.1175
+      ],
+      "region": [
+        660,
+        250,
+        40,
+        40
+      ],
+      "similarity": 0.07497582193761021
+    },
+    {
+      "actual_mean_rgb": [
+        91.48611111111111,
+        75.52951388888889,
+        39.36805555555556
+      ],
+      "anchor_id": "south-ground",
+      "expected_mean_rgb": [
+        51.411458,
+        38.414931,
+        11.909722
+      ],
+      "region": [
+        80,
+        760,
+        48,
+        48
+      ],
+      "similarity": 0.0
+    }
+  ],
+  "captured_at_utc": "2026-09-04T01:59:59.811031+00:00",
+  "case_id": "runner-block-diagnosis-20260903",
+  "files": {
+    "draft": "diagnostics\\live-proof-resource\\drafts\\runner-block-diagnosis-20260903.json",
+    "preview": "diagnostics\\live-proof-resource\\previews\\runner-block-diagnosis-20260903.bmp",
+    "raw": "diagnostics\\live-proof-resource\\frames\\runner-block-diagnosis-20260903.raw",
+    "report": "diagnostics\\live-proof-resource\\reports\\runner-block-diagnosis-20260903.json"
+  },
+  "frame": {
+    "frame_id": 1,
+    "height": 1078,
+    "pixel_format": "bgra8888",
+    "width": 1005
+  },
+  "minimum_anchor_confidence": 0.9,
+  "observations": [
+    {
+      "confidence": 0.9638675276855353,
+      "kind": "resource.available",
+      "reason": "available_signature_matched",
+      "resource_id": "varrock-east-iron-northwest"
+    },
+    {
+      "confidence": 0.5,
+      "kind": "resource.uncertain",
+      "reason": "partial_occlusion_suspected",
+      "resource_id": "varrock-east-iron-southwest"
+    },
+    {
+      "confidence": 0.8371909775909893,
+      "kind": "resource.available",
+      "reason": "available_signature_matched",
+      "resource_id": "varrock-east-iron-center"
+    },
+    {
+      "confidence": 0.9696575105393991,
+      "kind": "resource.available",
+      "reason": "available_signature_matched",
+      "resource_id": "varrock-east-iron-northeast"
+    }
+  ],
+  "reference_comparison": {
+    "available": true,
+    "note": "same-coordinate diagnostic only; not a production release threshold",
+    "reference": "diagnostics\\live-proof-resource\\frames\\post-up-hold-50ms-20260903.raw",
+    "zones": {
+      "NE": {
+        "median_pixel_mae": 0.0,
+        "percent_pixel_mae_le_10": 99.98339719029374,
+        "percent_pixel_mae_le_2": 99.96679438058749,
+        "percent_pixel_mae_le_20": 99.98850574712644,
+        "percent_pixel_mae_le_5": 99.9757343550447,
+        "rgb_mae": 0.008016177096636866
+      },
+      "NW": {
+        "median_pixel_mae": 0.0,
+        "percent_pixel_mae_le_10": 99.25542784163474,
+        "percent_pixel_mae_le_2": 98.77394636015326,
+        "percent_pixel_mae_le_20": 99.54916985951469,
+        "percent_pixel_mae_le_5": 99.05108556832695,
+        "rgb_mae": 0.30786717752234993
+      },
+      "SE": {
+        "median_pixel_mae": 0.0,
+        "percent_pixel_mae_le_10": 99.56066411238825,
+        "percent_pixel_mae_le_2": 98.74457215836526,
+        "percent_pixel_mae_le_20": 99.79821200510855,
+        "percent_pixel_mae_le_5": 98.84418901660281,
+        "rgb_mae": 0.3049808429118774
+      },
+      "SW": {
+        "median_pixel_mae": 0.0,
+        "percent_pixel_mae_le_10": 99.92848020434228,
+        "percent_pixel_mae_le_2": 99.82247765006386,
+        "percent_pixel_mae_le_20": 99.97190293742018,
+        "percent_pixel_mae_le_5": 99.89016602809706,
+        "rgb_mae": 0.02280970625798212
+      }
+    }
+  },
+  "schema_version": 1
+}

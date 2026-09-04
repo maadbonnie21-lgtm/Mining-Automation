@@ -1,0 +1,125 @@
+{
+  "success": false,
+  "stop_reason": "resource_or_inventory_unknown",
+  "events": [
+    {
+      "kind": "clean_reacquisition",
+      "ore_index": 1,
+      "frame": "diagnostics\\three-rock-continuous-final3-20260903\\ore-01-clean.bgra",
+      "pose": "at_center",
+      "pose_diagnoses": {
+        "at_northwest": {
+          "validated": false,
+          "matched": 0,
+          "zones": [],
+          "distances": {
+            "at_northwest-north-west-a": 0.442784,
+            "at_northwest-north-west-b": 0.651851,
+            "at_northwest-north-east-a": 0.240507,
+            "at_northwest-north-east-b": 0.814816,
+            "at_northwest-south-west-a": 0.41056,
+            "at_northwest-south-west-b": 0.494234
+          }
+        },
+        "at_southwest": {
+          "validated": false,
+          "matched": 0,
+          "zones": [],
+          "distances": {
+            "at_southwest-north-west-a": 0.519642,
+            "at_southwest-north-west-b": 0.642771,
+            "at_southwest-north-east-a": 0.20121,
+            "at_southwest-north-east-b": 0.345976,
+            "at_southwest-south-west-a": 0.572601,
+            "at_southwest-south-west-b": 0.734917
+          }
+        },
+        "at_center": {
+          "validated": false,
+          "matched": 0,
+          "zones": [],
+          "distances": {
+            "at_center-north-west-a": 0.166381,
+            "at_center-north-west-b": 0.554837,
+            "at_center-north-east-a": 0.304692,
+            "at_center-north-east-b": 0.632298,
+            "at_center-south-west-a": 0.520926,
+            "at_center-south-west-b": 0.659361
+          }
+        },
+        "software_registration": {
+          "kind": "distributed_affine_registration",
+          "matched": 5,
+          "zones": [
+            "north_east",
+            "north_west",
+            "south_west"
+          ],
+          "landmarks": {
+            "at_center-north-west-a": {
+              "distance": 0.003605,
+              "offset": [
+                -5,
+                79
+              ]
+            },
+            "at_center-north-west-b": {
+              "distance": 0.025638,
+              "offset": [
+                -2,
+                77
+              ]
+            },
+            "at_center-north-east-a": {
+              "distance": 0.04377,
+              "offset": [
+                5,
+                78
+              ]
+            },
+            "at_center-north-east-b": {
+              "distance": 0.027455,
+              "offset": [
+                9,
+                81
+              ]
+            },
+            "at_center-south-west-a": {
+              "distance": 0.063747,
+              "offset": [
+                -5,
+                97
+              ]
+            },
+            "at_center-south-west-b": {
+              "distance": 0.098436,
+              "offset": [
+                5,
+                -154
+              ]
+            }
+          },
+          "affine": [
+            [
+              1.025353362912042,
+              -0.00812477808274944
+            ],
+            [
+              -0.006009144925976272,
+              1.04876671010857
+            ],
+            [
+              -6.962821124555344,
+              67.05359925039191
+            ]
+          ]
+        }
+      },
+      "inventory": 5,
+      "inventory_confidence": 1.0,
+      "resource_view": "supported",
+      "completed_rocks": [],
+      "phase": "stopped"
+    }
+  ]
+}

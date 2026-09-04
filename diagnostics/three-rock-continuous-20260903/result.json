@@ -1,0 +1,93 @@
+{
+  "success": false,
+  "stop_reason": "mine_hover_unproven",
+  "events": [
+    {
+      "kind": "clean_reacquisition",
+      "ore_index": 1,
+      "frame": "diagnostics\\three-rock-continuous-20260903\\ore-01-clean.bgra",
+      "pose": "at_center",
+      "pose_diagnoses": {
+        "at_northwest": {
+          "validated": false,
+          "matched": 0,
+          "zones": [],
+          "distances": {
+            "at_northwest-north-west-a": 0.489546,
+            "at_northwest-north-west-b": 0.48119,
+            "at_northwest-north-east-a": 0.299138,
+            "at_northwest-north-east-b": 0.489838,
+            "at_northwest-south-west-a": 0.41942,
+            "at_northwest-south-west-b": 0.701984
+          }
+        },
+        "at_southwest": {
+          "validated": false,
+          "matched": 0,
+          "zones": [],
+          "distances": {
+            "at_southwest-north-west-a": 0.488761,
+            "at_southwest-north-west-b": 0.351925,
+            "at_southwest-north-east-a": 0.388254,
+            "at_southwest-north-east-b": 0.359723,
+            "at_southwest-south-west-a": 0.694693,
+            "at_southwest-south-west-b": 0.488824
+          }
+        },
+        "at_center": {
+          "validated": true,
+          "matched": 6,
+          "zones": [
+            "north_west",
+            "north_east",
+            "south_west"
+          ],
+          "distances": {
+            "at_center-north-west-a": 3.6e-05,
+            "at_center-north-west-b": 0.002142,
+            "at_center-north-east-a": 0.000382,
+            "at_center-north-east-b": 0.003128,
+            "at_center-south-west-a": 2.8e-05,
+            "at_center-south-west-b": 0.000472
+          }
+        }
+      },
+      "inventory": 4,
+      "inventory_confidence": 1.0,
+      "resource_view": "supported",
+      "completed_rocks": [],
+      "phase": "ready"
+    },
+    {
+      "kind": "hover_proof",
+      "ore_index": 1,
+      "target_id": "varrock-east-iron-northwest",
+      "target_region": [
+        198,
+        403,
+        20,
+        20
+      ],
+      "client_point": [
+        208,
+        413
+      ],
+      "frame": "diagnostics\\three-rock-continuous-20260903\\ore-01-hover.bgra",
+      "proven_mine_iron_rocks": false,
+      "cyan_pixels": 261,
+      "cyan_bbox": [
+        44,
+        7,
+        128,
+        20
+      ],
+      "white_prefix_pixels": 110,
+      "white_prefix_bbox": [
+        7,
+        7,
+        35,
+        16
+      ]
+    }
+  ]
+}

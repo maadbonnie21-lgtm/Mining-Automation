@@ -1,0 +1,10 @@
+{
+  "target_id": "varrock-east-iron-northwest",
+  "client_point": [280, 380],
+  "screen_point_at_calibration": [351, 475],
+  "primary_action": "Mine Iron rocks",
+  "menu_text": "Mine Iron rocks / 2 more options",
+  "hover_proof_frame": "hover-01-x280-y380.bgra",
+  "action_text_grid": "action-text-grid.png",
+  "clicks_sent_during_calibration": 0
+}

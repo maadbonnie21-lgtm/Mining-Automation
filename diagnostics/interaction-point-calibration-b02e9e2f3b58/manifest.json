@@ -1,0 +1,110 @@
+[
+  {
+    "index": 1,
+    "client": [
+      280,
+      380
+    ],
+    "screen": [
+      351,
+      475
+    ],
+    "frame": "diagnostics\\interaction-point-calibration-b02e9e2f3b58\\hover-01-x280-y380.bgra"
+  },
+  {
+    "index": 2,
+    "client": [
+      274,
+      374
+    ],
+    "screen": [
+      344,
+      468
+    ],
+    "frame": "diagnostics\\interaction-point-calibration-b02e9e2f3b58\\hover-02-x274-y374.bgra"
+  },
+  {
+    "index": 3,
+    "client": [
+      280,
+      374
+    ],
+    "screen": [
+      351,
+      468
+    ],
+    "frame": "diagnostics\\interaction-point-calibration-b02e9e2f3b58\\hover-03-x280-y374.bgra"
+  },
+  {
+    "index": 4,
+    "client": [
+      286,
+      374
+    ],
+    "screen": [
+      359,
+      468
+    ],
+    "frame": "diagnostics\\interaction-point-calibration-b02e9e2f3b58\\hover-04-x286-y374.bgra"
+  },
+  {
+    "index": 5,
+    "client": [
+      274,
+      380
+    ],
+    "screen": [
+      344,
+      475
+    ],
+    "frame": "diagnostics\\interaction-point-calibration-b02e9e2f3b58\\hover-05-x274-y380.bgra"
+  },
+  {
+    "index": 6,
+    "client": [
+      286,
+      380
+    ],
+    "screen": [
+      359,
+      475
+    ],
+    "frame": "diagnostics\\interaction-point-calibration-b02e9e2f3b58\\hover-06-x286-y380.bgra"
+  },
+  {
+    "index": 7,
+    "client": [
+      274,
+      386
+    ],
+    "screen": [
+      344,
+      483
+    ],
+    "frame": "diagnostics\\interaction-point-calibration-b02e9e2f3b58\\hover-07-x274-y386.bgra"
+  },
+  {
+    "index": 8,
+    "client": [
+      280,
+      386
+    ],
+    "screen": [
+      351,
+      483
+    ],
+    "frame": "diagnostics\\interaction-point-calibration-b02e9e2f3b58\\hover-08-x280-y386.bgra"
+  },
+  {
+    "index": 9,
+    "client": [
+      286,
+      386
+    ],
+    "screen": [
+      359,
+      483
+    ],
+    "frame": "diagnostics\\interaction-point-calibration-b02e9e2f3b58\\hover-09-x286-y386.bgra"
+  }
+]

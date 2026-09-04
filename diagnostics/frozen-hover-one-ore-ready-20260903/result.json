@@ -1,0 +1,114 @@
+{
+  "success": true,
+  "proof": "inventory_incremented",
+  "frozen_proposal": {
+    "clean_frame_id": 3,
+    "clean_frame_sha256": "fa9da52e78d2029758e9bdf5541343b4d0c793d1ccbdb2bf25c03e7fa172065b",
+    "resource_view": "supported",
+    "inventory_occupied": 0,
+    "inventory_confidence": 1.0,
+    "target_id": "varrock-east-iron-northwest",
+    "target_region": [
+      270,
+      370,
+      20,
+      20
+    ],
+    "foreground_hwnd": 3736178
+  },
+  "dispatch_audit": {
+    "target_hwnd": 3736178,
+    "foreground_hwnd": 3736178,
+    "foreground_matches_target": true,
+    "detector_region": [
+      270,
+      370,
+      20,
+      20
+    ],
+    "detector_client_point": [
+      280,
+      380
+    ],
+    "physical_client_origin": [
+      1,
+      0
+    ],
+    "screen_click_point": [
+      351,
+      475
+    ],
+    "reverse_detector_client_point": [
+      280,
+      380
+    ],
+    "coordinate_round_trip_exact": true
+  },
+  "receipt": {
+    "dispatch_id": "dispatch-f91e189f5098",
+    "click_count": 1,
+    "dispatched_monotonic_s": 1796362.328
+  },
+  "passive_captures": [
+    {
+      "index": 1,
+      "frame_id": 5,
+      "inventory_occupied": 0,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null,
+      "frame": "diagnostics\\frozen-hover-one-ore-ready-20260903\\passive-01.bgra"
+    },
+    {
+      "index": 2,
+      "frame_id": 6,
+      "inventory_occupied": 0,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null,
+      "frame": "diagnostics\\frozen-hover-one-ore-ready-20260903\\passive-02.bgra"
+    },
+    {
+      "index": 3,
+      "frame_id": 7,
+      "inventory_occupied": 0,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null,
+      "frame": "diagnostics\\frozen-hover-one-ore-ready-20260903\\passive-03.bgra"
+    },
+    {
+      "index": 4,
+      "frame_id": 8,
+      "inventory_occupied": 0,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null,
+      "frame": "diagnostics\\frozen-hover-one-ore-ready-20260903\\passive-04.bgra"
+    },
+    {
+      "index": 5,
+      "frame_id": 9,
+      "inventory_occupied": 0,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null,
+      "frame": "diagnostics\\frozen-hover-one-ore-ready-20260903\\passive-05.bgra"
+    },
+    {
+      "index": 6,
+      "frame_id": 10,
+      "inventory_occupied": 1,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null,
+      "frame": "diagnostics\\frozen-hover-one-ore-ready-20260903\\passive-06.bgra"
+    }
+  ]
+}

@@ -1,0 +1,165 @@
+{
+  "anchors": [
+    {
+      "actual_mean_rgb": [
+        127.60590277777777,
+        124.88194444444444,
+        67.35590277777777
+      ],
+      "anchor_id": "grass-west",
+      "expected_mean_rgb": [
+        80.411458,
+        82.079861,
+        34.185764
+      ],
+      "region": [
+        50,
+        80,
+        48,
+        48
+      ],
+      "similarity": 0.0
+    },
+    {
+      "actual_mean_rgb": [
+        121.81597222222223,
+        121.26736111111111,
+        64.71527777777777
+      ],
+      "anchor_id": "grass-center",
+      "expected_mean_rgb": [
+        70.258681,
+        77.246528,
+        34.888889
+      ],
+      "region": [
+        360,
+        120,
+        48,
+        48
+      ],
+      "similarity": 0.0
+    },
+    {
+      "actual_mean_rgb": [
+        117.4875,
+        109.3875,
+        55.23
+      ],
+      "anchor_id": "east-slope",
+      "expected_mean_rgb": [
+        86.1525,
+        85.3875,
+        31.1175
+      ],
+      "region": [
+        660,
+        250,
+        40,
+        40
+      ],
+      "similarity": 0.07494975676993643
+    },
+    {
+      "actual_mean_rgb": [
+        91.484375,
+        75.52951388888889,
+        39.36805555555556
+      ],
+      "anchor_id": "south-ground",
+      "expected_mean_rgb": [
+        51.411458,
+        38.414931,
+        11.909722
+      ],
+      "region": [
+        80,
+        760,
+        48,
+        48
+      ],
+      "similarity": 0.0
+    }
+  ],
+  "captured_at_utc": "2026-09-04T02:12:36.515118+00:00",
+  "case_id": "foreground-focused-diagnosis-20260903",
+  "files": {
+    "draft": "diagnostics\\live-proof-resource\\drafts\\foreground-focused-diagnosis-20260903.json",
+    "preview": "diagnostics\\live-proof-resource\\previews\\foreground-focused-diagnosis-20260903.bmp",
+    "raw": "diagnostics\\live-proof-resource\\frames\\foreground-focused-diagnosis-20260903.raw",
+    "report": "diagnostics\\live-proof-resource\\reports\\foreground-focused-diagnosis-20260903.json"
+  },
+  "frame": {
+    "frame_id": 1,
+    "height": 1078,
+    "pixel_format": "bgra8888",
+    "width": 1005
+  },
+  "minimum_anchor_confidence": 0.9,
+  "observations": [
+    {
+      "confidence": 0.9638675276855353,
+      "kind": "resource.available",
+      "reason": "available_signature_matched",
+      "resource_id": "varrock-east-iron-northwest"
+    },
+    {
+      "confidence": 0.7975335418725693,
+      "kind": "resource.available",
+      "reason": "available_signature_matched",
+      "resource_id": "varrock-east-iron-southwest"
+    },
+    {
+      "confidence": 0.6870369208854039,
+      "kind": "resource.available",
+      "reason": "available_signature_matched",
+      "resource_id": "varrock-east-iron-center"
+    },
+    {
+      "confidence": 0.9696575105393991,
+      "kind": "resource.available",
+      "reason": "available_signature_matched",
+      "resource_id": "varrock-east-iron-northeast"
+    }
+  ],
+  "reference_comparison": {
+    "available": true,
+    "note": "same-coordinate diagnostic only; not a production release threshold",
+    "reference": "diagnostics\\live-proof-resource\\frames\\runner-block-diagnosis-20260903.raw",
+    "zones": {
+      "NE": {
+        "median_pixel_mae": 0.0,
+        "percent_pixel_mae_le_10": 99.96296296296296,
+        "percent_pixel_mae_le_2": 99.91187739463602,
+        "percent_pixel_mae_le_20": 99.97445721583652,
+        "percent_pixel_mae_le_5": 99.93231162196679,
+        "rgb_mae": 0.023703703703703703
+      },
+      "NW": {
+        "median_pixel_mae": 0.0,
+        "percent_pixel_mae_le_10": 97.12771392081737,
+        "percent_pixel_mae_le_2": 96.757343550447,
+        "percent_pixel_mae_le_20": 97.66283524904215,
+        "percent_pixel_mae_le_5": 96.90038314176245,
+        "rgb_mae": 1.296555981268625
+      },
+      "SE": {
+        "median_pixel_mae": 0.0,
+        "percent_pixel_mae_le_10": 99.55427841634739,
+        "percent_pixel_mae_le_2": 98.71519795657727,
+        "percent_pixel_mae_le_20": 99.79821200510855,
+        "percent_pixel_mae_le_5": 98.8301404853129,
+        "rgb_mae": 0.3083865474670072
+      },
+      "SW": {
+        "median_pixel_mae": 0.0,
+        "percent_pixel_mae_le_10": 98.91570881226053,
+        "percent_pixel_mae_le_2": 98.51213282247765,
+        "percent_pixel_mae_le_20": 99.39591315453384,
+        "percent_pixel_mae_le_5": 98.60408684546616,
+        "rgb_mae": 0.31623669646658153
+      }
+    }
+  },
+  "schema_version": 1
+}

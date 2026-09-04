@@ -1,0 +1,62 @@
+{
+  "success": false,
+  "stop_reason": "resource_or_inventory_unknown",
+  "events": [
+    {
+      "kind": "clean_reacquisition",
+      "ore_index": 1,
+      "frame": "diagnostics\\three-rock-continuous-final6-20260903\\ore-01-clean.bgra",
+      "pose": "at_southwest",
+      "pose_diagnoses": {
+        "at_northwest": {
+          "validated": false,
+          "matched": 0,
+          "zones": [],
+          "distances": {
+            "at_northwest-north-west-a": 0.408916,
+            "at_northwest-north-west-b": 0.241392,
+            "at_northwest-north-east-a": 0.251793,
+            "at_northwest-north-east-b": 0.579744,
+            "at_northwest-south-west-a": 0.726135,
+            "at_northwest-south-west-b": 0.662085
+          }
+        },
+        "at_southwest": {
+          "validated": true,
+          "matched": 6,
+          "zones": [
+            "north_west",
+            "north_east",
+            "south_west"
+          ],
+          "distances": {
+            "at_southwest-north-west-a": 6.6e-05,
+            "at_southwest-north-west-b": 7.6e-05,
+            "at_southwest-north-east-a": 0.000114,
+            "at_southwest-north-east-b": 5.5e-05,
+            "at_southwest-south-west-a": 0.000506,
+            "at_southwest-south-west-b": 0.001136
+          }
+        },
+        "at_center": {
+          "validated": false,
+          "matched": 0,
+          "zones": [],
+          "distances": {
+            "at_center-north-west-a": 0.488793,
+            "at_center-north-west-b": 0.350706,
+            "at_center-north-east-a": 0.388101,
+            "at_center-north-east-b": 0.358421,
+            "at_center-south-west-a": 0.775678,
+            "at_center-south-west-b": 0.545349
+          }
+        }
+      },
+      "inventory": 7,
+      "inventory_confidence": 1.0,
+      "resource_view": "supported",
+      "completed_rocks": [],
+      "phase": "stopped"
+    }
+  ]
+}

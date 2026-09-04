@@ -1,0 +1,71 @@
+[
+  {
+    "rock": "northwest",
+    "client_point": [
+      460,
+      390
+    ],
+    "frame": "diagnostics\\three-rock-continuous-20260903\\current-pose-hover-calibration\\northwest-01.bgra",
+    "proven_mine_iron_rocks": true,
+    "cyan_pixels": 195,
+    "cyan_bbox": [
+      42,
+      7,
+      109,
+      16
+    ],
+    "white_prefix_pixels": 110,
+    "white_prefix_bbox": [
+      7,
+      7,
+      35,
+      16
+    ]
+  },
+  {
+    "rock": "southwest",
+    "client_point": [
+      540,
+      390
+    ],
+    "frame": "diagnostics\\three-rock-continuous-20260903\\current-pose-hover-calibration\\southwest-01.bgra",
+    "proven_mine_iron_rocks": true,
+    "cyan_pixels": 195,
+    "cyan_bbox": [
+      42,
+      7,
+      109,
+      16
+    ],
+    "white_prefix_pixels": 110,
+    "white_prefix_bbox": [
+      7,
+      7,
+      35,
+      16
+    ]
+  },
+  {
+    "rock": "center",
+    "client_point": [
+      460,
+      450
+    ],
+    "frame": "diagnostics\\three-rock-continuous-20260903\\current-pose-hover-calibration\\center-01.bgra",
+    "proven_mine_iron_rocks": true,
+    "cyan_pixels": 195,
+    "cyan_bbox": [
+      42,
+      7,
+      109,
+      16
+    ],
+    "white_prefix_pixels": 110,
+    "white_prefix_bbox": [
+      7,
+      7,
+      35,
+      16
+    ]
+  }
+]

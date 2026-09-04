@@ -1,0 +1,427 @@
+{
+  "success": false,
+  "stop_reason": "resource_or_inventory_unknown",
+  "events": [
+    {
+      "kind": "clean_reacquisition",
+      "ore_index": 1,
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-01-clean-registered.bgra",
+      "pose": "at_center",
+      "pose_diagnoses": {
+        "registration_capture": {
+          "at_northwest": {
+            "validated": false,
+            "matched": 0,
+            "zones": [],
+            "distances": {
+              "at_northwest-north-west-a": 0.442784,
+              "at_northwest-north-west-b": 0.651851,
+              "at_northwest-north-east-a": 0.240507,
+              "at_northwest-north-east-b": 0.814816,
+              "at_northwest-south-west-a": 0.41056,
+              "at_northwest-south-west-b": 0.494205
+            }
+          },
+          "at_southwest": {
+            "validated": false,
+            "matched": 0,
+            "zones": [],
+            "distances": {
+              "at_southwest-north-west-a": 0.519642,
+              "at_southwest-north-west-b": 0.642771,
+              "at_southwest-north-east-a": 0.20121,
+              "at_southwest-north-east-b": 0.345976,
+              "at_southwest-south-west-a": 0.572601,
+              "at_southwest-south-west-b": 0.7349
+            }
+          },
+          "at_center": {
+            "validated": false,
+            "matched": 0,
+            "zones": [],
+            "distances": {
+              "at_center-north-west-a": 0.166381,
+              "at_center-north-west-b": 0.554837,
+              "at_center-north-east-a": 0.304692,
+              "at_center-north-east-b": 0.632298,
+              "at_center-south-west-a": 0.520926,
+              "at_center-south-west-b": 0.659345
+            }
+          },
+          "software_registration": {
+            "kind": "distributed_affine_registration",
+            "matched": 5,
+            "zones": [
+              "north_east",
+              "north_west",
+              "south_west"
+            ],
+            "landmarks": {
+              "at_center-north-west-a": {
+                "distance": 0.003605,
+                "offset": [
+                  -5,
+                  79
+                ]
+              },
+              "at_center-north-west-b": {
+                "distance": 0.025638,
+                "offset": [
+                  -2,
+                  77
+                ]
+              },
+              "at_center-north-east-a": {
+                "distance": 0.043728,
+                "offset": [
+                  5,
+                  78
+                ]
+              },
+              "at_center-north-east-b": {
+                "distance": 0.027459,
+                "offset": [
+                  9,
+                  81
+                ]
+              },
+              "at_center-south-west-a": {
+                "distance": 0.063739,
+                "offset": [
+                  -5,
+                  97
+                ]
+              },
+              "at_center-south-west-b": {
+                "distance": 0.098436,
+                "offset": [
+                  5,
+                  -154
+                ]
+              }
+            },
+            "affine": [
+              [
+                1.025353362912042,
+                -0.00812477808274944
+              ],
+              [
+                -0.006009144925976272,
+                1.04876671010857
+              ],
+              [
+                -6.962821124555344,
+                67.05359925039191
+              ]
+            ]
+          }
+        },
+        "fresh_registered_capture": {
+          "at_center": {
+            "validated": true,
+            "matched": 5,
+            "zones": [
+              "north_west",
+              "north_east",
+              "south_west"
+            ],
+            "distances": {
+              "at_center-north-west-a": 0.003605,
+              "at_center-north-west-b": 0.025638,
+              "at_center-north-east-a": 0.043728,
+              "at_center-north-east-b": 0.027459,
+              "at_center-south-west-a": 0.063739,
+              "at_center-south-west-b": 0.145284
+            }
+          }
+        }
+      },
+      "inventory": 5,
+      "inventory_confidence": 1.0,
+      "resource_view": "supported",
+      "completed_rocks": [],
+      "phase": "ready"
+    },
+    {
+      "kind": "hover_proof",
+      "ore_index": 1,
+      "target_id": "varrock-east-iron-northwest",
+      "target_region": [
+        452,
+        462,
+        20,
+        20
+      ],
+      "client_point": [
+        462,
+        472
+      ],
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-01-hover.bgra",
+      "proven_mine_iron_rocks": true,
+      "cyan_pixels": 195,
+      "cyan_bbox": [
+        40,
+        7,
+        106,
+        16
+      ],
+      "white_prefix_pixels": 110,
+      "white_prefix_bbox": [
+        7,
+        7,
+        34,
+        16
+      ]
+    },
+    {
+      "kind": "single_click",
+      "ore_index": 1,
+      "target_id": "varrock-east-iron-northwest",
+      "click_count": 1,
+      "dispatch_id": "dispatch-299ce9c60a50",
+      "audit": {
+        "target_hwnd": 3736178,
+        "foreground_hwnd": 3736178,
+        "foreground_matches_target": true,
+        "detector_region": [
+          452,
+          462,
+          20,
+          20
+        ],
+        "detector_client_point": [
+          462,
+          472
+        ],
+        "physical_client_origin": [
+          1,
+          0
+        ],
+        "screen_click_point": [
+          579,
+          590
+        ],
+        "reverse_detector_client_point": [
+          462,
+          472
+        ],
+        "coordinate_round_trip_exact": true
+      }
+    },
+    {
+      "kind": "passive_verification",
+      "ore_index": 1,
+      "index": 1,
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-01-passive-01.bgra",
+      "inventory": 5,
+      "inventory_confidence": 1.0
+    },
+    {
+      "kind": "passive_verification",
+      "ore_index": 1,
+      "index": 2,
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-01-passive-02.bgra",
+      "inventory": 5,
+      "inventory_confidence": 1.0
+    },
+    {
+      "kind": "passive_verification",
+      "ore_index": 1,
+      "index": 3,
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-01-passive-03.bgra",
+      "inventory": 6,
+      "inventory_confidence": 1.0
+    },
+    {
+      "kind": "clean_reacquisition",
+      "ore_index": 2,
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-02-clean.bgra",
+      "pose": "at_center",
+      "pose_diagnoses": {
+        "at_center": {
+          "validated": true,
+          "matched": 5,
+          "zones": [
+            "north_west",
+            "north_east",
+            "south_west"
+          ],
+          "distances": {
+            "at_center-north-west-a": 0.003605,
+            "at_center-north-west-b": 0.025638,
+            "at_center-north-east-a": 0.043728,
+            "at_center-north-east-b": 0.027459,
+            "at_center-south-west-a": 0.063739,
+            "at_center-south-west-b": 0.145284
+          }
+        }
+      },
+      "inventory": 6,
+      "inventory_confidence": 1.0,
+      "resource_view": "supported",
+      "completed_rocks": [
+        "varrock-east-iron-northwest"
+      ],
+      "phase": "ready"
+    },
+    {
+      "kind": "hover_proof",
+      "ore_index": 2,
+      "target_id": "varrock-east-iron-southwest",
+      "target_region": [
+        534,
+        462,
+        20,
+        20
+      ],
+      "client_point": [
+        544,
+        472
+      ],
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-02-hover.bgra",
+      "proven_mine_iron_rocks": true,
+      "cyan_pixels": 195,
+      "cyan_bbox": [
+        40,
+        7,
+        106,
+        16
+      ],
+      "white_prefix_pixels": 110,
+      "white_prefix_bbox": [
+        7,
+        7,
+        34,
+        16
+      ]
+    },
+    {
+      "kind": "single_click",
+      "ore_index": 2,
+      "target_id": "varrock-east-iron-southwest",
+      "click_count": 2,
+      "dispatch_id": "dispatch-e7d156f456ed",
+      "audit": {
+        "target_hwnd": 3736178,
+        "foreground_hwnd": 3736178,
+        "foreground_matches_target": true,
+        "detector_region": [
+          534,
+          462,
+          20,
+          20
+        ],
+        "detector_client_point": [
+          544,
+          472
+        ],
+        "physical_client_origin": [
+          1,
+          0
+        ],
+        "screen_click_point": [
+          681,
+          590
+        ],
+        "reverse_detector_client_point": [
+          544,
+          472
+        ],
+        "coordinate_round_trip_exact": true
+      }
+    },
+    {
+      "kind": "passive_verification",
+      "ore_index": 2,
+      "index": 1,
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-02-passive-01.bgra",
+      "inventory": 6,
+      "inventory_confidence": 1.0
+    },
+    {
+      "kind": "passive_verification",
+      "ore_index": 2,
+      "index": 2,
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-02-passive-02.bgra",
+      "inventory": 6,
+      "inventory_confidence": 1.0
+    },
+    {
+      "kind": "passive_verification",
+      "ore_index": 2,
+      "index": 3,
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-02-passive-03.bgra",
+      "inventory": 6,
+      "inventory_confidence": 1.0
+    },
+    {
+      "kind": "passive_verification",
+      "ore_index": 2,
+      "index": 4,
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-02-passive-04.bgra",
+      "inventory": 6,
+      "inventory_confidence": 1.0
+    },
+    {
+      "kind": "passive_verification",
+      "ore_index": 2,
+      "index": 5,
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-02-passive-05.bgra",
+      "inventory": 6,
+      "inventory_confidence": 1.0
+    },
+    {
+      "kind": "passive_verification",
+      "ore_index": 2,
+      "index": 6,
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-02-passive-06.bgra",
+      "inventory": 6,
+      "inventory_confidence": 1.0
+    },
+    {
+      "kind": "passive_verification",
+      "ore_index": 2,
+      "index": 7,
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-02-passive-07.bgra",
+      "inventory": 6,
+      "inventory_confidence": 1.0
+    },
+    {
+      "kind": "passive_verification",
+      "ore_index": 2,
+      "index": 8,
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-02-passive-08.bgra",
+      "inventory": 7,
+      "inventory_confidence": 1.0
+    },
+    {
+      "kind": "clean_reacquisition",
+      "ore_index": 3,
+      "frame": "diagnostics\\three-rock-continuous-final5-20260903\\ore-03-clean.bgra",
+      "pose": null,
+      "pose_diagnoses": {
+        "at_center": {
+          "validated": false,
+          "matched": 0,
+          "zones": [],
+          "distances": {
+            "at_center-north-west-a": 0.582773,
+            "at_center-north-west-b": 0.377784,
+            "at_center-north-east-a": 0.326561,
+            "at_center-north-east-b": 0.482851,
+            "at_center-south-west-a": 0.678127,
+            "at_center-south-west-b": 0.383132
+          }
+        }
+      },
+      "inventory": 7,
+      "inventory_confidence": 1.0,
+      "resource_view": "unsupported",
+      "completed_rocks": [
+        "varrock-east-iron-northwest",
+        "varrock-east-iron-southwest"
+      ],
+      "phase": "stopped"
+    }
+  ]
+}

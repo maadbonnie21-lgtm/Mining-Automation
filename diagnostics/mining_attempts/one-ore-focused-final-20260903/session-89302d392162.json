@@ -1,0 +1,63 @@
+{
+  "session_id": "session-89302d392162",
+  "created_at_epoch_s": 1788487993.9722617,
+  "summary": {
+    "success": false,
+    "stop_reason": "attempt_receipt_invalid",
+    "progress_kind": "none",
+    "target_window": {
+      "hwnd": 3736178,
+      "title": "RuneLite - Chief Luma",
+      "class_name": "SunAwtFrame",
+      "client_width": 1005,
+      "client_height": 1078,
+      "dpi": 96,
+      "is_visible": true,
+      "is_minimized": false
+    },
+    "proposal": {
+      "attempt_id": "session-89302d392162:attempt-1:cycle-1:varrock-east-iron-northwest",
+      "target_id": "varrock-east-iron-northwest",
+      "target_region": [
+        270,
+        370,
+        20,
+        20
+      ],
+      "inventory_occupied_before": 0
+    },
+    "receipt": null,
+    "pre_click_frame_path": "diagnostics\\mining_attempts\\one-ore-focused-final-20260903\\session-89302d392162.pre-click.bgra",
+    "post_click_frame_path": null,
+    "dispatch_audit": {
+      "target_hwnd": 3736178,
+      "foreground_hwnd": 1706392,
+      "foreground_matches_target": false,
+      "detector_region": [
+        270,
+        370,
+        20,
+        20
+      ],
+      "detector_client_point": [
+        280,
+        380
+      ],
+      "physical_client_origin": [
+        1,
+        0
+      ],
+      "screen_click_point": [
+        351,
+        475
+      ],
+      "reverse_detector_client_point": [
+        280,
+        380
+      ],
+      "coordinate_round_trip_exact": true
+    },
+    "evidence_path": null,
+    "detail": "Input dispatch failed: RuneLite HWND 3736178 is not foreground immediately before click; GetForegroundWindow returned 1706392"
+  }
+}

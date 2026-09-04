@@ -1,0 +1,26 @@
+{
+  "session_id": "session-6cda3f7e5c15",
+  "created_at_epoch_s": 1788488332.1129363,
+  "summary": {
+    "success": false,
+    "stop_reason": "inventory_unknown",
+    "progress_kind": "none",
+    "target_window": {
+      "hwnd": 3736178,
+      "title": "RuneLite - Chief Luma",
+      "class_name": "SunAwtFrame",
+      "client_width": 1005,
+      "client_height": 1078,
+      "dpi": 96,
+      "is_visible": true,
+      "is_minimized": false
+    },
+    "proposal": null,
+    "receipt": null,
+    "pre_click_frame_path": "diagnostics\\mining_attempts\\one-ore-inventory-fix-final-20260903\\session-6cda3f7e5c15.pre-click.bgra",
+    "post_click_frame_path": null,
+    "dispatch_audit": null,
+    "evidence_path": null,
+    "detail": "Pre-attempt world state blocked: inventory_unknown"
+  }
+}
