@@ -26,6 +26,9 @@ from mining_automation.capture.windows import (  # noqa: E402
     DEFAULT_TITLE_SUBSTRING,
     WindowsCaptureBackend,
 )
+from mining_automation.controlled_mining_runner import (  # noqa: E402
+    DryRunWin32MiningInputDevice,
+)
 from mining_automation.perception import (  # noqa: E402
     build_varrock_east_iron_detector,
     load_varrock_east_iron_profile,
@@ -95,11 +98,24 @@ def _capture_frame(args: argparse.Namespace, case_id: str) -> tuple[Frame, dict[
     except RuntimeError as exc:
         raise RuntimeError(f"cannot run live validation here: {exc}") from exc
 
+    window_probe = DryRunWin32MiningInputDevice()
+    before = window_probe.verify_target_window(args.title)
     source = CaptureSource(backend, max_consecutive_failures=2)
     try:
         source.open()
         frame = source.capture()
         selected = backend.selected_window
+        if selected is None or selected.hwnd != before.hwnd:
+            raise RuntimeError(
+                "capture backend selected a different RuneLite HWND: "
+                f"expected {before.hwnd}, got {None if selected is None else selected.hwnd}"
+            )
+        after = window_probe.verify_target_window(args.title)
+        if after != before:
+            raise RuntimeError(
+                "RuneLite HWND/window state changed during read-only capture: "
+                f"before={before!r}, after={after!r}"
+            )
         provenance = {
             "capture_backend": backend.name,
             "capture_frame_id": str(frame.frame_id),
