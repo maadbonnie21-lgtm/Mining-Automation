@@ -8,6 +8,7 @@ on:
     paths:
       - src/mining_automation/mining_loop_runtime.py
       - tests/test_mining_loop_runtime.py
+      - tests/test_live_mining_evidence_contract.py
       - tools/run_mining_to_full.py
       - docs/MINING_LIVE_LOOP_AUDIT_2026-09-04.md
       - docs/MINING_TO_FULL_RUNBOOK_2026-09-04.md
@@ -43,13 +44,15 @@ jobs:
           ruff check
           src/mining_automation/mining_loop_runtime.py
           tests/test_mining_loop_runtime.py
+          tests/test_live_mining_evidence_contract.py
           tools/run_mining_to_full.py
       - name: Strict mypy repeated runtime
         run: mypy --strict src/mining_automation/mining_loop_runtime.py
-      - name: Focused mining and Windows safety tests
+      - name: Focused mining, real-evidence, and Windows safety tests
         run: >-
           python -m pytest -q
           tests/test_mining_loop_runtime.py
+          tests/test_live_mining_evidence_contract.py
           tests/test_mining_slice.py
           tests/test_mining_slice_endurance.py
           tests/test_controlled_mining_runner.py
@@ -73,6 +76,7 @@ jobs:
           assert plan["required_geometry"] == [1005, 1078]
           assert plan["required_dpi"] == 96
           assert plan["resource_threshold"] == 0.12
+          assert plan["resource_landmarks"] == 6
           assert plan["resource_quorum"] == 5
           assert plan["resource_zones_required"] == 3
           assert plan["inventory_floor"] == 0.8
