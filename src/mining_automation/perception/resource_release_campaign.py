@@ -2305,7 +2305,7 @@ def _windows_capture_environment(
         pass
     return CaptureEnvironment(
         backend_name=backend.name,
-        title_match=DEFAULT_TITLE_SUBSTRING,
+        title_match=_LIVE_CAPTURE_TITLE_MATCH,
         window_title=None if selected is None else selected.title,
         window_class=None if selected is None else selected.class_name,
         window_hwnd=None if selected is None else selected.hwnd,

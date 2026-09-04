@@ -4988,3 +4988,22 @@ def test_resource_release_endurance_uses_complete_public_chain(
     assert verified["world_state_authority"] is False
     assert verified["controller_authority"] is False
     assert verified["input_authority"] is False
+
+
+
+def test_windows_capture_environment_reports_source_owned_title_binding() -> None:
+    selected = SimpleNamespace(
+        title="RuneLite - private-title",
+        class_name="SunAwtFrame",
+        hwnd=1234,
+        client_width=1005,
+        client_height=1078,
+    )
+    backend = SimpleNamespace(
+        name="windows-runelite", selected_window=selected, current_dpi=96
+    )
+    environment = campaign._windows_capture_environment(backend)
+    assert campaign.DEFAULT_TITLE_SUBSTRING == "runelite"
+    assert environment.title_match == "RuneLite"
+    assert environment.window_title == "RuneLite - private-title"
+    assert environment.reported_dpi == 96
