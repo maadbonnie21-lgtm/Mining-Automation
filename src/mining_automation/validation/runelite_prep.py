@@ -490,12 +490,31 @@ def run_runelite_prep(
                         PrepStopReason.WINDOW_RESTORE_FAILED,
                         "RuneLite remained minimized/hidden after the bounded restore.",
                     )
+
+            # Focus first, then perform the final measured client-area correction.
+            # Real Java/AWT evidence showed activation can change an otherwise-correct
+            # 1005x1078 client to 1005x687. Resizing before focus can therefore create
+            # a false terminal STOP even though one bounded post-focus correction is
+            # both sufficient and within PREP authority.
+            if not final.foreground:
+                receipt = backend.focus_window()
+                actions.append(receipt)
+                _require_complete(receipt, PrepStopReason.WINDOW_FOCUS_FAILED)
+                final = backend.snapshot()
+                _validate_same_identity(initial, final)
+                if not final.foreground:
+                    raise PrepOperationError(
+                        PrepStopReason.WINDOW_FOCUS_FAILED,
+                        "RuneLite did not become foreground after explicit PREP focus.",
+                    )
+
             if final.dpi != EXPECTED_CLIENT_DPI:
                 raise PrepOperationError(
                     PrepStopReason.DPI_MISMATCH,
                     f"RuneLite DPI changed to {final.dpi}; expected exact "
                     f"{EXPECTED_CLIENT_DPI}.",
                 )
+
             if not final.exact_geometry:
                 receipt = backend.resize_client(
                     EXPECTED_CLIENT_WIDTH,
@@ -509,23 +528,29 @@ def run_runelite_prep(
                     raise PrepOperationError(
                         PrepStopReason.CLIENT_RESIZE_FAILED,
                         f"Client remained {final.client_width}x{final.client_height} after "
-                        "bounded resize correction.",
+                        "bounded post-focus resize correction.",
                     )
+
+            # Final window gate after every startup mutation. No perception is
+            # evaluated until the exact rebound HWND is still foreground, 1005x1078,
+            # and DPI96 after focus/restore/resize have all settled.
+            final = backend.snapshot()
+            _validate_same_identity(initial, final)
             if not final.foreground:
-                receipt = backend.focus_window()
-                actions.append(receipt)
-                _require_complete(receipt, PrepStopReason.WINDOW_FOCUS_FAILED)
-                final = backend.snapshot()
-                _validate_same_identity(initial, final)
-                if not final.foreground:
-                    raise PrepOperationError(
-                        PrepStopReason.WINDOW_FOCUS_FAILED,
-                        "RuneLite did not become foreground after explicit PREP focus.",
-                    )
-            if final.dpi != EXPECTED_CLIENT_DPI or not final.exact_geometry:
+                raise PrepOperationError(
+                    PrepStopReason.WINDOW_FOCUS_FAILED,
+                    "RuneLite lost foreground before final PREP window verification.",
+                )
+            if final.dpi != EXPECTED_CLIENT_DPI:
+                raise PrepOperationError(
+                    PrepStopReason.DPI_MISMATCH,
+                    f"RuneLite DPI changed to {final.dpi}; expected exact "
+                    f"{EXPECTED_CLIENT_DPI}.",
+                )
+            if not final.exact_geometry:
                 raise PrepOperationError(
                     PrepStopReason.CLIENT_RESIZE_FAILED,
-                    "Focus/restore changed the validated client geometry or DPI.",
+                    "RuneLite client is not exact 1005x1078 after post-focus correction.",
                 )
 
             neutral = backend.neutralize_cursor()
