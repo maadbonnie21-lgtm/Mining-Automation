@@ -7,9 +7,12 @@ on:
   pull_request:
     paths:
       - src/mining_automation/mining_loop_runtime.py
+      - src/mining_automation/mining_full_proof.py
       - tests/test_mining_loop_runtime.py
+      - tests/test_mining_full_proof.py
       - tests/test_live_mining_evidence_contract.py
       - tools/run_mining_to_full.py
+      - tools/validate_mining_to_full_result.py
       - docs/MINING_LIVE_LOOP_AUDIT_2026-09-04.md
       - docs/MINING_TO_FULL_RUNBOOK_2026-09-04.md
       - .github/workflows/mining-loop-28-readiness.yml
@@ -43,15 +46,22 @@ jobs:
         run: >-
           ruff check
           src/mining_automation/mining_loop_runtime.py
+          src/mining_automation/mining_full_proof.py
           tests/test_mining_loop_runtime.py
+          tests/test_mining_full_proof.py
           tests/test_live_mining_evidence_contract.py
           tools/run_mining_to_full.py
-      - name: Strict mypy repeated runtime
-        run: mypy --strict src/mining_automation/mining_loop_runtime.py
+          tools/validate_mining_to_full_result.py
+      - name: Strict mypy repeated runtime and proof validator
+        run: >-
+          mypy --strict
+          src/mining_automation/mining_loop_runtime.py
+          src/mining_automation/mining_full_proof.py
       - name: Focused mining, real-evidence, and Windows safety tests
         run: >-
           python -m pytest -q
           tests/test_mining_loop_runtime.py
+          tests/test_mining_full_proof.py
           tests/test_live_mining_evidence_contract.py
           tests/test_mining_slice.py
           tests/test_mining_slice_endurance.py
