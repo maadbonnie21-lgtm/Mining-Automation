@@ -1,0 +1,65 @@
+name: Mining loop preservation lint repair
+
+on:
+  push:
+    branches:
+      - chatgpt/mining-loop-28-ready-2026-09-04
+    paths:
+      - .github/workflows/mining-loop-preservation-lint-repair.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mining-loop-preservation-lint-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/mining-loop-28-ready-2026-09-04
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install project
+        run: python -m pip install -e '.[dev]'
+      - name: Repair only lint defects already present in preservation code
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('tools/solve_current_view_calibration.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              '(landmark.region for landmark in profile.scene_landmarks)',
+              '(landmark.region for landmark in profile.scene_landmarks)',
+          )
+          text = text.replace(
+              '(l.region for l in profile.scene_landmarks)',
+              '(landmark.region for landmark in profile.scene_landmarks)',
+          )
+          text = text.replace(
+              '_OFFSETS[l.landmark_id] for i, l in enumerate(profile.scene_landmarks)',
+              '_OFFSETS[landmark.landmark_id] '
+              'for i, landmark in enumerate(profile.scene_landmarks)',
+          )
+          path.write_text(text, encoding='utf-8')
+      - name: Apply safe Ruff fixes
+        run: ruff check --fix .
+      - name: Verify Ruff
+        run: ruff check .
+      - name: Remove one-shot repair workflow
+        run: rm .github/workflows/mining-loop-preservation-lint-repair.yml
+      - name: Commit lint-only repair
+        run: |
+          git config user.name crusader-row-execution-lead
+          git config user.email actions@users.noreply.github.com
+          git add -A
+          git commit -m 'style(mining): clean preserved live-loop lint'
+          git push origin HEAD:chatgpt/mining-loop-28-ready-2026-09-04
