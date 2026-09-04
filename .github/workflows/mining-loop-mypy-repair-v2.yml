@@ -1,0 +1,82 @@
+name: Mining loop mypy repair v2
+
+on:
+  push:
+    branches:
+      - chatgpt/mining-loop-28-ready-2026-09-04
+    paths:
+      - .github/workflows/mining-loop-mypy-repair-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/mining-loop-28-ready-2026-09-04
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Patch exact preservation type defects
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/mining_automation/controlled_mining_runner.py")
+          text = path.read_text(encoding="utf-8")
+
+          old_state = "        self._dispatched = False\n"
+          new_state = "        self._dispatched: bool = False\n"
+          count = text.count(old_state)
+          if count != 1:
+              raise SystemExit(f"expected one live dispatcher state anchor, found {count}")
+          text = text.replace(old_state, new_state, 1)
+
+          start_token = (
+              "        from .perception.inventory.positive_classifier_v3 import (\n"
+          )
+          end_token = "            InventoryPositiveV3DevelopmentAnalyzer,\n        )\n"
+          start = text.find(start_token)
+          end = text.find(end_token, start)
+          if start < 0 or end < 0:
+              raise SystemExit("Inventory V3 import block anchor missing")
+          end += len(end_token)
+          replacement = (
+              "        from .perception.inventory.positive_classifier_v3 import (\n"
+              "            InventoryPositiveV3DevelopmentAnalyzer,\n"
+              "        )\n"
+              "        from .perception.inventory.positive_v3_prototypes import (\n"
+              "            SUPPORTED_COLUMN_STRIDE,\n"
+              "            SUPPORTED_FRAME_HEIGHT,\n"
+              "            SUPPORTED_FRAME_WIDTH,\n"
+              "            SUPPORTED_PROFILE_ID,\n"
+              "            SUPPORTED_REGION,\n"
+              "            SUPPORTED_ROW_STRIDE,\n"
+              "        )\n"
+          )
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text, encoding="utf-8")
+          PY
+      - name: Install and verify complete repository typing
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check --fix src/mining_automation/controlled_mining_runner.py
+          ruff check .
+          mypy src
+      - name: Remove one-shot workflows and commit
+        run: |
+          rm -f \
+            .github/workflows/mining-loop-preservation-mypy-repair.yml \
+            .github/workflows/mining-loop-mypy-repair-v2.yml
+          git config user.name crusader-row-execution-lead
+          git config user.email actions@users.noreply.github.com
+          git add -A
+          git commit -m 'fix(mining): make preserved live runner type-clean'
+          git push origin HEAD:chatgpt/mining-loop-28-ready-2026-09-04
