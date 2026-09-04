@@ -1,0 +1,65 @@
+name: RuneLite PREP autofix
+
+on:
+  push:
+    branches:
+      - chatgpt/runelite-prep-ready-2026-09-04
+    paths:
+      - .github/workflows/runelite-prep-autofix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/runelite-prep-ready-2026-09-04
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install project
+        run: python -m pip install -e '.[dev]'
+      - name: Autofix PREP formatting and imports
+        run: >-
+          ruff check --fix
+          src/mining_automation/validation/runelite_prep.py
+          src/mining_automation/validation/_runelite_prep_win32.py
+          tools/runelite_prep.py
+          tests/test_runelite_prep.py
+      - name: Verify PREP source and focused tests
+        run: |
+          ruff check .
+          mypy --strict src/mining_automation/validation/runelite_prep.py src/mining_automation/validation/_runelite_prep_win32.py
+          python -m pytest -q tests/test_runelite_prep.py tests/test_windows_camera_nonactivating.py tests/test_windows_capture.py
+          python tools/run_mining_to_full.py > /tmp/mining-plan.json
+          python - <<'PY'
+          import json
+          plan = json.load(open('/tmp/mining-plan.json', encoding='utf-8'))
+          assert plan['mode'] == 'read_only_plan'
+          assert plan['live_input_performed'] is False
+          assert plan['resource_threshold'] == 0.12
+          assert plan['resource_landmarks'] == 6
+          assert plan['resource_quorum'] == 5
+          assert plan['resource_zones_required'] == 3
+          assert plan['inventory_floor'] == 0.8
+          assert plan['inventory_capacity'] == 28
+          assert plan['maximum_clicks_per_attempt'] == 1
+          assert plan['navigation_started_on_full'] is False
+          PY
+      - name: Commit autofix and remove helper
+        run: |
+          rm .github/workflows/runelite-prep-autofix.yml
+          git config user.name crusader-row-command-center
+          git config user.email actions@users.noreply.github.com
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No changes required.'
+            exit 0
+          fi
+          git commit -m 'style(prep): apply focused PREP lint fixes'
+          git push origin HEAD:chatgpt/runelite-prep-ready-2026-09-04
