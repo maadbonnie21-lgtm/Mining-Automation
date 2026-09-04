@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - .gitignore
+      - pyproject.toml
       - src/mining_automation/validation/runelite_prep.py
       - src/mining_automation/validation/_runelite_prep_win32.py
       - tools/runelite_prep.py
@@ -50,6 +51,20 @@ jobs:
           mypy --strict
           src/mining_automation/validation/runelite_prep.py
           src/mining_automation/validation/_runelite_prep_win32.py
+      - name: Preserved pose adapter dependency import
+        shell: python
+        run: |
+          import sys
+          from pathlib import Path
+
+          import numpy
+
+          sys.path.insert(0, str(Path.cwd() / "tools"))
+          import run_three_rock_continuous_proof
+
+          assert numpy.__version__
+          assert callable(run_three_rock_continuous_proof.build_pose_detectors)
+          assert callable(run_three_rock_continuous_proof.evaluate_resource)
       - name: Focused PREP and camera safety tests
         run: >-
           python -m pytest -q
