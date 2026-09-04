@@ -6,36 +6,25 @@ a live RuneLite window.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import time
 from pathlib import Path
-from typing import Any
-
-import pytest
 
 from mining_automation.capture import Frame, PixelFormat, RawFrame
 from mining_automation.contracts import InventoryState, ResourceState
 from mining_automation.controlled_mining_runner import (
     CANONICAL_INVENTORY_RELEASE,
     CANONICAL_RESOURCE_RELEASE,
-    EXPECTED_CLIENT_DPI,
     EXPECTED_CLIENT_HEIGHT,
     EXPECTED_CLIENT_WIDTH,
-    ControlledMiningOutcome,
-    InputDispatchError,
-    MiningInputDevice,
     ProductionMiningPerceptionEvaluator,
     SyntheticMiningInputDevice,
     SyntheticMiningPerceptionEvaluator,
-    TargetWindowError,
-    TargetWindowInfo,
     execute_one_controlled_attempt,
 )
 from mining_automation.mining_slice import (
     INVENTORY_CAPACITY,
     InventoryPerceptionEnvelope,
-    MiningOnlyPhase,
     MiningOnlyStopReason,
     MiningProgressKind,
     PerceptionEpoch,

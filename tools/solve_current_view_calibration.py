@@ -54,10 +54,10 @@ def main() -> int:
     integral = np.pad(rgb.cumsum(axis=0).cumsum(axis=1), ((1, 0), (1, 0), (0, 0)))
 
     source_centers = np.asarray(
-        [[x + w / 2, y + h / 2] for x, y, w, h in (l.region for l in profile.scene_landmarks)]
+        [[x + w / 2, y + h / 2] for x, y, w, h in (landmark.region for landmark in profile.scene_landmarks)]
     )
     target_centers = np.asarray(
-        [source_centers[i] + _OFFSETS[l.landmark_id] for i, l in enumerate(profile.scene_landmarks)]
+        [source_centers[i] + _OFFSETS[landmark.landmark_id] for i, landmark in enumerate(profile.scene_landmarks)]
     )
     affine = np.linalg.lstsq(
         np.column_stack((source_centers, np.ones(len(source_centers)))),

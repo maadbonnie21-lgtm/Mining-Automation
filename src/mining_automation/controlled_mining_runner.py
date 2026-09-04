@@ -33,28 +33,24 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
 import sys
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final, Protocol, runtime_checkable
 
-from .capture import CaptureError, CaptureSource, Frame, PixelFormat
-from .contracts import InventoryState, ResourceState
+from .capture import Frame, PixelFormat
+from .contracts import InventoryState
 from .mining_slice import (
     INVENTORY_CAPACITY,
     INVENTORY_PUBLICATION_FLOOR,
-    MAX_MINING_PERCEPTION_AGE_S,
     AtomicMiningWorldState,
     InventoryPerceptionEnvelope,
     MiningAttemptDispatchReceipt,
     MiningAttemptProposal,
-    MiningOnlyDecision,
     MiningOnlyPhase,
-    MiningOnlySession,
     MiningOnlyStopReason,
     MiningProgressKind,
     PerceptionEpoch,
@@ -285,7 +281,7 @@ class RealWin32MiningInputDevice:
         self._win32: Any = _camera_win32_calls
         self._coords: Any = camera_coordinates
         self._win32.declare_dpi_awareness()
-        self._dispatched = False
+        self._dispatched: bool = False
         self.last_dispatch_audit: dict[str, Any] | None = None
 
     def verify_target_window(self, title_substring: str = DEFAULT_WINDOW_TITLE_SUBSTRING) -> TargetWindowInfo:
@@ -524,6 +520,8 @@ class ProductionMiningPerceptionEvaluator:
         from .perception.inventory.localization import InventoryFrameProfile
         from .perception.inventory.positive_classifier_v3 import (
             InventoryPositiveV3DevelopmentAnalyzer,
+        )
+        from .perception.inventory.positive_v3_prototypes import (
             SUPPORTED_COLUMN_STRIDE,
             SUPPORTED_FRAME_HEIGHT,
             SUPPORTED_FRAME_WIDTH,
