@@ -1,0 +1,610 @@
+name: Crusader Row exact offline audit and landing 2026-09-03
+
+on:
+  push:
+    branches:
+      - chatgpt/nightly-execution-lead-2026-09-03-authoritative-v10
+    paths:
+      - .github/workflows/nightly-exact-audit-and-land-2026-09-03.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+env:
+  INTEGRATION_BRANCH: chatgpt/nightly-execution-lead-2026-09-03-authoritative-v10
+
+concurrency:
+  group: crusader-row-exact-offline-audit-and-landing-2026-09-03
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.INTEGRATION_BRANCH }}
+          fetch-depth: 0
+      - name: Freeze exact green integration target
+        shell: python
+        run: |
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          green = Path('docs/verification/NIGHTLY_ALL_HOST_INDEPENDENT_GREEN.flag')
+          report_path = Path('docs/verification/NIGHTLY_EXECUTION_LEAD_2026-09-03.json')
+          if not green.is_file() or not report_path.is_file():
+              raise SystemExit('overnight integration is not fully green; exact landing is blocked')
+          report = json.loads(report_path.read_text(encoding='utf-8'))
+          completion = report['completion']
+          if completion.get('all_host_independent_work_green') is not True:
+              raise SystemExit('host-independent green flag disagrees with report')
+          if completion.get('engineering_completion_percent') != 100:
+              raise SystemExit('engineering gate completion is not 100 percent')
+          if completion.get('real_client_proof_completion_percent') != 0:
+              raise SystemExit('offline report contains an improper real-client claim')
+          if report.get('live_pixels_captured') is not False:
+              raise SystemExit('offline report claims live pixels')
+          if report.get('live_input_performed') is not False:
+              raise SystemExit('offline report claims live input')
+          if report.get('live_authority_granted') is not False:
+              raise SystemExit('offline report self-granted live authority')
+          target = subprocess.run(
+              ['git', 'rev-parse', 'HEAD'],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.strip()
+          root = Path(os.environ['RUNNER_TEMP'], 'exact-plan')
+          root.mkdir(parents=True, exist_ok=True)
+          (root / 'target_sha.txt').write_text(target, encoding='ascii')
+          (root / 'report.json').write_text(
+              json.dumps(report, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exact-offline-plan
+          path: ${{ runner.temp }}/exact-plan
+          retention-days: 3
+
+  audit:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.INTEGRATION_BRANCH }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: exact-offline-plan
+          path: ${{ runner.temp }}/exact-plan
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check out exact immutable integration target
+        shell: python
+        run: |
+          import os
+          import subprocess
+          from pathlib import Path
+
+          target = Path(
+              os.environ['RUNNER_TEMP'], 'exact-plan', 'target_sha.txt'
+          ).read_text().strip()
+          subprocess.run(['git', 'fetch', '-q', 'origin', os.environ['INTEGRATION_BRANCH']], check=True)
+          current = subprocess.run(
+              ['git', 'rev-parse', f"origin/{os.environ['INTEGRATION_BRANCH']}"],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.strip()
+          if current != target:
+              raise SystemExit('integration branch moved after exact audit plan')
+          subprocess.run(['git', 'checkout', '--detach', target], check=True)
+          actual = subprocess.run(
+              ['git', 'rev-parse', 'HEAD'],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.strip()
+          if actual != target:
+              raise SystemExit('wrong target checked out')
+          if subprocess.run(['git', 'status', '--porcelain'], check=True, capture_output=True, text=True).stdout:
+              raise SystemExit('exact checkout is dirty')
+      - name: Install exact tree
+        run: python -m pip install -e ".[dev]"
+      - name: Ruff exact tree
+        run: ruff check .
+      - name: Strict mypy exact tree
+        run: mypy --strict src/mining_automation
+      - name: Critical-path exact tests
+        shell: python
+        run: |
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          preferred = (
+              'tests/test_resource_same_cycle_release_binding.py',
+              'tests/test_inventory_same_cycle_release_binding.py',
+              'tests/test_mining_vertical_slice.py',
+              'tests/test_mining_perception_adapter.py',
+              'tests/test_navigation_durable_route_evidence.py',
+              'tests/test_navigation_release_decision.py',
+              'tests/test_navigation_endpoint_handoff.py',
+              'tests/test_navigation_pinned_arrival.py',
+              'tests/test_banking_offline_release.py',
+              'tests/test_banking_pinned_compatibility.py',
+              'tests/test_full_loop_offline_integration.py',
+              'tests/test_full_loop_release.py',
+              'tests/test_full_loop_exact_deposit.py',
+              'tests/test_full_loop_fully_pinned_v2.py',
+              'tests/test_runner_release_readiness.py',
+              'tests/test_runner_authority_v2.py',
+          )
+          tests = [path for path in preferred if Path(path).is_file()]
+          if not tests:
+              raise SystemExit('critical-path test set is empty')
+          subprocess.run([sys.executable, '-m', 'pytest', '-q', *tests], check=True)
+      - name: Full exact repository tests
+        run: python -m pytest -q
+      - name: Independently audit fail-closed source boundaries
+        shell: python
+        run: |
+          from pathlib import Path
+
+          required_files = {
+              'resource': Path('src/mining_automation/perception/resource/same_cycle_release_binding.py'),
+              'inventory': Path('src/mining_automation/perception/inventory/same_cycle_release_binding.py'),
+              'mining': Path('src/mining_automation/mining_vertical_slice.py'),
+              'adapter': Path('src/mining_automation/mining_perception_adapter.py'),
+              'b4': Path('src/mining_automation/navigation/durable_route_evidence.py'),
+              'navigation': Path('src/mining_automation/navigation/endpoint_handoff.py'),
+              'banking': Path('src/mining_automation/banking/offline_release.py'),
+              'runner': Path('src/mining_automation/runner/supervisor.py'),
+          }
+          missing = [name for name, path in required_files.items() if not path.is_file()]
+          if missing:
+              raise SystemExit(f'critical source files missing: {missing}')
+          corpus = {name: path.read_text(encoding='utf-8') for name, path in required_files.items()}
+          markers = {
+              'resource': ('0.12', '1005', '1078', '96', '15', 'UNKNOWN'),
+              'inventory': ('0.8', '28', 'UNKNOWN'),
+              'mining': ('targets[0]', 'click_count != 1', 'REOBSERVATION_NOT_NEWER', 'AMBIGUOUS_CAUSALITY'),
+              'adapter': ('publisher.clear()', 'resource_release_receipt', 'inventory_release_receipt'),
+              'b4': ('acquisition_physical_identity_sha256', 'review_physical_identity_sha256'),
+              'navigation': ('bank_open_claim', 'supported_mining_view_claim'),
+              'banking': ('success_claim', 'EMPTY'),
+              'runner': ('preserve_failed_frame', 'session_id'),
+          }
+          absent = {
+              name: [marker for marker in values if marker not in corpus[name]]
+              for name, values in markers.items()
+              if any(marker not in corpus[name] for marker in values)
+          }
+          if absent:
+              raise SystemExit(f'fail-closed marker audit failed: {absent}')
+          live_corpus = '\n'.join((corpus['runner'], corpus['adapter']))
+          forbidden = ('import pyautogui', 'SendInput(', 'SetCursorPos(', 'mouse_event(', 'BitBlt(', 'PrintWindow(')
+          found = [marker for marker in forbidden if marker in live_corpus]
+          if found:
+              raise SystemExit(f'production live implementation unexpectedly bound: {found}')
+      - name: Write independent exact platform receipt
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          target = Path(os.environ['RUNNER_TEMP'], 'exact-plan', 'target_sha.txt').read_text().strip()
+          name = 'windows' if os.environ.get('RUNNER_OS') == 'Windows' else 'linux'
+          receipt = {
+              'os': name,
+              'execution_target_sha': target,
+              'ruff_passed': True,
+              'strict_mypy_passed': True,
+              'critical_path_tests_passed': True,
+              'full_repository_tests_passed': True,
+              'independent_source_boundary_audit_passed': True,
+              'live_pixels_captured': False,
+              'live_input_performed': False,
+              'live_authority_granted': False,
+              'production_live_backend_bound': False,
+          }
+          Path(os.environ['RUNNER_TEMP'], f'exact_offline_{name}.json').write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exact-offline-${{ runner.os }}
+          path: ${{ runner.temp }}/exact_offline_*.json
+          retention-days: 3
+
+  accept-and-merge:
+    needs: audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      merged: ${{ steps.merge.outputs.merged }}
+      main_sha: ${{ steps.merge.outputs.main_sha }}
+      acceptance_head: ${{ steps.acceptance.outputs.acceptance_head }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.INTEGRATION_BRANCH }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: exact-offline-plan
+          path: ${{ runner.temp }}/exact-plan
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: exact-offline-*
+          path: ${{ runner.temp }}/exact-results
+          merge-multiple: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate exact Windows and Linux receipts
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ['RUNNER_TEMP'], 'exact-results')
+          receipts = {
+              path.stem.rsplit('_', 1)[-1]: json.loads(path.read_text())
+              for path in root.glob('exact_offline_*.json')
+          }
+          if set(receipts) != {'linux', 'windows'}:
+              raise SystemExit(f'independent platform receipt set incomplete: {set(receipts)}')
+          targets = {record['execution_target_sha'] for record in receipts.values()}
+          if len(targets) != 1:
+              raise SystemExit('Windows and Linux audited different exact heads')
+          for name, record in receipts.items():
+              for key in (
+                  'ruff_passed',
+                  'strict_mypy_passed',
+                  'critical_path_tests_passed',
+                  'full_repository_tests_passed',
+                  'independent_source_boundary_audit_passed',
+              ):
+                  if record.get(key) is not True:
+                      raise SystemExit(f'{name} exact audit missing {key}')
+              for key in (
+                  'live_pixels_captured',
+                  'live_input_performed',
+                  'live_authority_granted',
+                  'production_live_backend_bound',
+              ):
+                  if record.get(key) is not False:
+                      raise SystemExit(f'{name} exact audit has unsafe field {key}')
+      - name: Write permanent offline acceptance receipt
+        id: acceptance
+        shell: python
+        run: |
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          target = Path(os.environ['RUNNER_TEMP'], 'exact-plan', 'target_sha.txt').read_text().strip()
+          report = json.loads(Path('docs/verification/NIGHTLY_EXECUTION_LEAD_2026-09-03.json').read_text())
+          receipts = {
+              path.stem.rsplit('_', 1)[-1]: json.loads(path.read_text())
+              for path in Path(os.environ['RUNNER_TEMP'], 'exact-results').glob('exact_offline_*.json')
+          }
+          record = {
+              'schema_version': 1,
+              'execution_target_sha': target,
+              'integration_branch': os.environ['INTEGRATION_BRANCH'],
+              'selected_heads': report['selected_heads'],
+              'independent_platform_audits': receipts,
+              'host_independent_engineering_accepted': True,
+              'engineering_completion_percent': 100,
+              'real_client_proof_completion_percent': 0,
+              'release_readiness_percent': report['completion']['release_readiness_percent'],
+              'only_external_windows_live_step_remains': True,
+              'live_pixels_captured': False,
+              'live_input_performed': False,
+              'live_authority_granted': False,
+              'production_live_backend_bound': False,
+              'real_resource_campaign_completed': False,
+              'real_inventory_campaign_authorized': False,
+              'real_mining_only_proof_completed': False,
+              'real_round_trip_proof_completed': False,
+              'real_endurance_completed': False,
+          }
+          path = Path('docs/verification/FINAL_OFFLINE_ACCEPTANCE_2026-09-03.json')
+          path.write_text(json.dumps(record, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          Path('.github/workflows/nightly-exact-audit-and-land-2026-09-03.yml').unlink()
+          subprocess.run(['git', 'config', 'user.name', 'crusader-row-execution-lead'], check=True)
+          subprocess.run(['git', 'config', 'user.email', 'actions@users.noreply.github.com'], check=True)
+          subprocess.run(['git', 'add', '-A'], check=True)
+          subprocess.run(
+              ['git', 'commit', '-m', 'chore(command): freeze exact offline Windows Linux acceptance'],
+              check=True,
+          )
+          head = subprocess.run(
+              ['git', 'rev-parse', 'HEAD'],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.strip()
+          subprocess.run(['git', 'push', 'origin', f"HEAD:{os.environ['INTEGRATION_BRANCH']}"], check=True)
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'acceptance_head={head}\n')
+      - name: Reverify acceptance tree before landing
+        run: |
+          python -m pip install -e ".[dev]"
+          ruff check .
+          mypy --strict src/mining_automation
+          python -m pytest -q
+      - name: Mark PR ready, merge exact acceptance head, and wait for main
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          from __future__ import annotations
+
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from typing import Any
+
+          owner = 'maadbonnie21-lgtm'
+          repo = 'Mining-Automation'
+          api = f'https://api.github.com/repos/{owner}/{repo}'
+          token = os.environ['GH_TOKEN']
+          head_sha = '${{ steps.acceptance.outputs.acceptance_head }}'
+          branch = os.environ['INTEGRATION_BRANCH']
+
+          def request(method: str, url: str, payload: dict[str, object] | None = None, allow_error: bool = False) -> tuple[int, Any]:
+              data = None if payload is None else json.dumps(payload).encode('utf-8')
+              req = urllib.request.Request(
+                  url,
+                  data=data,
+                  method=method,
+                  headers={
+                      'Accept': 'application/vnd.github+json',
+                      'Authorization': f'Bearer {token}',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'crusader-row-execution-lead',
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as response:
+                      body = response.read()
+                      return response.status, None if not body else json.loads(body)
+              except urllib.error.HTTPError as error:
+                  raw = error.read()
+                  try:
+                      parsed: Any = json.loads(raw)
+                  except Exception:
+                      parsed = raw.decode('utf-8', errors='replace')
+                  if allow_error:
+                      return error.code, parsed
+                  raise RuntimeError(f'GitHub API failed: {error.code} {parsed}') from error
+
+          query = urllib.parse.urlencode(
+              {'state': 'open', 'head': f'{owner}:{branch}', 'base': 'main', 'per_page': 20}
+          )
+          _, pulls = request('GET', f'{api}/pulls?{query}')
+          matches = [pull for pull in pulls if pull['head']['ref'] == branch]
+          if len(matches) != 1:
+              raise RuntimeError(f'exact integration PR count is {len(matches)}')
+          pull = matches[0]
+          number = int(pull['number'])
+          node_id = str(pull['node_id'])
+          if pull.get('draft') is True:
+              status, result = request(
+                  'POST',
+                  'https://api.github.com/graphql',
+                  {
+                      'query': 'mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}',
+                      'variables': {'id': node_id},
+                  },
+                  allow_error=True,
+              )
+              if status >= 300 or (isinstance(result, dict) and result.get('errors')):
+                  raise RuntimeError(f'could not mark PR ready: {status} {result}')
+
+          merged = False
+          merge_detail: Any = None
+          for attempt in range(80):
+              _, current = request('GET', f'{api}/pulls/{number}')
+              if current.get('merged_at') is not None:
+                  merged = True
+                  break
+              status, result = request(
+                  'PUT',
+                  f'{api}/pulls/{number}/merge',
+                  {
+                      'commit_title': 'feat(command): land exact audited host-independent mining integration',
+                      'commit_message': (
+                          f'Exact offline acceptance head {head_sha}. '
+                          'No live-client authorization, input authority, or real-client proof is implied.'
+                      ),
+                      'sha': head_sha,
+                      'merge_method': 'merge',
+                  },
+                  allow_error=True,
+              )
+              merge_detail = {'status': status, 'result': result}
+              if status < 300 and isinstance(result, dict) and result.get('merged') is True:
+                  merged = True
+                  break
+              if attempt == 5:
+                  request(
+                      'POST',
+                      'https://api.github.com/graphql',
+                      {
+                          'query': 'mutation($id:ID!){enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:MERGE}){pullRequest{autoMergeRequest{enabledAt}}}}',
+                          'variables': {'id': node_id},
+                      },
+                      allow_error=True,
+                  )
+              time.sleep(15)
+
+          main_sha = ''
+          if merged:
+              for _ in range(120):
+                  _, ref = request('GET', f'{api}/git/ref/heads/main')
+                  main_sha = str(ref['object']['sha'])
+                  status, compare = request('GET', f'{api}/compare/{head_sha}...{main_sha}', allow_error=True)
+                  if status < 300 and isinstance(compare, dict) and compare.get('status') in ('ahead', 'identical'):
+                      break
+                  time.sleep(10)
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f"merged={'true' if merged else 'false'}\n")
+              output.write(f'main_sha={main_sha}\n')
+          request(
+              'POST',
+              f'{api}/issues/{number}/comments',
+              {
+                  'body': (
+                      f'LEAD EXACT OFFLINE ACCEPTANCE — `{head_sha}` independently passed Windows and Linux Ruff, strict mypy, critical-path tests, full repository tests, and fail-closed source audit. '
+                      f'Merge status: {"MERGED" if merged else "BLOCKED"}. This grants no live-client authorization or real-client proof.'
+                  )
+              },
+          )
+          if not merged:
+              print(json.dumps({'merge_blocker': merge_detail}, indent=2))
+
+  verify-main:
+    needs: accept-and-merge
+    if: needs.accept-and-merge.outputs.merged == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.accept-and-merge.outputs.main_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install landed main
+        run: python -m pip install -e ".[dev]"
+      - name: Ruff landed main
+        run: ruff check .
+      - name: Strict mypy landed main
+        run: mypy --strict src/mining_automation
+      - name: Full landed-main repository tests
+        run: python -m pytest -q
+      - name: Write landed-main platform receipt
+        shell: python
+        run: |
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          name = 'windows' if os.environ.get('RUNNER_OS') == 'Windows' else 'linux'
+          receipt = {
+              'os': name,
+              'main_sha': subprocess.run(['git', 'rev-parse', 'HEAD'], check=True, capture_output=True, text=True).stdout.strip(),
+              'ruff_passed': True,
+              'strict_mypy_passed': True,
+              'full_repository_tests_passed': True,
+              'live_action_performed': False,
+              'input_authority_granted': False,
+          }
+          Path(os.environ['RUNNER_TEMP'], f'landed_main_{name}.json').write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+      - uses: actions/upload-artifact@v4
+        with:
+          name: landed-main-${{ runner.os }}
+          path: ${{ runner.temp }}/landed_main_*.json
+          retention-days: 3
+
+  record:
+    needs: [accept-and-merge, verify-main]
+    if: always() && needs.accept-and-merge.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.INTEGRATION_BRANCH }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: landed-main-*
+          path: ${{ runner.temp }}/landed-main-results
+          merge-multiple: true
+        continue-on-error: true
+      - name: Record exact landing or merge blocker
+        shell: python
+        run: |
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          merged = '${{ needs.accept-and-merge.outputs.merged }}' == 'true'
+          main_sha = '${{ needs.accept-and-merge.outputs.main_sha }}'
+          acceptance_head = '${{ needs.accept-and-merge.outputs.acceptance_head }}'
+          receipts = {}
+          root = Path(os.environ['RUNNER_TEMP'], 'landed-main-results')
+          if root.is_dir():
+              for path in root.glob('landed_main_*.json'):
+                  value = json.loads(path.read_text())
+                  receipts[value['os']] = value
+          main_verified = (
+              merged
+              and set(receipts) == {'linux', 'windows'}
+              and all(
+                  record.get('ruff_passed') is True
+                  and record.get('strict_mypy_passed') is True
+                  and record.get('full_repository_tests_passed') is True
+                  for record in receipts.values()
+              )
+          record = {
+              'schema_version': 1,
+              'acceptance_head_sha': acceptance_head,
+              'merged_to_main': merged,
+              'main_sha': main_sha or None,
+              'landed_main_platform_receipts': receipts,
+              'landed_main_windows_linux_verified': main_verified,
+              'host_independent_engineering_accepted': True,
+              'real_windows_live_step_remains': True,
+              'real_client_proof_completion_percent': 0,
+              'live_action_performed': False,
+              'input_authority_granted': False,
+          }
+          Path('docs/verification/FINAL_OFFLINE_LANDING_2026-09-03.json').write_text(
+              json.dumps(record, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          subprocess.run(['git', 'config', 'user.name', 'crusader-row-execution-lead'], check=True)
+          subprocess.run(['git', 'config', 'user.email', 'actions@users.noreply.github.com'], check=True)
+          subprocess.run(['git', 'add', '-A'], check=True)
+          subprocess.run(
+              ['git', 'commit', '-m', 'chore(command): record exact offline landing result'],
+              check=True,
+          )
+          subprocess.run(['git', 'push', 'origin', f"HEAD:{os.environ['INTEGRATION_BRANCH']}"], check=True)
