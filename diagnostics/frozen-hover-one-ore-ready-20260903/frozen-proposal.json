@@ -1,0 +1,15 @@
+{
+  "clean_frame_id": 3,
+  "clean_frame_sha256": "fa9da52e78d2029758e9bdf5541343b4d0c793d1ccbdb2bf25c03e7fa172065b",
+  "resource_view": "supported",
+  "inventory_occupied": 0,
+  "inventory_confidence": 1.0,
+  "target_id": "varrock-east-iron-northwest",
+  "target_region": [
+    270,
+    370,
+    20,
+    20
+  ],
+  "foreground_hwnd": 3736178
+}

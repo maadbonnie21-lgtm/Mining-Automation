@@ -1,0 +1,131 @@
+{
+  "anchors": [
+    {
+      "actual_mean_rgb": [
+        122.36458333333333,
+        125.30381944444444,
+        76.88368055555556
+      ],
+      "anchor_id": "grass-west",
+      "expected_mean_rgb": [
+        80.411458,
+        82.079861,
+        34.185764
+      ],
+      "region": [
+        50,
+        80,
+        48,
+        48
+      ],
+      "similarity": 0.0
+    },
+    {
+      "actual_mean_rgb": [
+        122.03993055555556,
+        123.234375,
+        68.21875
+      ],
+      "anchor_id": "grass-center",
+      "expected_mean_rgb": [
+        70.258681,
+        77.246528,
+        34.888889
+      ],
+      "region": [
+        360,
+        120,
+        48,
+        48
+      ],
+      "similarity": 0.0
+    },
+    {
+      "actual_mean_rgb": [
+        92.0575,
+        76.8425,
+        37.6275
+      ],
+      "anchor_id": "east-slope",
+      "expected_mean_rgb": [
+        86.1525,
+        85.3875,
+        31.1175
+      ],
+      "region": [
+        660,
+        250,
+        40,
+        40
+      ],
+      "similarity": 0.754833811466589
+    },
+    {
+      "actual_mean_rgb": [
+        95.39236111111111,
+        80.55034722222223,
+        47.557291666666664
+      ],
+      "anchor_id": "south-ground",
+      "expected_mean_rgb": [
+        51.411458,
+        38.414931,
+        11.909722
+      ],
+      "region": [
+        80,
+        760,
+        48,
+        48
+      ],
+      "similarity": 0.0
+    }
+  ],
+  "captured_at_utc": "2026-09-04T00:52:26.004448+00:00",
+  "case_id": "manually-restored-view",
+  "files": {
+    "draft": "diagnostics\\live-proof-resource\\drafts\\manually-restored-view.json",
+    "preview": "diagnostics\\live-proof-resource\\previews\\manually-restored-view.bmp",
+    "raw": "diagnostics\\live-proof-resource\\frames\\manually-restored-view.raw",
+    "report": "diagnostics\\live-proof-resource\\reports\\manually-restored-view.json"
+  },
+  "frame": {
+    "frame_id": 1,
+    "height": 1078,
+    "pixel_format": "bgra8888",
+    "width": 1005
+  },
+  "minimum_anchor_confidence": 0.9,
+  "observations": [
+    {
+      "confidence": 1.0,
+      "kind": "resource.uncertain",
+      "reason": "insufficient_landmark_quorum: 0/6 landmarks (quorum 5) across 0 zones (required 3)",
+      "resource_id": "varrock-east-iron-northwest"
+    },
+    {
+      "confidence": 1.0,
+      "kind": "resource.uncertain",
+      "reason": "insufficient_landmark_quorum: 0/6 landmarks (quorum 5) across 0 zones (required 3)",
+      "resource_id": "varrock-east-iron-southwest"
+    },
+    {
+      "confidence": 1.0,
+      "kind": "resource.uncertain",
+      "reason": "insufficient_landmark_quorum: 0/6 landmarks (quorum 5) across 0 zones (required 3)",
+      "resource_id": "varrock-east-iron-center"
+    },
+    {
+      "confidence": 1.0,
+      "kind": "resource.uncertain",
+      "reason": "insufficient_landmark_quorum: 0/6 landmarks (quorum 5) across 0 zones (required 3)",
+      "resource_id": "varrock-east-iron-northeast"
+    }
+  ],
+  "reference_comparison": {
+    "available": false,
+    "reason": "reference raw frame does not exist",
+    "reference": "diagnostics\\live-proof-resource\\frames\\available-01.raw"
+  },
+  "schema_version": 1
+}

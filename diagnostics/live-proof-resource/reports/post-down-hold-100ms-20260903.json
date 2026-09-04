@@ -1,0 +1,165 @@
+{
+  "anchors": [
+    {
+      "actual_mean_rgb": [
+        127.70833333333333,
+        125.21180555555556,
+        67.44791666666667
+      ],
+      "anchor_id": "grass-west",
+      "expected_mean_rgb": [
+        80.411458,
+        82.079861,
+        34.185764
+      ],
+      "region": [
+        50,
+        80,
+        48,
+        48
+      ],
+      "similarity": 0.0
+    },
+    {
+      "actual_mean_rgb": [
+        121.81597222222223,
+        121.27777777777777,
+        64.74652777777777
+      ],
+      "anchor_id": "grass-center",
+      "expected_mean_rgb": [
+        70.258681,
+        77.246528,
+        34.888889
+      ],
+      "region": [
+        360,
+        120,
+        48,
+        48
+      ],
+      "similarity": 0.0
+    },
+    {
+      "actual_mean_rgb": [
+        115.725,
+        105.99,
+        53.09
+      ],
+      "anchor_id": "east-slope",
+      "expected_mean_rgb": [
+        86.1525,
+        85.3875,
+        31.1175
+      ],
+      "region": [
+        660,
+        250,
+        40,
+        40
+      ],
+      "similarity": 0.15577573625250518
+    },
+    {
+      "actual_mean_rgb": [
+        90.55555555555556,
+        74.83159722222223,
+        38.78472222222222
+      ],
+      "anchor_id": "south-ground",
+      "expected_mean_rgb": [
+        51.411458,
+        38.414931,
+        11.909722
+      ],
+      "region": [
+        80,
+        760,
+        48,
+        48
+      ],
+      "similarity": 0.0
+    }
+  ],
+  "captured_at_utc": "2026-09-04T01:41:40.096445+00:00",
+  "case_id": "post-down-hold-100ms-20260903",
+  "files": {
+    "draft": "diagnostics\\live-proof-resource\\drafts\\post-down-hold-100ms-20260903.json",
+    "preview": "diagnostics\\live-proof-resource\\previews\\post-down-hold-100ms-20260903.bmp",
+    "raw": "diagnostics\\live-proof-resource\\frames\\post-down-hold-100ms-20260903.raw",
+    "report": "diagnostics\\live-proof-resource\\reports\\post-down-hold-100ms-20260903.json"
+  },
+  "frame": {
+    "frame_id": 1,
+    "height": 1078,
+    "pixel_format": "bgra8888",
+    "width": 1005
+  },
+  "minimum_anchor_confidence": 0.9,
+  "observations": [
+    {
+      "confidence": 1.0,
+      "kind": "resource.uncertain",
+      "reason": "insufficient_landmark_quorum: 0/6 landmarks (quorum 5) across 0 zones (required 3)",
+      "resource_id": "varrock-east-iron-northwest"
+    },
+    {
+      "confidence": 1.0,
+      "kind": "resource.uncertain",
+      "reason": "insufficient_landmark_quorum: 0/6 landmarks (quorum 5) across 0 zones (required 3)",
+      "resource_id": "varrock-east-iron-southwest"
+    },
+    {
+      "confidence": 1.0,
+      "kind": "resource.uncertain",
+      "reason": "insufficient_landmark_quorum: 0/6 landmarks (quorum 5) across 0 zones (required 3)",
+      "resource_id": "varrock-east-iron-center"
+    },
+    {
+      "confidence": 1.0,
+      "kind": "resource.uncertain",
+      "reason": "insufficient_landmark_quorum: 0/6 landmarks (quorum 5) across 0 zones (required 3)",
+      "resource_id": "varrock-east-iron-northeast"
+    }
+  ],
+  "reference_comparison": {
+    "available": true,
+    "note": "same-coordinate diagnostic only; not a production release threshold",
+    "reference": "diagnostics\\live-proof-reference\\frames\\available-01.raw",
+    "zones": {
+      "NE": {
+        "median_pixel_mae": 33.333333333333336,
+        "percent_pixel_mae_le_10": 4.484035759897829,
+        "percent_pixel_mae_le_2": 1.3882503192848021,
+        "percent_pixel_mae_le_20": 14.0727969348659,
+        "percent_pixel_mae_le_5": 3.0625798212005106,
+        "rgb_mae": 33.29205619412516
+      },
+      "NW": {
+        "median_pixel_mae": 34.666666666666664,
+        "percent_pixel_mae_le_10": 0.8607918263090677,
+        "percent_pixel_mae_le_2": 0.05491698595146871,
+        "percent_pixel_mae_le_20": 4.699872286079183,
+        "percent_pixel_mae_le_5": 0.32567049808429116,
+        "rgb_mae": 35.06471264367816
+      },
+      "SE": {
+        "median_pixel_mae": 49.0,
+        "percent_pixel_mae_le_10": 2.5376756066411237,
+        "percent_pixel_mae_le_2": 0.04469987228607918,
+        "percent_pixel_mae_le_20": 6.113665389527458,
+        "percent_pixel_mae_le_5": 0.35759897828863346,
+        "rgb_mae": 48.78209025117071
+      },
+      "SW": {
+        "median_pixel_mae": 37.0,
+        "percent_pixel_mae_le_10": 0.13665389527458494,
+        "percent_pixel_mae_le_2": 0.0,
+        "percent_pixel_mae_le_20": 1.582375478927203,
+        "percent_pixel_mae_le_5": 0.010217113665389528,
+        "rgb_mae": 36.63254576415496
+      }
+    }
+  },
+  "schema_version": 1
+}

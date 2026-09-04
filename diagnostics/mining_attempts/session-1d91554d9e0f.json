@@ -1,0 +1,23 @@
+{
+  "session_id": "session-1d91554d9e0f",
+  "created_at_epoch_s": 1788483423.7612014,
+  "summary": {
+    "success": false,
+    "stop_reason": "resource_unknown",
+    "progress_kind": "none",
+    "target_window": {
+      "hwnd": 3736178,
+      "title": "RuneLite - Chief Luma",
+      "class_name": "SunAwtFrame",
+      "client_width": 1005,
+      "client_height": 1078,
+      "dpi": 96,
+      "is_visible": true,
+      "is_minimized": false
+    },
+    "proposal": null,
+    "receipt": null,
+    "evidence_path": null,
+    "detail": "Pre-attempt world state blocked: resource_unknown"
+  }
+}

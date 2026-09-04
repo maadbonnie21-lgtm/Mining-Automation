@@ -1,0 +1,165 @@
+{
+  "events": [
+    {
+      "iteration": 1,
+      "kind": "clean_reacquisition",
+      "frame": "diagnostics\\third-rock-ore4-20260903\\ore-01-clean.bgra",
+      "resource_view": "supported",
+      "inventory_occupied": 3,
+      "inventory_confidence": 1.0,
+      "phase": "ready",
+      "stop_reason": "none",
+      "test_excluded_target_ids": [
+        "varrock-east-iron-northwest",
+        "varrock-east-iron-southwest"
+      ]
+    },
+    {
+      "iteration": 1,
+      "kind": "hover_proof",
+      "target_id": "varrock-east-iron-center",
+      "target_region": [
+        270,
+        640,
+        20,
+        20
+      ],
+      "client_point": [
+        280,
+        650
+      ],
+      "screen_point": [
+        351,
+        813
+      ],
+      "frame": "diagnostics\\third-rock-ore4-20260903\\ore-01-hover.bgra",
+      "proven_mine_iron_rocks": true,
+      "cyan_pixels": 195,
+      "cyan_bbox": [
+        41,
+        7,
+        106,
+        16
+      ],
+      "white_prefix_pixels": 110,
+      "white_prefix_bbox": [
+        7,
+        7,
+        35,
+        16
+      ]
+    },
+    {
+      "iteration": 1,
+      "kind": "single_click",
+      "receipt": {
+        "dispatch_id": "dispatch-6255bf02e1ef",
+        "click_count": 1,
+        "dispatched_monotonic_s": 1797358.062
+      },
+      "audit": {
+        "target_hwnd": 3736178,
+        "foreground_hwnd": 3736178,
+        "foreground_matches_target": true,
+        "detector_region": [
+          270,
+          640,
+          20,
+          20
+        ],
+        "detector_client_point": [
+          280,
+          650
+        ],
+        "physical_client_origin": [
+          1,
+          0
+        ],
+        "screen_click_point": [
+          351,
+          813
+        ],
+        "reverse_detector_client_point": [
+          280,
+          650
+        ],
+        "coordinate_round_trip_exact": true
+      }
+    },
+    {
+      "iteration": 1,
+      "kind": "passive_verification",
+      "index": 1,
+      "frame": "diagnostics\\third-rock-ore4-20260903\\ore-01-passive-01.bgra",
+      "inventory_occupied": 3,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null
+    },
+    {
+      "iteration": 1,
+      "kind": "passive_verification",
+      "index": 2,
+      "frame": "diagnostics\\third-rock-ore4-20260903\\ore-01-passive-02.bgra",
+      "inventory_occupied": 3,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null
+    },
+    {
+      "iteration": 1,
+      "kind": "passive_verification",
+      "index": 3,
+      "frame": "diagnostics\\third-rock-ore4-20260903\\ore-01-passive-03.bgra",
+      "inventory_occupied": 3,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null
+    },
+    {
+      "iteration": 1,
+      "kind": "passive_verification",
+      "index": 4,
+      "frame": "diagnostics\\third-rock-ore4-20260903\\ore-01-passive-04.bgra",
+      "inventory_occupied": 3,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null
+    },
+    {
+      "iteration": 1,
+      "kind": "passive_verification",
+      "index": 5,
+      "frame": "diagnostics\\third-rock-ore4-20260903\\ore-01-passive-05.bgra",
+      "inventory_occupied": 3,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null
+    },
+    {
+      "iteration": 1,
+      "kind": "passive_verification",
+      "index": 6,
+      "frame": "diagnostics\\third-rock-ore4-20260903\\ore-01-passive-06.bgra",
+      "inventory_occupied": 4,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": null
+    },
+    {
+      "iteration": 1,
+      "kind": "post_ore_reacquisition",
+      "frame": "diagnostics\\third-rock-ore4-20260903\\ore-04-reacquired.bgra",
+      "resource_view": "supported",
+      "inventory_occupied": 4,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null
+    }
+  ]
+}

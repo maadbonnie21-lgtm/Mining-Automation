@@ -1,0 +1,128 @@
+{
+  "events": [
+    {
+      "iteration": 1,
+      "kind": "clean_reacquisition",
+      "frame": "diagnostics\\proven-mining-ore2-20260903\\ore-01-clean.bgra",
+      "resource_view": "supported",
+      "inventory_occupied": 1,
+      "inventory_confidence": 1.0,
+      "phase": "ready",
+      "stop_reason": "none"
+    },
+    {
+      "iteration": 1,
+      "kind": "hover_proof",
+      "target_id": "varrock-east-iron-northwest",
+      "target_region": [
+        370,
+        540,
+        20,
+        20
+      ],
+      "client_point": [
+        380,
+        550
+      ],
+      "screen_point": [
+        476,
+        688
+      ],
+      "frame": "diagnostics\\proven-mining-ore2-20260903\\ore-01-hover.bgra",
+      "proven_mine_iron_rocks": true,
+      "cyan_pixels": 195,
+      "cyan_bbox": [
+        41,
+        7,
+        107,
+        16
+      ],
+      "white_prefix_pixels": 110,
+      "white_prefix_bbox": [
+        7,
+        7,
+        34,
+        16
+      ]
+    },
+    {
+      "iteration": 1,
+      "kind": "single_click",
+      "receipt": {
+        "dispatch_id": "dispatch-31bc921e095f",
+        "click_count": 1,
+        "dispatched_monotonic_s": 1796821.671
+      },
+      "audit": {
+        "target_hwnd": 3736178,
+        "foreground_hwnd": 3736178,
+        "foreground_matches_target": true,
+        "detector_region": [
+          370,
+          540,
+          20,
+          20
+        ],
+        "detector_client_point": [
+          380,
+          550
+        ],
+        "physical_client_origin": [
+          1,
+          0
+        ],
+        "screen_click_point": [
+          476,
+          688
+        ],
+        "reverse_detector_client_point": [
+          380,
+          550
+        ],
+        "coordinate_round_trip_exact": true
+      }
+    },
+    {
+      "iteration": 1,
+      "kind": "passive_verification",
+      "index": 1,
+      "frame": "diagnostics\\proven-mining-ore2-20260903\\ore-01-passive-01.bgra",
+      "inventory_occupied": 1,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": true
+    },
+    {
+      "iteration": 1,
+      "kind": "passive_verification",
+      "index": 2,
+      "frame": "diagnostics\\proven-mining-ore2-20260903\\ore-01-passive-02.bgra",
+      "inventory_occupied": 1,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": true
+    },
+    {
+      "iteration": 1,
+      "kind": "passive_verification",
+      "index": 3,
+      "frame": "diagnostics\\proven-mining-ore2-20260903\\ore-01-passive-03.bgra",
+      "inventory_occupied": 2,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null,
+      "resource_view": "supported",
+      "selected_available": false
+    },
+    {
+      "iteration": 1,
+      "kind": "post_ore_reacquisition",
+      "frame": "diagnostics\\proven-mining-ore2-20260903\\ore-02-reacquired.bgra",
+      "resource_view": "supported",
+      "inventory_occupied": 2,
+      "inventory_confidence": 1.0,
+      "inventory_unknown_reason": null
+    }
+  ]
+}

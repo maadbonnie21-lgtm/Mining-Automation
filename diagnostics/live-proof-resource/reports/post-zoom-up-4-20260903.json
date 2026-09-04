@@ -1,0 +1,165 @@
+{
+  "anchors": [
+    {
+      "actual_mean_rgb": [
+        127.85763888888889,
+        126.30902777777777,
+        67.94791666666667
+      ],
+      "anchor_id": "grass-west",
+      "expected_mean_rgb": [
+        80.411458,
+        82.079861,
+        34.185764
+      ],
+      "region": [
+        50,
+        80,
+        48,
+        48
+      ],
+      "similarity": 0.0
+    },
+    {
+      "actual_mean_rgb": [
+        121.828125,
+        121.31944444444444,
+        64.80555555555556
+      ],
+      "anchor_id": "grass-center",
+      "expected_mean_rgb": [
+        70.258681,
+        77.246528,
+        34.888889
+      ],
+      "region": [
+        360,
+        120,
+        48,
+        48
+      ],
+      "similarity": 0.0
+    },
+    {
+      "actual_mean_rgb": [
+        113.175,
+        99.24,
+        49.415
+      ],
+      "anchor_id": "east-slope",
+      "expected_mean_rgb": [
+        86.1525,
+        85.3875,
+        31.1175
+      ],
+      "region": [
+        660,
+        250,
+        40,
+        40
+      ],
+      "similarity": 0.2909426627556839
+    },
+    {
+      "actual_mean_rgb": [
+        88.97395833333333,
+        73.50347222222223,
+        38.13194444444444
+      ],
+      "anchor_id": "south-ground",
+      "expected_mean_rgb": [
+        51.411458,
+        38.414931,
+        11.909722
+      ],
+      "region": [
+        80,
+        760,
+        48,
+        48
+      ],
+      "similarity": 0.0
+    }
+  ],
+  "captured_at_utc": "2026-09-04T01:32:34.071712+00:00",
+  "case_id": "post-zoom-up-4-20260903",
+  "files": {
+    "draft": "diagnostics\\live-proof-resource\\drafts\\post-zoom-up-4-20260903.json",
+    "preview": "diagnostics\\live-proof-resource\\previews\\post-zoom-up-4-20260903.bmp",
+    "raw": "diagnostics\\live-proof-resource\\frames\\post-zoom-up-4-20260903.raw",
+    "report": "diagnostics\\live-proof-resource\\reports\\post-zoom-up-4-20260903.json"
+  },
+  "frame": {
+    "frame_id": 1,
+    "height": 1078,
+    "pixel_format": "bgra8888",
+    "width": 1005
+  },
+  "minimum_anchor_confidence": 0.9,
+  "observations": [
+    {
+      "confidence": 1.0,
+      "kind": "resource.uncertain",
+      "reason": "insufficient_landmark_quorum: 0/6 landmarks (quorum 5) across 0 zones (required 3)",
+      "resource_id": "varrock-east-iron-northwest"
+    },
+    {
+      "confidence": 1.0,
+      "kind": "resource.uncertain",
+      "reason": "insufficient_landmark_quorum: 0/6 landmarks (quorum 5) across 0 zones (required 3)",
+      "resource_id": "varrock-east-iron-southwest"
+    },
+    {
+      "confidence": 1.0,
+      "kind": "resource.uncertain",
+      "reason": "insufficient_landmark_quorum: 0/6 landmarks (quorum 5) across 0 zones (required 3)",
+      "resource_id": "varrock-east-iron-center"
+    },
+    {
+      "confidence": 1.0,
+      "kind": "resource.uncertain",
+      "reason": "insufficient_landmark_quorum: 0/6 landmarks (quorum 5) across 0 zones (required 3)",
+      "resource_id": "varrock-east-iron-northeast"
+    }
+  ],
+  "reference_comparison": {
+    "available": true,
+    "note": "same-coordinate diagnostic only; not a production release threshold",
+    "reference": "diagnostics\\live-proof-reference\\frames\\available-01.raw",
+    "zones": {
+      "NE": {
+        "median_pixel_mae": 33.0,
+        "percent_pixel_mae_le_10": 4.8288633461047255,
+        "percent_pixel_mae_le_2": 1.4125159642401022,
+        "percent_pixel_mae_le_20": 15.444444444444445,
+        "percent_pixel_mae_le_5": 3.1992337164750957,
+        "rgb_mae": 32.9841975308642
+      },
+      "NW": {
+        "median_pixel_mae": 34.333333333333336,
+        "percent_pixel_mae_le_10": 0.9144316730523627,
+        "percent_pixel_mae_le_2": 0.06896551724137931,
+        "percent_pixel_mae_le_20": 5.066411238825032,
+        "percent_pixel_mae_le_5": 0.3448275862068966,
+        "rgb_mae": 34.442733077905494
+      },
+      "SE": {
+        "median_pixel_mae": 49.666666666666664,
+        "percent_pixel_mae_le_10": 1.7879948914431674,
+        "percent_pixel_mae_le_2": 0.04853128991060025,
+        "percent_pixel_mae_le_20": 5.135376756066411,
+        "percent_pixel_mae_le_5": 0.37292464878671777,
+        "rgb_mae": 49.279914857386125
+      },
+      "SW": {
+        "median_pixel_mae": 37.0,
+        "percent_pixel_mae_le_10": 0.18135376756066413,
+        "percent_pixel_mae_le_2": 0.001277139208173691,
+        "percent_pixel_mae_le_20": 1.6756066411238826,
+        "percent_pixel_mae_le_5": 0.008939974457215836,
+        "rgb_mae": 36.52705406555981
+      }
+    }
+  },
+  "schema_version": 1
+}

@@ -1,0 +1,23 @@
+{
+  "session_id": "session-62a09226d54a",
+  "created_at_epoch_s": 1788482772.3897297,
+  "summary": {
+    "success": false,
+    "stop_reason": "publication_blocked",
+    "progress_kind": "none",
+    "target_window": {
+      "hwnd": 12345,
+      "title": "RuneLite - Player",
+      "class_name": "SunAwtFrame",
+      "client_width": 1005,
+      "client_height": 1078,
+      "dpi": 96,
+      "is_visible": true,
+      "is_minimized": false
+    },
+    "proposal": null,
+    "receipt": null,
+    "evidence_path": null,
+    "detail": "Pre-attempt frame capture failed: no window found matching 'RuneLite'"
+  }
+}

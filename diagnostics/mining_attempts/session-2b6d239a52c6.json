@@ -1,0 +1,23 @@
+{
+  "session_id": "session-2b6d239a52c6",
+  "created_at_epoch_s": 1788483406.6441433,
+  "summary": {
+    "success": false,
+    "stop_reason": "publication_blocked",
+    "progress_kind": "none",
+    "target_window": {
+      "hwnd": 3736178,
+      "title": "RuneLite - Chief Luma",
+      "class_name": "SunAwtFrame",
+      "client_width": 1005,
+      "client_height": 1078,
+      "dpi": 96,
+      "is_visible": true,
+      "is_minimized": false
+    },
+    "proposal": null,
+    "receipt": null,
+    "evidence_path": null,
+    "detail": "Perception evaluation raised: unknown_reason must be a canonical identifier"
+  }
+}

@@ -1,0 +1,172 @@
+{
+  "best_shared_offset": {
+    "matched_count": 1,
+    "matched_zones": [
+      "south_west"
+    ],
+    "normalized_distance_sum": 25.46991556352828,
+    "offset": [
+      17,
+      -1
+    ],
+    "required_quorum": 5,
+    "required_zones": 3,
+    "valid_landmark_count": 6,
+    "validated": false
+  },
+  "diagnosis": {
+    "code": "insufficient_registration_evidence",
+    "detail": "Only 3/6 landmarks are recoverable within +/-96px across 2 zones; there is not enough distributed evidence to infer a safe translation or a non-translation camera transform."
+  },
+  "diagnostic_search_does_not_override_production": true,
+  "excluded_regions": [
+    [
+      263,
+      409,
+      20,
+      20
+    ],
+    [
+      295,
+      490,
+      20,
+      20
+    ],
+    [
+      405,
+      424,
+      20,
+      20
+    ],
+    [
+      590,
+      365,
+      20,
+      20
+    ],
+    [
+      0,
+      0,
+      1005,
+      34
+    ],
+    [
+      545,
+      34,
+      222,
+      220
+    ],
+    [
+      767,
+      34,
+      238,
+      816
+    ],
+    [
+      520,
+      500,
+      485,
+      350
+    ],
+    [
+      0,
+      850,
+      1005,
+      228
+    ]
+  ],
+  "frame": "diagnostics\\live-proof-resource\\frames\\post-down-hold-100ms-20260903.raw",
+  "landmarks": [
+    {
+      "best_offset": [
+        1,
+        -13
+      ],
+      "distance": 0.2228249466828783,
+      "landmark_id": "west-ridge",
+      "matched": false,
+      "normalized_distance": 1.8568745556906525,
+      "searched_offsets": 1391,
+      "threshold": 0.12,
+      "zone": "north_west"
+    },
+    {
+      "best_offset": [
+        24,
+        -62
+      ],
+      "distance": 0.11610456752998807,
+      "landmark_id": "west-lower-ridge",
+      "matched": true,
+      "normalized_distance": 0.9675380627499006,
+      "searched_offsets": 1183,
+      "threshold": 0.12,
+      "zone": "north_west"
+    },
+    {
+      "best_offset": [
+        57,
+        5
+      ],
+      "distance": 0.1052029506898362,
+      "landmark_id": "south-path",
+      "matched": true,
+      "normalized_distance": 0.876691255748635,
+      "searched_offsets": 1550,
+      "threshold": 0.12,
+      "zone": "south_west"
+    },
+    {
+      "best_offset": [
+        17,
+        -2
+      ],
+      "distance": 0.10592004110307439,
+      "landmark_id": "south-central-edge",
+      "matched": true,
+      "normalized_distance": 0.8826670091922866,
+      "searched_offsets": 1605,
+      "threshold": 0.12,
+      "zone": "south_west"
+    },
+    {
+      "best_offset": [
+        -49,
+        -12
+      ],
+      "distance": 0.21470384125734457,
+      "landmark_id": "north-east-wall",
+      "matched": false,
+      "normalized_distance": 1.789198677144538,
+      "searched_offsets": 1217,
+      "threshold": 0.12,
+      "zone": "north_east"
+    },
+    {
+      "best_offset": [
+        -24,
+        -26
+      ],
+      "distance": 0.2592931294771463,
+      "landmark_id": "east-bank-edge",
+      "matched": false,
+      "normalized_distance": 2.160776078976219,
+      "searched_offsets": 997,
+      "threshold": 0.12,
+      "zone": "north_east"
+    }
+  ],
+  "matched_count": 3,
+  "matched_zones": [
+    "north_west",
+    "south_west"
+  ],
+  "profile_id": "varrock-east-iron-v1",
+  "report_kind": "varrock-east-wide-scene-registration",
+  "schema_version": 1,
+  "search": {
+    "coarse_step_pixels": 4,
+    "radius_pixels": 96,
+    "refinement_radius_pixels": 3
+  }
+}

@@ -1,0 +1,155 @@
+{
+  "best_shared_offset": null,
+  "diagnosis": {
+    "code": "insufficient_registration_evidence",
+    "detail": "Only 0/6 landmarks are recoverable within +/-96px across 0 zones; there is not enough distributed evidence to infer a safe translation or a non-translation camera transform."
+  },
+  "diagnostic_search_does_not_override_production": true,
+  "excluded_regions": [
+    [
+      270,
+      370,
+      20,
+      20
+    ],
+    [
+      270,
+      460,
+      20,
+      20
+    ],
+    [
+      400,
+      380,
+      20,
+      20
+    ],
+    [
+      572,
+      310,
+      20,
+      20
+    ],
+    [
+      0,
+      0,
+      1005,
+      34
+    ],
+    [
+      545,
+      34,
+      222,
+      220
+    ],
+    [
+      767,
+      34,
+      238,
+      816
+    ],
+    [
+      520,
+      500,
+      485,
+      350
+    ],
+    [
+      0,
+      850,
+      1005,
+      228
+    ]
+  ],
+  "frame": "diagnostics\\proven-mining-loop-20260903\\ore-01-clean.bgra",
+  "landmarks": [
+    {
+      "best_offset": [
+        33,
+        -36
+      ],
+      "distance": 0.3206803356804674,
+      "landmark_id": "west-ridge",
+      "matched": false,
+      "normalized_distance": 2.6723361306705615,
+      "searched_offsets": 1354,
+      "threshold": 0.12,
+      "zone": "north_west"
+    },
+    {
+      "best_offset": [
+        96,
+        -55
+      ],
+      "distance": 0.2862940747293119,
+      "landmark_id": "west-lower-ridge",
+      "matched": false,
+      "normalized_distance": 2.3857839560775993,
+      "searched_offsets": 1603,
+      "threshold": 0.12,
+      "zone": "north_west"
+    },
+    {
+      "best_offset": [
+        -85,
+        -58
+      ],
+      "distance": 0.18464387593601675,
+      "landmark_id": "south-path",
+      "matched": false,
+      "normalized_distance": 1.538698966133473,
+      "searched_offsets": 1522,
+      "threshold": 0.12,
+      "zone": "south_west"
+    },
+    {
+      "best_offset": [
+        -63,
+        -65
+      ],
+      "distance": 0.3651709330310937,
+      "landmark_id": "south-central-edge",
+      "matched": false,
+      "normalized_distance": 3.043091108592448,
+      "searched_offsets": 1411,
+      "threshold": 0.12,
+      "zone": "south_west"
+    },
+    {
+      "best_offset": [
+        -96,
+        96
+      ],
+      "distance": 0.27389736734800946,
+      "landmark_id": "north-east-wall",
+      "matched": false,
+      "normalized_distance": 2.2824780612334123,
+      "searched_offsets": 1292,
+      "threshold": 0.12,
+      "zone": "north_east"
+    },
+    {
+      "best_offset": [
+        -34,
+        10
+      ],
+      "distance": 0.36974290337846916,
+      "landmark_id": "east-bank-edge",
+      "matched": false,
+      "normalized_distance": 3.081190861487243,
+      "searched_offsets": 1370,
+      "threshold": 0.12,
+      "zone": "north_east"
+    }
+  ],
+  "matched_count": 0,
+  "matched_zones": [],
+  "profile_id": "varrock-east-iron-v1",
+  "report_kind": "varrock-east-wide-scene-registration",
+  "schema_version": 1,
+  "search": {
+    "coarse_step_pixels": 4,
+    "radius_pixels": 96,
+    "refinement_radius_pixels": 3
+  }
+}

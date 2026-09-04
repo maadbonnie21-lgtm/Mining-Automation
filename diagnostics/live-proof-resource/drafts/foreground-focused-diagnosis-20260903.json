@@ -1,0 +1,31 @@
+{
+  "annotations": [],
+  "case_id": "foreground-focused-diagnosis-20260903",
+  "dataset_id": "varrock-east-iron-v1",
+  "frame": {
+    "captured_monotonic_s": 1795059.843,
+    "height": 1078,
+    "path": "frames/foreground-focused-diagnosis-20260903.raw",
+    "pixel_format": "bgra8888",
+    "preview_path": "previews/foreground-focused-diagnosis-20260903.bmp",
+    "width": 1005
+  },
+  "location_id": "varrock-east-mine",
+  "notes": "One-command live Varrock East resource validation.",
+  "provenance": {
+    "capture_backend": "windows-runelite",
+    "capture_frame_id": "1",
+    "capture_title_match": "RuneLite",
+    "reported_dpi": "96",
+    "validation_tool": "validate_varrock_east_live.py",
+    "window_class": "SunAwtFrame",
+    "window_hwnd": "3736178",
+    "window_title": "RuneLite - Chief Luma"
+  },
+  "review_status": "draft",
+  "schema_version": 1,
+  "tags": [
+    "real",
+    "live-validation"
+  ]
+}

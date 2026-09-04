@@ -1,0 +1,14 @@
+{
+  "events": [
+    {
+      "iteration": 1,
+      "kind": "clean_reacquisition",
+      "frame": "diagnostics\\proven-mining-loop-20260903\\ore-01-clean.bgra",
+      "resource_view": "supported",
+      "inventory_occupied": 1,
+      "inventory_confidence": 1.0,
+      "phase": "stopped",
+      "stop_reason": "resource_unknown"
+    }
+  ]
+}
