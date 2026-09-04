@@ -48,7 +48,7 @@ class ClientResizeResult:
 def _user32() -> Any:  # noqa: ANN401 - ctypes DLL handles are untyped
     if sys.platform != "win32":
         raise RuntimeError("RuneLite PREP window mutation requires Windows")
-    return ctypes.WinDLL("user32", use_last_error=True)  # type: ignore[attr-defined]
+    return ctypes.WinDLL("user32", use_last_error=True)
 
 
 def _require_window(user32: Any, hwnd: int) -> None:  # noqa: ANN401
@@ -112,17 +112,14 @@ def _get_window_long(user32: Any, hwnd: int, index: int) -> int:  # noqa: ANN401
     if getter is not None:
         getter.restype = ctypes.c_ssize_t
         getter.argtypes = [wintypes.HWND, ctypes.c_int]
-        ctypes.set_last_error(0)
         value = int(getter(hwnd, index))
     else:
         getter32 = user32.GetWindowLongW
         getter32.restype = wintypes.LONG
         getter32.argtypes = [wintypes.HWND, ctypes.c_int]
-        ctypes.set_last_error(0)
         value = int(getter32(hwnd, index))
-    error = ctypes.get_last_error()
-    if value == 0 and error:
-        raise OSError(error, "GetWindowLong failed for RuneLite PREP")
+    if value == 0:
+        raise OSError("GetWindowLong returned zero for RuneLite PREP")
     return value
 
 

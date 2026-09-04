@@ -35,11 +35,11 @@ from mining_automation.perception.live_pose_references import (  # noqa: E402
     verify_local_pose_references,
 )
 from mining_automation.validation import _runelite_prep_win32  # noqa: E402
-from mining_automation.validation.client_readiness import (  # noqa: E402
-    evaluate_client_input_readiness,
-)
 from mining_automation.validation.camera_plan import (  # noqa: E402
     REVIEWED_CAMERA_WHEEL_POINT,
+)
+from mining_automation.validation.client_readiness import (  # noqa: E402
+    evaluate_client_input_readiness,
 )
 from mining_automation.validation.runelite_prep import (  # noqa: E402
     EXPECTED_CLIENT_DPI,
