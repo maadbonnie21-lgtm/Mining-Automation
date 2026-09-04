@@ -1,0 +1,78 @@
+name: Crusader Row overnight execution lead 2026-09-03
+
+on:
+  push:
+    branches:
+      - chatgpt/nightly-execution-lead-2026-09-03-authoritative-v10
+    paths:
+      - .github/workflows/nightly-execution-lead-2026-09-03.yml
+      - scripts/nightly_execution_lead_2026_09_03.py
+      - docs/NIGHTLY_EXECUTION_LEAD_REQUEST.md
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: crusader-row-overnight-execution-lead-2026-09-03
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/nightly-execution-lead-2026-09-03-authoritative-v10
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Integrate available safe lanes and apply exact B4 test migration
+        run: python scripts/nightly_execution_lead_2026_09_03.py prepare
+
+  verify:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/nightly-execution-lead-2026-09-03-authoritative-v10
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run exact lint, type, critical-path, and full repository verification
+        run: python scripts/nightly_execution_lead_2026_09_03.py verify --output "${{ runner.temp }}/nightly-${{ runner.os }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nightly-execution-${{ runner.os }}
+          path: ${{ runner.temp }}/nightly-${{ runner.os }}.json
+          retention-days: 3
+
+  finalize:
+    needs: verify
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/nightly-execution-lead-2026-09-03-authoritative-v10
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nightly-execution-*
+          path: ${{ runner.temp }}/nightly-results
+          merge-multiple: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Publish exact dashboard, completion measurements, and blockers
+        run: python scripts/nightly_execution_lead_2026_09_03.py finalize --receipts-root "${{ runner.temp }}/nightly-results"
