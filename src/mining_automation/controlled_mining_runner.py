@@ -281,7 +281,7 @@ class RealWin32MiningInputDevice:
         self._win32: Any = _camera_win32_calls
         self._coords: Any = camera_coordinates
         self._win32.declare_dpi_awareness()
-        self._dispatched = False
+        self._dispatched: bool = False
         self.last_dispatch_audit: dict[str, Any] | None = None
 
     def verify_target_window(self, title_substring: str = DEFAULT_WINDOW_TITLE_SUBSTRING) -> TargetWindowInfo:
@@ -519,13 +519,15 @@ class ProductionMiningPerceptionEvaluator:
         from .perception.inventory.geometry import InventoryGridLayout, Region
         from .perception.inventory.localization import InventoryFrameProfile
         from .perception.inventory.positive_classifier_v3 import (
+            InventoryPositiveV3DevelopmentAnalyzer,
+        )
+        from .perception.inventory.positive_v3_prototypes import (
             SUPPORTED_COLUMN_STRIDE,
             SUPPORTED_FRAME_HEIGHT,
             SUPPORTED_FRAME_WIDTH,
             SUPPORTED_PROFILE_ID,
             SUPPORTED_REGION,
             SUPPORTED_ROW_STRIDE,
-            InventoryPositiveV3DevelopmentAnalyzer,
         )
 
         if self._inventory_analyzer is None:
