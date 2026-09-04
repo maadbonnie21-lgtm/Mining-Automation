@@ -2,159 +2,209 @@
 
 ## Purpose
 
-Normalize only the supported starting-client conditions needed before a separately
-authorized mining-only `0 -> 28` attempt.
+Prepare and verify the supported starting client state for a separately authorized
+mining-only `0 -> 28` attempt.
 
-PREP is not a miner. It never authorizes or executes a mining click, navigation,
-banking, item movement, Resource release, or Inventory release.
+PREP is not a miner. It never authorizes or executes mining, navigation, banking,
+item movement, Resource release, or Inventory release.
+
+## Evidence-driven correction from the independent audit
+
+The retained 2026-09-03 camera experiments do **not** establish a deterministic
+camera-normalization recipe. The recorded zoom/pitch/manual-restoration attempts that
+were inspected remained outside the frozen Resource gate. The working mining session
+came from the retained successful current-view pose references / software registration,
+not from proof that a particular wheel or pitch sequence restores a canonical view.
+
+Therefore, for today's P0 path:
+
+- production PREP sends **zero automatic camera input** by default;
+- Tyler sets the supported Varrock East mining view once before PREP and then leaves it
+  alone;
+- PREP may still use the existing software pose/registration path to *measure* the
+  current view;
+- if the frozen Resource gate does not pass, PREP returns one precise STOP instead of
+  poking the camera;
+- the typed camera primitives remain in the repository for focused testing/future
+  explicitly reviewed evidence, but they are not a READY recipe today.
 
 ## Operator starting state
 
-Tyler does only the human-owned setup that software must not invent:
+1. Open and log into RuneLite on the authorized account.
+2. Place the character at the supported Varrock East iron area used by the retained
+   2026-09-03 proof.
+3. Set the mining view once by hand, then stop adjusting zoom/camera.
+4. Keep the Inventory tab visible and unobstructed. Keep the cursor away from the tab
+   and slots so no tooltip covers Inventory evidence.
+5. Do not restart RuneLite after discovering the current HWND for the run.
 
-1. Open and log into RuneLite on the explicitly authorized account.
-2. Place the character in the supported Varrock East iron area used by the retained
-   2026-09-03 successful mining evidence.
-3. Keep the Inventory tab visible and unobstructed. Do not leave the cursor over the
-   Inventory tab or slots.
-4. Do not manually adjust zoom/camera while PREP is running.
+Never reuse historical HWND `3736178`. PREP and the miner must use the current live
+window identity.
 
-PREP rediscoveries the current RuneLite HWND each session. Do not reuse or paste the
-historical HWND from 2026-09-03.
+## Private local pose references
 
-## Step 1 — read-only diagnose
+The three successful `.bgra` pose references are private/local inputs by design and are
+not required to be tracked by Git. The miner and PREP now treat source cleanliness as
+**tracked-file cleanliness** while still requiring the private pose references to exist
+and verify exactly.
 
-From a clean checkout of the reviewed PREP head:
+Required local references:
+
+1. `diagnostics/different-rock-ore3-20260903/ore-01-clean.bgra`
+2. `diagnostics/third-rock-ore4-20260903/ore-01-clean.bgra`
+3. `diagnostics/third-rock-ore4-20260903/ore-04-reacquired.bgra`
+
+The mining live path calls `verify_local_pose_references()` before constructing the
+live mining backend. Missing, wrong-size, or invalid references produce STOP before any
+mining input can be sent.
+
+## Step 0 — mining plan, no live input
+
+Before authorizing a live run, verify the mining wrapper itself remains fail closed:
+
+```powershell
+python tools\run_mining_to_full.py
+```
+
+Expected plan properties include:
+
+- `mode = read_only_plan`
+- `live_input_performed = false`
+- geometry `1005 x 1078`
+- DPI `96`
+- Resource threshold `0.12`
+- Resource landmarks `6`, quorum `5`, required zones `3`
+- Inventory floor `0.8`, capacity `28`
+- maximum one click per attempt
+- navigation does not start on FULL
+- three local pose references required
+- tracked checkout must be clean
+- untracked private pose references are permitted
+- camera preparation authority is false
+
+## Step 1 — read-only PREP diagnose
+
+From the exact reviewed PREP checkout:
 
 ```powershell
 python tools\runelite_prep.py
 ```
 
-This is the default mode and sends **zero setup/camera input**.
+The default mode sends **zero setup or camera input**.
 
-It reports and records:
+It records:
 
-- exact current HWND plus PID/TID/class/title identity;
+- current HWND and PID/TID/class/title identity;
 - visible/minimized/foreground state;
-- measured physical client area;
+- physical client area;
 - DPI;
-- all three retained local pose-reference checks;
+- exact local pose-reference verification;
 - gameplay-chrome readiness;
-- current Inventory occupancy/confidence or exact UNKNOWN reason;
-- current Resource pose/registration verdict at unchanged `0.12`, `5/6`, all `3`
-  zones;
+- Inventory occupancy/confidence or exact UNKNOWN reason;
+- Resource pose/registration result at unchanged `0.12`, `5/6`, all three zones;
 - final frame identity/hash;
-- one unique `result.json` receipt.
+- a unique `result.json` receipt.
 
-A read-only result may say `NOT READY` without attempting any repair.
+A read-only result may say `NOT READY` without attempting repair.
 
-## Step 2 — explicit PREP apply, only if needed
+## Step 2 — explicit PREP apply, only for approved setup corrections
 
-If the diagnose reports a condition PREP is explicitly allowed to correct, run:
+If diagnose reports a condition PREP is explicitly allowed to repair, run:
 
 ```powershell
 python tools\runelite_prep.py --apply --confirm PREP_RUNELITE_FOR_MINING
 ```
 
-That confirmation grants **PREP-only** setup authority for this invocation.
+Apply authority is PREP-only. It may:
 
-The apply path may:
-
-- restore the exact bound RuneLite HWND if minimized;
-- explicitly foreground that exact HWND;
+- restore the exact rebound RuneLite HWND if minimized;
+- foreground the exact rebound HWND;
 - resize the measured **client area** to exact `1005 x 1078`;
-- move the cursor to the reviewed neutral client point and settle tooltip state;
-- perform the bounded measured camera search using the existing reviewed Windows
-  camera primitives.
+- neutralize the cursor and settle tooltip state;
+- recapture and reevaluate the current view.
 
-It may not change global Windows scaling. DPI other than exact `96` is a STOP.
+It does **not** automatically alter camera/zoom today.
 
-It may not invent an Inventory-tab click. No reviewed Inventory-tab control point was
-found in the retained path, so Inventory UNKNOWN/tab/tooltip obstruction is a precise
+It does not change global Windows scaling. DPI other than exact `96` is STOP.
+
+No reviewed Inventory-tab control point was found in the retained path, so PREP does
+not invent a tab click. Inventory UNKNOWN/tab/tooltip obstruction is one precise
 human-only correction followed by a fresh PREP invocation.
 
-## Camera rule
+## READY gate
 
-Camera preparation is closed loop:
+Only the actual frozen gate may publish READY:
 
-`capture/evaluate -> one bounded correction -> settle -> fresh capture/evaluate`
-
-If the current Resource gate already passes, PREP sends zero camera actions.
-
-The initial bounded search retains the measured 2026-09-03 pitch experiment sequence
-that immediately preceded the useful recalibrated view (`down 100 ms`, `down 100 ms`,
-`up 50 ms`), followed only by one-detent local wheel probes if still necessary. This
-sequence is a search order, **not** a READY recipe.
-
-Four zoom-up events are not treated as canonical because the retained
-`post-zoom-up-4-20260903` evidence remained `0/6`.
-
-Only the actual frozen Resource gate may publish READY:
-
-- landmark distance threshold `0.12` unchanged;
-- at least `5/6` landmarks;
-- all `3` required zones;
-- supported Resource view.
-
-A better diagnostic distance alone can never grant READY.
-
-## READY means
-
-PREP prints `READY FOR MINING` only after a final clean current observation proves:
-
-- same rebound HWND/PID/TID/class/title identity;
+- exact same rebound HWND/PID/TID/class/title identity;
 - visible, unminimized, foreground RuneLite;
-- measured client area exactly `1005 x 1078`;
+- client area exactly `1005 x 1078`;
 - DPI exactly `96`;
-- retained local pose references valid;
+- all three local pose references verify;
 - gameplay chrome ready;
-- Inventory occupancy known with confidence `>= 0.8`;
-- Resource supported at unchanged `0.12`, `5/6`, all `3` zones;
-- final cursor neutralization completed;
-- no incomplete setup/camera/cleanup receipt.
+- Inventory occupancy known at confidence `>= 0.8`;
+- Resource supported;
+- exactly six unique retained landmark-distance records are present;
+- at least `5/6` are within unchanged `0.12`;
+- matched landmark count is at least `5/6`;
+- exact required zone set is `north_west`, `north_east`, `south_west`;
+- final cursor neutralization and cleanup complete.
 
-The JSON receipt explicitly keeps mining, navigation, banking, Resource-release, and
+A diagnostic score or a view that merely looks closer can never grant READY.
+
+The receipt explicitly keeps mining, navigation, banking, Resource-release, and
 Inventory-release authority false and records that PREP authority is relinquished.
 
-## STOP behavior
+## If PREP says Resource view is unsupported
 
-Do not manually repair the client *mid-run*. PREP stops on the first unsafe or
-unsupported condition, preserves the diagnostic receipt/local frames, releases any
-PREP-owned held key/button state, and ends.
+STOP. Do not run an automatic camera search.
 
-Typical exact STOP classes include:
+Tyler may set the supported starting mining view once and rerun read-only PREP. The
+software may validate the view through the retained pose/registration path, but it does
+not weaken the `.12 / 5-of-6 / three-zone` gate.
 
-- wrong DPI;
-- missing retained pose reference;
-- HWND/process/thread/class/title identity change or reuse;
-- wrong client geometry in read-only mode;
-- failed bounded resize/restore/focus;
-- gameplay-chrome mismatch;
-- Inventory UNKNOWN or confidence below `0.8`;
-- partial/short Windows input receipt;
-- held input before a camera operation;
-- foreground loss;
-- bounded camera search exhausted without the frozen Resource gate.
-
-## Handoff to mining
+## Handoff to the miner
 
 A PREP READY receipt does **not** start mining.
 
-After PREP ends:
+After PREP returns READY:
 
-1. Preserve the READY receipt path and current HWND printed by PREP.
+1. Preserve the READY receipt path and current HWND.
 2. Make no resize, camera, compass, tab, or other PREP mutation during mining.
-3. Tyler separately authorizes the controlled mining-only run.
-4. Invoke the existing mining-to-full entry point separately under its own exact
-   confirmation/SHA/HWND controls.
-5. Mining proceeds to exact `28/28` or stops fail closed.
-6. Navigation/banking remain outside this work item.
+3. Tyler separately authorizes the exact mining execution SHA.
+4. Invoke the mining wrapper separately:
+
+```powershell
+python tools\run_mining_to_full.py --live --hwnd <CURRENT_HWND> --authorize-execution-sha <EXACT_REVIEWED_SHA> --confirm MINE_TO_FULL_28_FAIL_CLOSED
+```
+
+5. Mining proceeds until `28/28` **or the first fail-closed STOP**.
+6. Preserve the result either way. Navigation/banking stay outside today's mining-only
+work item.
+
+## Expected outcome for today's experiment
+
+`28/28` remains the target, not a guaranteed result. Real evidence currently proves
+repeated mining and fresh reacquisition across all three configured rocks, with the
+strongest uninterrupted proof covering three ores. The three retained pose references
+may not cover every new player landing position encountered over a full inventory.
+
+A safe STOP after new-position reacquisition failure is a valid diagnostic outcome and
+must not be bypassed by weakening thresholds, adding blind retries, or automatically
+fiddling with the camera.
+
+## Do not run stale proof tools
+
+Do not use the old standalone tools that embed the historical HWND/start state for
+today's run, including `run_three_rock_continuous_proof.py` and other historical
+proof/calibration wrappers with fixed HWND constants. Use `runelite_prep.py` plus
+`run_mining_to_full.py --hwnd <CURRENT_HWND>`.
 
 ## Current acceptance boundary
 
-Offline tests can prove the PREP controller, safety matrix, and Windows API contracts.
-They cannot prove the current physical RuneLite client is READY.
+Offline tests can prove the PREP controller, Windows boundary, private-reference
+preflight, exact fail-closed gates, and mining-plan invariants. They cannot prove the
+current physical RuneLite client is READY or that an unrun full-inventory endurance
+attempt will reach `28/28`.
 
-Today's PREP acceptance gate therefore still requires a genuine Windows run that
-produces a current-host `READY FOR MINING` receipt before the separate `0 -> 28` test
-is authorized.
+Today's final PREP acceptance therefore still requires a genuine Windows-host
+read-only/apply invocation that produces a current-host `READY FOR MINING` receipt.
