@@ -457,3 +457,20 @@ def test_default_prep_evidence_is_ignored_before_separate_miner_handoff() -> Non
     assert clean_index < mkdir_index
     assert "if mode is PrepMode.APPLY and not _checkout_clean()" not in tool
     assert "if result.ready_for_mining and not _checkout_clean():" in tool
+
+
+def test_default_apply_unsupported_view_sends_zero_camera_input() -> None:
+    backend = FakePrepBackend(
+        observations=[_observation(resource_supported=False, matched=0, zones=())]
+    )
+    result = run_runelite_prep(
+        backend,
+        mode=PrepMode.APPLY,
+        git_sha=GIT_SHA,
+        prep_session_id="prep-default-no-camera",
+        confirm=PREP_CONFIRMATION,
+    )
+    assert result.ready_for_mining is False
+    assert result.stop_reason is PrepStopReason.RESOURCE_SCENE_UNSUPPORTED
+    assert backend.camera_calls == []
+    assert "no evidence-backed automatic camera" in result.detail

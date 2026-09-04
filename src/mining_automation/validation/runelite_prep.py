@@ -75,17 +75,12 @@ class PrepCameraStep(StrEnum):
     WHEEL_NEGATIVE_1 = "wheel_negative_1"
 
 
-# The first three operations reproduce the bounded pitch sequence that immediately
-# preceded the retained recalibrated working view on 2026-09-03. The wheel probes are
-# deliberately one-detent local probes, not the disproven "four zoom-up = READY"
-# folklore. Every step is followed by a fresh measured gate evaluation.
-DEFAULT_CAMERA_SEARCH_STEPS: Final[tuple[PrepCameraStep, ...]] = (
-    PrepCameraStep.PITCH_DOWN_100MS,
-    PrepCameraStep.PITCH_DOWN_100MS,
-    PrepCameraStep.PITCH_UP_50MS,
-    PrepCameraStep.WHEEL_POSITIVE_1,
-    PrepCameraStep.WHEEL_NEGATIVE_1,
-)
+# 2026-09-04 independent audit: none of the retained zoom/pitch/manual-restoration
+# trials restored the frozen Resource gate. The working session came from retained
+# current-view calibration/pose references. Therefore production PREP sends zero
+# camera input today. The typed camera steps remain injectable for focused testing
+# and future explicitly reviewed evidence, but they are not a default search recipe.
+DEFAULT_CAMERA_SEARCH_STEPS: Final[tuple[PrepCameraStep, ...]] = ()
 
 
 @final
@@ -541,6 +536,14 @@ def run_runelite_prep(
             failure = _observation_stop(observation)
             if failure is not None:
                 raise failure
+
+            if not observation.frozen_resource_gate_passed and not camera_steps:
+                raise PrepOperationError(
+                    PrepStopReason.RESOURCE_SCENE_UNSUPPORTED,
+                    "Current view is not READY and no evidence-backed automatic camera "
+                    "normalization is authorized today. Set the supported mining view "
+                    "once, then rerun PREP; software registration may still validate it.",
+                )
 
             if not observation.frozen_resource_gate_passed:
                 for step in camera_steps:

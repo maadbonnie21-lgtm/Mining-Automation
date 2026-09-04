@@ -87,7 +87,7 @@ def _exact_git_sha() -> str:
 
 
 def _checkout_clean() -> bool:
-    return _git("status", "--porcelain") == ""
+    return _git("status", "--porcelain", "--untracked-files=no") == ""
 
 
 def _matching_windows(windows: list[WindowInfo], title: str) -> list[WindowInfo]:
