@@ -23,6 +23,9 @@ RESOURCE_LANDMARK_DISTANCE_THRESHOLD: Final[float] = 0.12
 RESOURCE_LANDMARK_COUNT: Final[int] = 6
 RESOURCE_LANDMARK_QUORUM: Final[int] = 5
 RESOURCE_REQUIRED_ZONE_COUNT: Final[int] = 3
+RESOURCE_REQUIRED_ZONES: Final[frozenset[str]] = frozenset(
+    ("north_west", "north_east", "south_west")
+)
 PREP_CONFIRMATION: Final[str] = "PREP_RUNELITE_FOR_MINING"
 PREP_SCHEMA_VERSION: Final[int] = 1
 _GIT_SHA_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{40}\Z")
@@ -211,10 +214,22 @@ class PrepSceneObservation:
 
     @property
     def frozen_resource_gate_passed(self) -> bool:
+        # READY is never delegated to a diagnostic score or an adapter assertion.
+        # Re-check all six retained landmark distances at the unchanged 0.12 ceiling
+        # and require the exact three macro zones used by the released Resource gate.
+        if len(self.landmark_distances) != RESOURCE_LANDMARK_COUNT:
+            return False
+        if len({name for name, _ in self.landmark_distances}) != RESOURCE_LANDMARK_COUNT:
+            return False
+        within_threshold = sum(
+            distance <= RESOURCE_LANDMARK_DISTANCE_THRESHOLD
+            for _, distance in self.landmark_distances
+        )
         return (
             self.resource_supported
             and self.matched_landmarks >= RESOURCE_LANDMARK_QUORUM
-            and len(self.matched_zones) >= RESOURCE_REQUIRED_ZONE_COUNT
+            and within_threshold >= RESOURCE_LANDMARK_QUORUM
+            and frozenset(self.matched_zones) == RESOURCE_REQUIRED_ZONES
         )
 
 

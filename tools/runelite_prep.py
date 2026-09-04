@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -766,19 +766,22 @@ def main(argv: list[str] | None = None) -> int:
     if output.exists():
         print(f"STOP: output path already exists: {output}", file=sys.stderr)
         return 2
-    output.mkdir(parents=True)
 
+    dirty_checkout = False
     try:
         git_sha = _exact_git_sha()
+        checkout_clean = _checkout_clean()
     except (OSError, subprocess.CalledProcessError) as exc:
         git_sha = "0" * 40
         backend: PrepBackend = _ConstructionFailureBackend(
-            f"Could not read exact Git SHA: {exc}"
+            f"Could not read exact Git checkout state: {exc}"
         )
     else:
-        if mode is PrepMode.APPLY and not _checkout_clean():
+        if not checkout_clean:
+            dirty_checkout = True
             backend = _ConstructionFailureBackend(
-                "Apply PREP requires a clean Git checkout; commit/stash unrelated changes first."
+                "PREP requires a clean Git checkout before diagnosis or apply; "
+                "commit/stash unrelated changes first."
             )
         else:
             try:
@@ -793,6 +796,10 @@ def main(argv: list[str] | None = None) -> int:
                     f"{type(exc).__name__}: {exc}"
                 )
 
+    # The default diagnostics path is repository-ignored. Create it only after the
+    # exact checkout has been measured so PREP cannot make its own preflight dirty.
+    output.mkdir(parents=True)
+
     result = run_runelite_prep(
         backend,
         mode=mode,
@@ -800,26 +807,24 @@ def main(argv: list[str] | None = None) -> int:
         prep_session_id=prep_session_id,
         confirm=args.confirm,
     )
-    if (
-        mode is PrepMode.APPLY
-        and isinstance(backend, _ConstructionFailureBackend)
-        and "clean Git checkout" in backend.detail
-    ):
-        result = RunelitePrepResult(
-            schema_version=result.schema_version,
-            mode=result.mode,
-            git_sha=result.git_sha,
-            prep_session_id=result.prep_session_id,
-            started_monotonic_s=result.started_monotonic_s,
-            ended_monotonic_s=result.ended_monotonic_s,
-            initial_window=result.initial_window,
-            final_window=result.final_window,
-            pose_references=result.pose_references,
-            observations=result.observations,
-            actions=result.actions,
+    if dirty_checkout and isinstance(backend, _ConstructionFailureBackend):
+        result = replace(
+            result,
             ready_for_mining=False,
             stop_reason=PrepStopReason.DIRTY_CHECKOUT,
             detail=backend.detail,
+        )
+    # A custom evidence path or an external process must not leave a READY receipt
+    # that the separately authorized miner would immediately reject as dirty.
+    if result.ready_for_mining and not _checkout_clean():
+        result = replace(
+            result,
+            ready_for_mining=False,
+            stop_reason=PrepStopReason.DIRTY_CHECKOUT,
+            detail=(
+                "Checkout became dirty during PREP; READY is withheld until the "
+                "exact mining checkout is clean."
+            ),
         )
     receipt = _write_result(output, result)
     _print_owner_summary(result, receipt)

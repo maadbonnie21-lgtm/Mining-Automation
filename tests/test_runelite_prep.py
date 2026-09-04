@@ -82,7 +82,10 @@ def _observation(
         software_registration_identity=None,
         matched_landmarks=matched,
         matched_zones=zones,
-        landmark_distances=(("a", 0.01),) if matched else (("a", 0.5),),
+        landmark_distances=tuple(
+            (f"landmark-{index}", 0.01 if index < matched else 0.5)
+            for index in range(6)
+        ),
         diagnostic_score=score,
         frame_path="diagnostics/fake.bgra",
     )
@@ -397,3 +400,60 @@ def test_second_apply_run_when_already_ready_is_effectively_no_input() -> None:
     assert first_input_events == 0
     assert second_input_events == 0
     assert backend.camera_calls == []
+
+
+
+def test_ready_independently_rechecks_landmark_distances_at_point_12() -> None:
+    observation = replace(
+        _observation(resource_supported=True, matched=5),
+        landmark_distances=tuple(
+            (f"landmark-{index}", 0.13 if index < 5 else 0.5)
+            for index in range(6)
+        ),
+    )
+    backend = FakePrepBackend(observations=[observation])
+    result = _run(backend, mode=PrepMode.READ_ONLY, confirm=None)
+    assert result.ready_for_mining is False
+    assert result.stop_reason is PrepStopReason.RESOURCE_SCENE_UNSUPPORTED
+
+
+def test_ready_rejects_three_wrong_zone_names_even_with_five_matches() -> None:
+    backend = FakePrepBackend(
+        observations=[
+            _observation(
+                resource_supported=True,
+                matched=5,
+                zones=("wrong_a", "wrong_b", "wrong_c"),
+            )
+        ]
+    )
+    result = _run(backend, mode=PrepMode.READ_ONLY, confirm=None)
+    assert result.ready_for_mining is False
+    assert result.stop_reason is PrepStopReason.RESOURCE_SCENE_UNSUPPORTED
+
+
+def test_exact_five_of_six_distances_and_all_three_zones_can_pass() -> None:
+    backend = FakePrepBackend(
+        observations=[
+            _observation(
+                resource_supported=True,
+                matched=5,
+                zones=("north_west", "north_east", "south_west"),
+            )
+        ]
+    )
+    result = _run(backend, mode=PrepMode.READ_ONLY, confirm=None)
+    assert result.ready_for_mining is True
+
+
+def test_default_prep_evidence_is_ignored_before_separate_miner_handoff() -> None:
+    root = Path(__file__).resolve().parents[1]
+    ignore = (root / ".gitignore").read_text(encoding="utf-8")
+    assert "/diagnostics/runelite-prep-*/" in ignore
+
+    tool = (root / "tools/runelite_prep.py").read_text(encoding="utf-8")
+    clean_index = tool.index("checkout_clean = _checkout_clean()")
+    mkdir_index = tool.index("output.mkdir(parents=True)")
+    assert clean_index < mkdir_index
+    assert "if mode is PrepMode.APPLY and not _checkout_clean()" not in tool
+    assert "if result.ready_for_mining and not _checkout_clean():" in tool
