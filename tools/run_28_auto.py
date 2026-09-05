@@ -39,12 +39,23 @@ from mining_automation.mining_loop_runtime import (  # noqa: E402
     CleanMiningObservation,
     MiningHoverProof,
 )
+from mining_automation.safe_live_inventory import (  # noqa: E402
+    SafeEmptyStartMiningPerceptionEvaluator,
+)
 
 OWNER_CONFIRMATION = "AUTO_PREP_THEN_MINE_TO_28"
 
 
 class SafeWindowsMiningToFullBackend(mining.WindowsMiningToFullBackend):
-    """Bind clean/hover window facts after their final evidence captures."""
+    """Live backend with post-capture window checks and proven-empty Inventory."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        # The official run is explicitly 0->28. Until a genuine empty frame is
+        # proven, nonzero Inventory is UNKNOWN instead of inferred from missing
+        # empty-slot hashes. Once empty is proven this evaluator calibrates the
+        # existing session detector and tracks subsequent +1 observations.
+        self.inventory_evaluator = SafeEmptyStartMiningPerceptionEvaluator()
 
     def acquire_clean_observation(
         self,
@@ -201,12 +212,13 @@ def main(argv: list[str] | None = None) -> int:
                     "mode": "read_only_plan",
                     "live_input_performed": False,
                     "sequence": [
-                        "automatic_bounded_prep",
+                        "codex_full_reset_camera_prep",
                         "fresh_ready_receipt",
                         "inventory_exactly_0_of_28",
                         "separate_mining_gate",
                         "mine_until_28_or_first_stop",
                     ],
+                    "inventory_bootstrap": "proven_empty_required",
                     "maximum_clicks_per_attempt": 1,
                     "navigation_started_on_full": False,
                 },
@@ -269,8 +281,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     print("=== PHASE 2/2: CONTROLLED 0->28 MINING ===")
-    # Preserve the existing mining CLI gates, but use the hardened post-capture
-    # backend for this one-run owner entry point.
     mining.WindowsMiningToFullBackend = SafeWindowsMiningToFullBackend
     return mining.main(
         [
