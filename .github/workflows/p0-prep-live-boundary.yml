@@ -8,7 +8,11 @@ on:
     paths:
       - src/mining_automation/validation/runelite_prep_live_boundary.py
       - tools/runelite_prep_live.py
+      - tools/run_28_auto.py
+      - tools/run_mining_to_full_safe.py
       - tests/test_runelite_prep_live_boundary.py
+      - tests/test_run_28_auto.py
+      - tests/test_run_mining_to_full_safe.py
       - .github/workflows/p0-prep-live-boundary.yml
   workflow_dispatch:
 
@@ -36,7 +40,7 @@ jobs:
           python-version: '3.12'
       - name: Install project
         run: python -m pip install -e '.[dev]'
-      - name: Ruff first-live PREP boundary
+      - name: Ruff first-live PREP/mining boundary
         id: ruff
         continue-on-error: true
         shell: python
@@ -49,7 +53,11 @@ jobs:
               "check",
               "src/mining_automation/validation/runelite_prep_live_boundary.py",
               "tools/runelite_prep_live.py",
+              "tools/run_28_auto.py",
+              "tools/run_mining_to_full_safe.py",
               "tests/test_runelite_prep_live_boundary.py",
+              "tests/test_run_28_auto.py",
+              "tests/test_run_mining_to_full_safe.py",
           ]
           completed = subprocess.run(command, capture_output=True, text=True)
           output = completed.stdout + completed.stderr
@@ -71,23 +79,38 @@ jobs:
         run: >-
           mypy --strict
           src/mining_automation/validation/runelite_prep_live_boundary.py
-      - name: Exact-HWND and READY-frame regressions
+      - name: Exact-HWND READY and separate-mining regressions
         run: >-
           python -m pytest -q
           tests/test_runelite_prep_live_boundary.py
           tests/test_runelite_prep.py
           tests/test_runelite_prep_focus_resize_regression.py
           tests/test_runelite_prep_fresh_diagnostics_regression.py
-      - name: Mining remains separately authorized
+          tests/test_run_28_auto.py
+          tests/test_run_mining_to_full_safe.py
+      - name: PREP cannot manufacture mining authority
         shell: python
         run: |
           from pathlib import Path
 
-          text = Path("tools/runelite_prep_live.py").read_text(encoding="utf-8")
-          assert "run_mining_to_full" not in text
-          assert "dispatch_one_click" not in text
-          assert "camera_steps=()" in text
-          assert "separate mining-only authorization" in text.lower()
+          live_prep = Path("tools/runelite_prep_live.py").read_text(encoding="utf-8")
+          prep_to_ready = Path("tools/run_28_auto.py").read_text(encoding="utf-8")
+          safe_mining = Path("tools/run_mining_to_full_safe.py").read_text(encoding="utf-8")
+
+          assert "run_mining_to_full" not in live_prep
+          assert "dispatch_one_click" not in live_prep
+          assert "camera_steps=()" in live_prep
+          assert "separate mining-only authorization" in live_prep.lower()
+
+          assert "mining.main(" not in prep_to_ready
+          assert "prep_auto" not in prep_to_ready
+          assert "prep_live.main(" in prep_to_ready
+          assert "run_mining_to_full_safe.py" in prep_to_ready
+          assert "AUTO_PREP_TO_READY_ONLY" in prep_to_ready
+
+          assert "runelite_prep" not in safe_mining
+          assert "mining.main(" in safe_mining
+          assert "_, final_window = self._verify_window()" in safe_mining
       - name: Mining-to-full read-only plan unchanged
         shell: python
         run: |
