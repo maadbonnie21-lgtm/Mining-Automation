@@ -8,8 +8,11 @@ on:
     paths:
       - tools/runelite_prep_auto.py
       - tools/run_28_auto.py
+      - tools/runelite_prep_live.py
+      - tools/run_mining_to_full_safe.py
       - tests/test_runelite_prep_auto.py
       - tests/test_run_28_auto.py
+      - tests/test_run_mining_to_full_safe.py
       - src/mining_automation/validation/runelite_prep.py
       - tools/runelite_prep.py
       - tools/run_mining_to_full.py
@@ -38,28 +41,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install project
-        run: python -m pip install -e '.[dev]'
-      - name: Ruff automatic PREP and 0-to-28 path
+      - name: Ruff automatic PREP and separated mining path
         run: >-
           ruff check
           tools/runelite_prep_auto.py
+          tools/runelite_prep_live.py
           tools/run_28_auto.py
+          tools/run_mining_to_full_safe.py
           tests/test_runelite_prep_auto.py
           tests/test_run_28_auto.py
-      - name: Automatic camera and 0-to-28 handoff tests
+          tests/test_run_mining_to_full_safe.py
+      - name: Automatic camera and separated handoff tests
         run: >-
           python -m pytest -q
           tests/test_runelite_prep_auto.py
           tests/test_run_28_auto.py
+          tests/test_run_mining_to_full_safe.py
           tests/test_runelite_prep.py
           tests/test_runelite_prep_focus_resize_regression.py
           tests/test_runelite_prep_fresh_diagnostics_regression.py
           tests/test_windows_camera_nonactivating.py
       - name: Automatic PREP CLI imports
         run: python tools/runelite_prep_auto.py --help
-      - name: Combined automatic 0-to-28 CLI imports
+      - name: PREP-to-READY CLI imports
         run: python tools/run_28_auto.py --help
+      - name: Separate safe mining CLI imports
+        run: python tools/run_mining_to_full_safe.py --help
       - name: Mining read-only plan remains camera-free
         shell: python
         run: |
@@ -86,7 +93,7 @@ jobs:
           assert plan["inventory_capacity"] == 28
           assert plan["maximum_clicks_per_attempt"] == 1
           assert plan["navigation_started_on_full"] is False
-      - name: Combined entry point is read-only without --live
+      - name: PREP-to-READY entry point cannot mine without separate invocation
         shell: python
         run: |
           import json
@@ -109,5 +116,7 @@ jobs:
           plan = json.loads(completed.stdout)
           assert plan["mode"] == "read_only_plan"
           assert plan["live_input_performed"] is False
-          assert plan["maximum_clicks_per_attempt"] == 1
+          assert plan["maximum_clicks_per_attempt"] == 0
+          assert "stop_before_mining" in plan["sequence"]
+          assert "separate_external_mining_authorization" in plan["sequence"]
           assert plan["navigation_started_on_full"] is False
