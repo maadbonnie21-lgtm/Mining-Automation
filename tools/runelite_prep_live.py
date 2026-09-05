@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""First-live PREP entry point with exact HWND and READY-frame binding.
+"""First-live PREP entry point with exact SHA/HWND and READY-frame binding.
 
-Read-only mode may diagnose by title alone.  ``--apply`` requires the exact RuneLite
-HWND that the operator is authorizing for this PREP session.  This command ends at
-READY and never starts mining; mining requires a separate later authorization and
-separate command.
+Read-only mode may diagnose by title alone. ``--apply`` requires both the exact Git
+SHA and exact RuneLite HWND that the operator is authorizing for this PREP session.
+This command ends at READY and never starts mining; mining requires a separate later
+authorization and separate command.
 """
 
 from __future__ import annotations
@@ -51,6 +51,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="explicitly permit bounded PREP-only setup correction",
     )
     parser.add_argument(
+        "--authorize-execution-sha",
+        help="exact Git HEAD authorized for this PREP session; required with --apply",
+    )
+    parser.add_argument(
         "--confirm",
         help=f"apply mode requires exact token {PREP_CONFIRMATION!r}",
     )
@@ -69,15 +73,15 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-class _ExactHwndRequiredBackend(PrepBackend):
-    """Emit a typed zero-mutation receipt when apply lacks exact HWND authority."""
+class _ZeroMutationStopBackend(PrepBackend):
+    """Emit one typed receipt without permitting any PREP mutation or observation."""
 
-    @staticmethod
-    def _raise() -> None:
-        raise PrepOperationError(
-            PrepStopReason.WINDOW_IDENTITY_CHANGED,
-            "--apply requires an externally authorized exact RuneLite --hwnd; PREP sent zero input.",
-        )
+    def __init__(self, reason: PrepStopReason, detail: str) -> None:
+        self.reason = reason
+        self.detail = detail
+
+    def _raise(self) -> None:
+        raise PrepOperationError(self.reason, self.detail)
 
     def snapshot(self) -> PrepWindowSnapshot:
         self._raise()
@@ -120,7 +124,7 @@ class _ExactHwndRequiredBackend(PrepBackend):
 def _result_payload(result: RunelitePrepResult) -> dict[str, object]:
     payload = asdict(result)
     payload["generated_at_utc"] = datetime.now(UTC).isoformat()
-    payload["first_live_boundary"] = "exact-hwnd-post-observation-window-v1"
+    payload["first_live_boundary"] = "exact-sha-hwnd-post-observation-window-v2"
     return payload
 
 
@@ -160,8 +164,18 @@ def main(argv: list[str] | None = None) -> int:
             backend = legacy_prep._ConstructionFailureBackend(
                 "PREP requires a clean Git checkout before diagnosis or apply."
             )
+        elif mode is PrepMode.APPLY and args.authorize_execution_sha != git_sha:
+            backend = _ZeroMutationStopBackend(
+                PrepStopReason.PREP_CONFIRMATION_REQUIRED,
+                "--apply requires --authorize-execution-sha to equal exact Git HEAD "
+                f"{git_sha}; PREP sent zero input.",
+            )
         elif mode is PrepMode.APPLY and args.hwnd is None:
-            backend = _ExactHwndRequiredBackend()
+            backend = _ZeroMutationStopBackend(
+                PrepStopReason.WINDOW_IDENTITY_CHANGED,
+                "--apply requires an externally authorized exact RuneLite --hwnd; "
+                "PREP sent zero input.",
+            )
         else:
             try:
                 inner = legacy_prep.RealPrepBackend(
@@ -176,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
                 backend = strict_backend
             except Exception as exc:  # noqa: BLE001 - still emit a machine receipt
                 backend = legacy_prep._ConstructionFailureBackend(
-                    "Could not construct exact-HWND real PREP backend: "
+                    "Could not construct exact-SHA/HWND real PREP backend: "
                     f"{type(exc).__name__}: {exc}"
                 )
 
