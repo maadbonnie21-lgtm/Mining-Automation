@@ -4,13 +4,18 @@ on:
   push:
     branches:
       - chatgpt/runelite-prep-ready-2026-09-04
+      - chatgpt/p0-reuse-codex-2026-09-04
   pull_request:
     paths:
       - tools/runelite_prep_auto.py
       - tools/run_28_auto.py
       - tests/test_runelite_prep_auto.py
       - tests/test_run_28_auto.py
+      - tests/test_safe_live_inventory.py
+      - src/mining_automation/safe_live_inventory.py
       - src/mining_automation/validation/runelite_prep.py
+      - src/mining_automation/validation/camera_plan.py
+      - src/mining_automation/validation/windows_camera.py
       - tools/runelite_prep.py
       - tools/run_mining_to_full.py
       - .github/workflows/runelite-prep-auto-readiness.yml
@@ -40,22 +45,26 @@ jobs:
           python-version: '3.12'
       - name: Install project
         run: python -m pip install -e '.[dev]'
-      - name: Ruff automatic PREP and 0-to-28 path
+      - name: Ruff P0 PREP and 0-to-28 path
         run: >-
           ruff check
+          src/mining_automation/safe_live_inventory.py
           tools/runelite_prep_auto.py
           tools/run_28_auto.py
+          tests/test_safe_live_inventory.py
           tests/test_runelite_prep_auto.py
           tests/test_run_28_auto.py
-      - name: Automatic camera and 0-to-28 handoff tests
+      - name: P0 camera and Inventory tests
         run: >-
           python -m pytest -q
+          tests/test_safe_live_inventory.py
           tests/test_runelite_prep_auto.py
           tests/test_run_28_auto.py
           tests/test_runelite_prep.py
           tests/test_runelite_prep_focus_resize_regression.py
           tests/test_runelite_prep_fresh_diagnostics_regression.py
           tests/test_windows_camera_nonactivating.py
+          tests/test_controlled_mining_runner.py
       - name: Automatic PREP CLI imports
         run: python tools/runelite_prep_auto.py --help
       - name: Combined automatic 0-to-28 CLI imports
@@ -109,5 +118,6 @@ jobs:
           plan = json.loads(completed.stdout)
           assert plan["mode"] == "read_only_plan"
           assert plan["live_input_performed"] is False
+          assert plan["inventory_bootstrap"] == "proven_empty_required"
           assert plan["maximum_clicks_per_attempt"] == 1
           assert plan["navigation_started_on_full"] is False
