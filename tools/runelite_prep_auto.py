@@ -49,6 +49,7 @@ from mining_automation.validation.camera_plan import (  # noqa: E402
     CompassClick,
 )
 from mining_automation.validation.runelite_prep import (  # noqa: E402
+    PREP_CONFIRMATION as _PREP_CONFIRMATION,
     PrepActionReceipt,
     PrepBackend,
     PrepCameraStep,
@@ -58,6 +59,8 @@ from mining_automation.validation.runelite_prep import (  # noqa: E402
     run_runelite_prep,
 )
 from mining_automation.validation.windows_camera import WindowsCameraError  # noqa: E402
+
+PREP_CONFIRMATION = _PREP_CONFIRMATION
 
 
 class AutoCameraStep(StrEnum):
