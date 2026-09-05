@@ -39,7 +39,6 @@ from mining_automation.validation.runelite_prep_live_boundary import (  # noqa: 
     ExactHwndPrepBackend,
     bind_ready_receipt_to_observation_window,
 )
-
 import runelite_prep as legacy_prep  # noqa: E402
 
 
