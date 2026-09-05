@@ -11,6 +11,7 @@ on:
       - tools/runelite_prep_live.py
       - tools/run_mining_to_full_safe.py
       - tests/test_runelite_prep_auto.py
+      - tests/test_runelite_prep_camera_measurement.py
       - tests/test_run_28_auto.py
       - tests/test_run_mining_to_full_safe.py
       - src/mining_automation/validation/runelite_prep.py
@@ -41,6 +42,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install project
+        run: python -m pip install -e '.[dev]'
       - name: Ruff automatic PREP and separated mining path
         run: >-
           ruff check
@@ -49,12 +52,14 @@ jobs:
           tools/run_28_auto.py
           tools/run_mining_to_full_safe.py
           tests/test_runelite_prep_auto.py
+          tests/test_runelite_prep_camera_measurement.py
           tests/test_run_28_auto.py
           tests/test_run_mining_to_full_safe.py
       - name: Automatic camera and separated handoff tests
         run: >-
           python -m pytest -q
           tests/test_runelite_prep_auto.py
+          tests/test_runelite_prep_camera_measurement.py
           tests/test_run_28_auto.py
           tests/test_run_mining_to_full_safe.py
           tests/test_runelite_prep.py
