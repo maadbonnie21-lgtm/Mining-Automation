@@ -9,7 +9,9 @@ description = "Vision-driven autonomous mining desktop application"
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Mining Automation Team" }]
-dependencies = []
+dependencies = [
+  "numpy>=2.0,<3",
+]
 
 [project.optional-dependencies]
 dev = [

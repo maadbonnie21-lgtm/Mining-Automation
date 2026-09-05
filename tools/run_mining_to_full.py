@@ -48,6 +48,9 @@ from mining_automation.mining_slice import (
     ResourceViewState,
     assemble_atomic_mining_world_state,
 )
+from mining_automation.perception.live_pose_references import (
+    verify_local_pose_references,
+)
 from mining_automation.validation.windows_camera import RealWindowsCameraApi
 
 EXPECTED_CONFIRMATION = "MINE_TO_FULL_28_FAIL_CLOSED"
@@ -457,6 +460,10 @@ def _plan(head: str) -> dict[str, object]:
         "exact_hover_action": "Mine Iron rocks",
         "maximum_clicks_per_attempt": 1,
         "navigation_started_on_full": False,
+        "local_pose_references_required": 3,
+        "tracked_checkout_required_clean": True,
+        "untracked_private_pose_references_permitted": True,
+        "camera_preparation_authority": False,
     }
 
 
@@ -465,7 +472,9 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(__file__).resolve().parents[1]
     try:
         head = _git("-C", str(root), "rev-parse", "HEAD")
-        dirty = _git("-C", str(root), "status", "--porcelain")
+        dirty = _git(
+            "-C", str(root), "status", "--porcelain", "--untracked-files=no"
+        )
     except (OSError, subprocess.CalledProcessError) as exc:
         print(f"STOP: unable to identify exact Git checkout: {exc}", file=sys.stderr)
         return 2
@@ -503,6 +512,15 @@ def main(argv: list[str] | None = None) -> int:
         if value < 0.0:
             print(f"STOP: {label} must be non-negative", file=sys.stderr)
             return 2
+
+    # The three successful real-client pose frames are private/local by design.
+    # They may remain untracked, but their exact geometry and bytes must verify
+    # before any live backend or input device is constructed.
+    try:
+        pose_manifest = verify_local_pose_references(root)
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        print(f"STOP: local pose reference preflight failed: {exc}", file=sys.stderr)
+        return 2
 
     run_id = f"mining-to-full-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     output = args.output or root / "diagnostics" / run_id
@@ -549,6 +567,15 @@ def main(argv: list[str] | None = None) -> int:
         "success": result.success,
         "detail": result.detail,
         "events": list(result.events),
+        "pose_references": [
+            {
+                "pose_id": receipt.pose_id,
+                "relative_path": receipt.relative_path,
+                "sha256": receipt.sha256,
+                "byte_count": receipt.byte_count,
+            }
+            for receipt in pose_manifest.receipts
+        ],
         "invariants": {
             "resource_threshold": 0.12,
             "resource_landmarks": 6,
