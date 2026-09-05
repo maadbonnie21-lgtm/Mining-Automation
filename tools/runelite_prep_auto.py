@@ -49,7 +49,6 @@ from mining_automation.validation.camera_plan import (  # noqa: E402
     CompassClick,
 )
 from mining_automation.validation.runelite_prep import (  # noqa: E402
-    PREP_CONFIRMATION,
     PrepActionReceipt,
     PrepBackend,
     PrepCameraStep,
