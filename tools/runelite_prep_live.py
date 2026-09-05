@@ -24,15 +24,15 @@ sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 import runelite_prep as legacy_prep  # noqa: E402
 from mining_automation.validation.runelite_prep import (  # noqa: E402
     PREP_CONFIRMATION,
+    PrepActionReceipt,
     PrepBackend,
+    PrepCameraStep,
     PrepMode,
     PrepOperationError,
+    PrepPoseReferenceReceipt,
+    PrepSceneObservation,
     PrepStopReason,
     PrepWindowSnapshot,
-    PrepPoseReferenceReceipt,
-    PrepActionReceipt,
-    PrepCameraStep,
-    PrepSceneObservation,
     RunelitePrepResult,
     run_runelite_prep,
 )
