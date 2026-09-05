@@ -1,0 +1,80 @@
+name: RuneLite automatic camera PREP readiness
+
+on:
+  push:
+    branches:
+      - chatgpt/runelite-prep-ready-2026-09-04
+  pull_request:
+    paths:
+      - tools/runelite_prep_auto.py
+      - tests/test_runelite_prep_auto.py
+      - src/mining_automation/validation/runelite_prep.py
+      - tools/runelite_prep.py
+      - .github/workflows/runelite-prep-auto-readiness.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runelite-prep-auto-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  focused:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install project
+        run: python -m pip install -e '.[dev]'
+      - name: Ruff automatic PREP path
+        run: >-
+          ruff check
+          tools/runelite_prep_auto.py
+          tests/test_runelite_prep_auto.py
+      - name: Automatic camera closed-loop tests
+        run: >-
+          python -m pytest -q
+          tests/test_runelite_prep_auto.py
+          tests/test_runelite_prep.py
+          tests/test_runelite_prep_focus_resize_regression.py
+          tests/test_runelite_prep_fresh_diagnostics_regression.py
+          tests/test_windows_camera_nonactivating.py
+      - name: Automatic PREP CLI imports
+        run: python tools/runelite_prep_auto.py --help
+      - name: Mining read-only plan remains camera-free
+        shell: python
+        run: |
+          import json
+          import subprocess
+          import sys
+
+          completed = subprocess.run(
+              [sys.executable, "tools/run_mining_to_full.py"],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          plan = json.loads(completed.stdout)
+          assert plan["mode"] == "read_only_plan"
+          assert plan["live_input_performed"] is False
+          assert plan["required_geometry"] == [1005, 1078]
+          assert plan["required_dpi"] == 96
+          assert plan["resource_threshold"] == 0.12
+          assert plan["resource_landmarks"] == 6
+          assert plan["resource_quorum"] == 5
+          assert plan["resource_zones_required"] == 3
+          assert plan["inventory_floor"] == 0.8
+          assert plan["inventory_capacity"] == 28
+          assert plan["maximum_clicks_per_attempt"] == 1
+          assert plan["navigation_started_on_full"] is False
