@@ -16,6 +16,7 @@ import sys
 import uuid
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
+from io import TextIOWrapper
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -138,6 +139,13 @@ def _write_result(output: Path, result: RunelitePrepResult) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Approval-backed Windows commands may pipe output through cp1252. Preserve
+    # that encoding, but escape unrepresentable status glyphs/paths instead of
+    # crashing after result.json was written and hiding the actual PREP outcome.
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, TextIOWrapper):
+            stream.reconfigure(errors="backslashreplace")
+
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     mode = PrepMode.APPLY if args.apply else PrepMode.READ_ONLY
     prep_session_id = f"prep-live-{uuid.uuid4().hex[:12]}"
