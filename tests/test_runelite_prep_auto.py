@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 from mining_automation.validation.runelite_prep import (
     PREP_CONFIRMATION,
     PrepActionReceipt,
@@ -12,7 +15,11 @@ from mining_automation.validation.runelite_prep import (
     PrepWindowSnapshot,
     run_runelite_prep,
 )
-from tools.runelite_prep_auto import AUTO_CAMERA_SEARCH_STEPS
+
+TOOLS_ROOT = Path(__file__).resolve().parents[1] / "tools"
+sys.path.insert(0, str(TOOLS_ROOT))
+
+from runelite_prep_auto import AUTO_CAMERA_SEARCH_STEPS  # noqa: E402
 
 GIT_SHA = "a" * 40
 FRAME_SHA = "b" * 64
