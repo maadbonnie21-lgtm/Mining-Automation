@@ -3,10 +3,18 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from mining_automation.validation.camera_plan import (
+    REVIEWED_CAMERA_WHEEL_POINT,
+    REVIEWED_COMPASS_POINT,
+    CameraHoldKey,
+    CameraKeyHold,
+    CameraPause,
+    CameraWheel,
+    CompassClick,
+)
 from mining_automation.validation.runelite_prep import (
     PREP_CONFIRMATION,
     PrepActionReceipt,
-    PrepCameraStep,
     PrepMode,
     PrepPoseReferenceReceipt,
     PrepSceneObservation,
@@ -19,7 +27,15 @@ from mining_automation.validation.runelite_prep import (
 TOOLS_ROOT = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_ROOT))
 
-from runelite_prep_auto import AUTO_CAMERA_SEARCH_STEPS  # noqa: E402
+from runelite_prep_auto import (  # noqa: E402
+    AUTO_CAMERA_SEARCH_STEPS,
+    CODEX_CAMERA_CANDIDATE_OFFSETS,
+    CODEX_CAMERA_PLANS,
+    CODEX_PITCH_ENDPOINT_HOLD_S,
+    CODEX_ZOOM_OFFSET_DETENTS,
+    CODEX_ZOOM_SATURATION_DETENTS,
+    AutoCameraStep,
+)
 
 GIT_SHA = "a" * 40
 FRAME_SHA = "b" * 64
@@ -80,7 +96,7 @@ class _FakeBackend:
     def __init__(self, observations: list[PrepSceneObservation]) -> None:
         self.observations = observations
         self.observe_index = 0
-        self.camera_calls: list[PrepCameraStep] = []
+        self.camera_calls: list[object] = []
         self.cleanup_calls = 0
         self.short_camera_receipt = False
 
@@ -108,10 +124,11 @@ class _FakeBackend:
         self.observe_index += 1
         return self.observations[index]
 
-    def camera_action(self, step: PrepCameraStep) -> tuple[PrepActionReceipt, ...]:
+    def camera_action(self, step: object) -> tuple[PrepActionReceipt, ...]:
         self.camera_calls.append(step)
         completed = 0 if self.short_camera_receipt else 1
-        return (PrepActionReceipt(step.value, 1, completed),)
+        value = getattr(step, "value", str(step))
+        return (PrepActionReceipt(str(value), 1, completed),)
 
     def cleanup(self) -> tuple[PrepActionReceipt, ...]:
         self.cleanup_calls += 1
@@ -120,26 +137,54 @@ class _FakeBackend:
 
 def _run(backend: _FakeBackend):
     return run_runelite_prep(
-        backend,
+        backend,  # type: ignore[arg-type]
         mode=PrepMode.APPLY,
         git_sha=GIT_SHA,
         prep_session_id="prep-auto-test",
         confirm=PREP_CONFIRMATION,
-        camera_steps=AUTO_CAMERA_SEARCH_STEPS,
+        camera_steps=AUTO_CAMERA_SEARCH_STEPS,  # type: ignore[arg-type]
     )
 
 
-def test_auto_sequence_matches_retained_bounded_camera_evidence() -> None:
+def test_auto_sequence_is_exact_preserved_codex_candidate_ladder() -> None:
+    assert CODEX_CAMERA_CANDIDATE_OFFSETS == (
+        (0.60, 0.05),
+        (0.58, 0.05),
+        (0.62, 0.05),
+        (0.56, 0.05),
+        (0.64, 0.05),
+        (0.60, 0.04),
+        (0.58, 0.04),
+        (0.62, 0.04),
+        (0.60, 0.06),
+        (0.58, 0.06),
+        (0.62, 0.06),
+    )
+    assert len(CODEX_CAMERA_PLANS) == 11
     assert AUTO_CAMERA_SEARCH_STEPS == (
-        PrepCameraStep.WHEEL_POSITIVE_1,
-        PrepCameraStep.WHEEL_POSITIVE_1,
-        PrepCameraStep.WHEEL_POSITIVE_1,
-        PrepCameraStep.WHEEL_POSITIVE_1,
-        PrepCameraStep.PITCH_DOWN_100MS,
-        PrepCameraStep.PITCH_DOWN_100MS,
-        PrepCameraStep.PITCH_UP_50MS,
-    )
-    assert len(AUTO_CAMERA_SEARCH_STEPS) == 7
+        AutoCameraStep.CODEX_CANDIDATE,
+    ) * 11
+
+    first = CODEX_CAMERA_PLANS[0]
+    assert len(first.actions) == 7
+    assert isinstance(first.actions[0], CompassClick)
+    assert (first.actions[0].x, first.actions[0].y) == REVIEWED_COMPASS_POINT
+    assert isinstance(first.actions[1], CameraPause)
+    assert first.actions[1].duration_s == 0.5
+    assert isinstance(first.actions[2], CameraKeyHold)
+    assert first.actions[2].key is CameraHoldKey.RIGHT
+    assert first.actions[2].duration_s == 0.05
+    assert isinstance(first.actions[3], CameraKeyHold)
+    assert first.actions[3].key is CameraHoldKey.UP
+    assert first.actions[3].duration_s == CODEX_PITCH_ENDPOINT_HOLD_S
+    assert isinstance(first.actions[4], CameraKeyHold)
+    assert first.actions[4].key is CameraHoldKey.DOWN
+    assert first.actions[4].duration_s == 0.60
+    assert isinstance(first.actions[5], CameraWheel)
+    assert (first.actions[5].x, first.actions[5].y) == REVIEWED_CAMERA_WHEEL_POINT
+    assert first.actions[5].detents == CODEX_ZOOM_SATURATION_DETENTS
+    assert isinstance(first.actions[6], CameraWheel)
+    assert first.actions[6].detents == CODEX_ZOOM_OFFSET_DETENTS
 
 
 def test_already_ready_sends_zero_camera_input() -> None:
@@ -150,7 +195,7 @@ def test_already_ready_sends_zero_camera_input() -> None:
     assert backend.cleanup_calls == 1
 
 
-def test_closed_loop_stops_on_first_frozen_gate_pass() -> None:
+def test_closed_loop_stops_on_first_candidate_that_passes_frozen_gate() -> None:
     backend = _FakeBackend(
         [
             _observation(ready=False, frame_id=1),
@@ -164,7 +209,7 @@ def test_closed_loop_stops_on_first_frozen_gate_pass() -> None:
     assert backend.cleanup_calls == 1
 
 
-def test_bounded_exhaustion_stops_without_extra_camera_action() -> None:
+def test_bounded_exhaustion_stops_without_extra_candidate() -> None:
     backend = _FakeBackend([_observation(ready=False, frame_id=1)])
     result = _run(backend)
     assert result.ready_for_mining is False
@@ -173,7 +218,7 @@ def test_bounded_exhaustion_stops_without_extra_camera_action() -> None:
     assert backend.cleanup_calls == 1
 
 
-def test_short_camera_receipt_stops_after_first_attempt() -> None:
+def test_short_camera_receipt_stops_after_first_candidate() -> None:
     backend = _FakeBackend([_observation(ready=False, frame_id=1)])
     backend.short_camera_receipt = True
     result = _run(backend)
