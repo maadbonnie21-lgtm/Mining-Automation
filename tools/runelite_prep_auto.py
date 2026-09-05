@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Run PREP with the preserved Codex camera normalization candidate ladder.
+"""Read-only startup resolver for the retained successful RuneLite mining poses.
 
-This owner-facing PREP path reuses the exact bounded full-reset candidate family
-preserved on ``codex/31-deterministic-camera-reacquisition`` instead of the
-failed seven-step camera guess used in the first 2026-09-04 live attempt.
+The prior automatic camera action ladders are intentionally retired from the P0
+path.  GitHub Issue #31 did not prove repeatable arbitrary-camera recovery, and
+both attempted ladders failed on the real client on 2026-09-04.
 
-Each candidate independently resets yaw with the reviewed compass point,
-saturates pitch, applies the preserved pitch/yaw offset, saturates zoom, applies
-the preserved zoom offset, then returns to the unchanged production Resource
-and Inventory gates. PREP stops on the first genuine READY observation or fails
-closed after the bounded candidate list.
+This entry point now performs no camera input.  It binds the exact RuneLite HWND,
+normalizes only the reviewed window geometry/focus state through the base PREP
+backend, then evaluates the current frame against the retained September 3 pose
+references and their existing software-registration path.  READY is possible
+only when a fresh frame passes the unchanged Resource 0.12 / 5-of-6 / all-three-
+zone gate and Inventory is known at or above 0.8.
 
-The Codex candidate family is experimental real-client preparation, not a claim
-of release acceptance. It cannot mine, navigate, bank, weaken perception gates,
-or convert diagnostic evidence into authority.
+Mining, navigation, banking, and Resource/Inventory release authority remain
+absent.  A later software-normalization implementation must land behind new
+replay/negative evidence; this module will not invent another open-loop camera
+sequence.
 """
 
 from __future__ import annotations
@@ -21,10 +23,8 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
-import time
 import uuid
 from dataclasses import replace
-from enum import StrEnum
 from pathlib import Path
 
 TOOLS_ROOT = Path(__file__).resolve().parent
@@ -36,166 +36,33 @@ import runelite_prep as base  # noqa: E402
 from mining_automation.safe_live_inventory import (  # noqa: E402
     SafeEmptyStartMiningPerceptionEvaluator,
 )
-from mining_automation.validation.camera_plan import (  # noqa: E402
-    REVIEWED_CAMERA_WHEEL_POINT,
-    REVIEWED_COMPASS_POINT,
-    CameraHoldKey,
-    CameraKeyHold,
-    CameraPause,
-    CameraPlan,
-    CameraPlanError,
-    CameraPlanRunner,
-    CameraWheel,
-    CompassClick,
-)
 from mining_automation.validation.runelite_prep import (  # noqa: E402
-    PrepActionReceipt,
     PrepBackend,
-    PrepCameraStep,
     PrepMode,
-    PrepOperationError,
     PrepStopReason,
     run_runelite_prep,
 )
-from mining_automation.validation.windows_camera import WindowsCameraError  # noqa: E402
 
 PREP_CONFIRMATION = base.PREP_CONFIRMATION
+AUTO_CAMERA_SEARCH_STEPS: tuple[()] = ()
 
 
-class AutoCameraStep(StrEnum):
-    """One whole preserved Codex full-reset candidate."""
-
-    CODEX_CANDIDATE = "codex_full_reset_candidate"
-
-
-# Exact frozen candidate ladder copied from Codex Issue #31 camera work.
-# Tuple entries are (down-pitch seconds from UP endpoint, right-yaw seconds).
-CODEX_CAMERA_CANDIDATE_OFFSETS: tuple[tuple[float, float], ...] = (
-    (0.60, 0.05),
-    (0.58, 0.05),
-    (0.62, 0.05),
-    (0.56, 0.05),
-    (0.64, 0.05),
-    (0.60, 0.04),
-    (0.58, 0.04),
-    (0.62, 0.04),
-    (0.60, 0.06),
-    (0.58, 0.06),
-    (0.62, 0.06),
-)
-CODEX_PITCH_ENDPOINT_HOLD_S = 3.0
-CODEX_POST_COMPASS_SETTLE_S = 0.5
-CODEX_ZOOM_SATURATION_DETENTS = 96
-CODEX_ZOOM_OFFSET_DETENTS = -17
-
-
-def _build_codex_camera_candidates() -> tuple[CameraPlan, ...]:
-    return tuple(
-        CameraPlan(
-            f"codex-issue31-production-gated-candidate-{index:02d}",
-            (
-                CompassClick(*REVIEWED_COMPASS_POINT),
-                CameraPause(CODEX_POST_COMPASS_SETTLE_S),
-                CameraKeyHold(CameraHoldKey.RIGHT, yaw_offset_s),
-                CameraKeyHold(CameraHoldKey.UP, CODEX_PITCH_ENDPOINT_HOLD_S),
-                CameraKeyHold(CameraHoldKey.DOWN, pitch_offset_s),
-                CameraWheel(
-                    *REVIEWED_CAMERA_WHEEL_POINT,
-                    CODEX_ZOOM_SATURATION_DETENTS,
-                ),
-                CameraWheel(
-                    *REVIEWED_CAMERA_WHEEL_POINT,
-                    CODEX_ZOOM_OFFSET_DETENTS,
-                ),
-            ),
-        )
-        for index, (pitch_offset_s, yaw_offset_s) in enumerate(
-            CODEX_CAMERA_CANDIDATE_OFFSETS,
-            start=1,
-        )
-    )
-
-
-CODEX_CAMERA_PLANS = _build_codex_camera_candidates()
-AUTO_CAMERA_SEARCH_STEPS: tuple[AutoCameraStep, ...] = tuple(
-    AutoCameraStep.CODEX_CANDIDATE for _ in CODEX_CAMERA_PLANS
-)
-
-
-class CodexCameraPrepBackend(base.RealPrepBackend):
-    """PREP backend using safe empty-start Inventory and Codex camera plans."""
+class RetainedPosePrepBackend(base.RealPrepBackend):
+    """Use safe empty-start Inventory with the retained pose registration path."""
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
         self.inventory_evaluator = SafeEmptyStartMiningPerceptionEvaluator()
-        self._codex_candidate_index = 0
-
-    def camera_action(
-        self,
-        step: PrepCameraStep | AutoCameraStep,
-    ) -> tuple[PrepActionReceipt, ...]:
-        if step is not AutoCameraStep.CODEX_CANDIDATE:
-            if not isinstance(step, PrepCameraStep):
-                raise PrepOperationError(
-                    PrepStopReason.CAMERA_INPUT_REJECTED,
-                    f"Unsupported automatic camera step {step!r}.",
-                )
-            return super().camera_action(step)
-
-        if self._codex_candidate_index >= len(CODEX_CAMERA_PLANS):
-            raise PrepOperationError(
-                PrepStopReason.CAMERA_SEARCH_EXHAUSTED,
-                "Codex camera candidate ladder was requested beyond its frozen bound.",
-            )
-        plan = CODEX_CAMERA_PLANS[self._codex_candidate_index]
-        self._codex_candidate_index += 1
-
-        try:
-            receipt = CameraPlanRunner(self._control(), time.sleep).run(plan)
-        except (CameraPlanError, WindowsCameraError, OSError, ValueError) as exc:
-            raise PrepOperationError(
-                PrepStopReason.CAMERA_INPUT_REJECTED,
-                f"Codex camera candidate {plan.name!r} failed closed: {exc}",
-            ) from exc
-
-        converted: list[PrepActionReceipt] = []
-        for action_receipt in receipt.action_receipts:
-            if not action_receipt.input_receipts:
-                converted.append(
-                    PrepActionReceipt(
-                        action=f"{plan.name}:pause",
-                        requested_events=0,
-                        completed_events=0,
-                        detail=(
-                            f"candidate={self._codex_candidate_index}; "
-                            f"action_index={action_receipt.action_index}; no-input settle"
-                        ),
-                    )
-                )
-                continue
-            for input_receipt in action_receipt.input_receipts:
-                converted.append(
-                    self._convert_camera_receipt(
-                        input_receipt,
-                        detail=(
-                            f"candidate={self._codex_candidate_index}; "
-                            f"plan={plan.name}; action_index={action_receipt.action_index}"
-                        ),
-                    )
-                )
-        return tuple(converted)
 
 
 def _split_expected_hwnd(argv: list[str]) -> tuple[int | None, list[str]]:
-    """Extract the exact optional HWND without widening the base PREP CLI."""
-
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--hwnd", type=int)
     known, remaining = parser.parse_known_args(argv)
     return known.hwnd, remaining
 
 
-def _run_auto_apply(argv: list[str]) -> int:
+def _run_apply(argv: list[str]) -> int:
     expected_hwnd, base_argv = _split_expected_hwnd(argv)
     args = base._parse_args(base_argv)
     if expected_hwnd is not None and expected_hwnd <= 0:
@@ -204,7 +71,7 @@ def _run_auto_apply(argv: list[str]) -> int:
     if not args.apply:
         return base.main(base_argv)
 
-    prep_session_id = f"prep-auto-{uuid.uuid4().hex[:12]}"
+    prep_session_id = f"prep-retained-pose-{uuid.uuid4().hex[:12]}"
     output = args.output or (
         base.REPOSITORY_ROOT / "diagnostics" / f"runelite-prep-{prep_session_id}"
     )
@@ -229,7 +96,7 @@ def _run_auto_apply(argv: list[str]) -> int:
             )
         else:
             try:
-                real_backend = CodexCameraPrepBackend(
+                real_backend = RetainedPosePrepBackend(
                     title_substring=args.title,
                     output=output,
                     prep_session_id=prep_session_id,
@@ -250,8 +117,8 @@ def _run_auto_apply(argv: list[str]) -> int:
 
     output.mkdir(parents=True)
     print(
-        "AUTO CAMERA PREP: Codex Issue #31 full-reset ladder enabled — "
-        f"maximum {len(CODEX_CAMERA_PLANS)} candidates"
+        "STARTUP RESOLVER: retained September 3 poses + software registration; "
+        "camera input disabled"
     )
     result = run_runelite_prep(
         backend,
@@ -259,7 +126,7 @@ def _run_auto_apply(argv: list[str]) -> int:
         git_sha=git_sha,
         prep_session_id=prep_session_id,
         confirm=args.confirm,
-        camera_steps=AUTO_CAMERA_SEARCH_STEPS,  # type: ignore[arg-type]
+        camera_steps=(),
     )
     if dirty_checkout and isinstance(backend, base._ConstructionFailureBackend):
         result = replace(
@@ -284,7 +151,7 @@ def _run_auto_apply(argv: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    return _run_auto_apply(sys.argv[1:] if argv is None else argv)
+    return _run_apply(sys.argv[1:] if argv is None else argv)
 
 
 if __name__ == "__main__":
