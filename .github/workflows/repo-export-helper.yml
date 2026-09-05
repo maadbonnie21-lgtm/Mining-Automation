@@ -11,18 +11,19 @@ permissions:
 jobs:
   export:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 5f370a9f400e8f6f10e60621490a4576f314eb65
-          fetch-depth: 0
-      - name: Verify exact source
-        run: test "$(git rev-parse HEAD)" = "5f370a9f400e8f6f10e60621490a4576f314eb65"
+          ref: c6b5f3dcd573f0732b4e83109415cdcfa02e1507
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify exact source and export tracked files only
+        run: |
+          test "$(git rev-parse HEAD)" = "c6b5f3dcd573f0732b4e83109415cdcfa02e1507"
+          git archive --format=zip HEAD > /tmp/mining-c6b5-source.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: mining-automation-controller-prep-source
-          path: |
-            .
-            !.git/**
-          include-hidden-files: true
+          name: mining-c6b5-source
+          path: /tmp/mining-c6b5-source.zip
           retention-days: 1
