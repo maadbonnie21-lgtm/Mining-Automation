@@ -1,0 +1,89 @@
+name: P0 PREP exact-HWND live boundary
+
+on:
+  push:
+    branches:
+      - chatgpt/p0-prep-owner-fix-2026-09-05
+  pull_request:
+    paths:
+      - src/mining_automation/validation/runelite_prep_live_boundary.py
+      - tools/runelite_prep_live.py
+      - tests/test_runelite_prep_live_boundary.py
+      - .github/workflows/p0-prep-live-boundary.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p0-prep-live-boundary-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  focused:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install project
+        run: python -m pip install -e '.[dev]'
+      - name: Ruff first-live PREP boundary
+        run: >-
+          ruff check
+          src/mining_automation/validation/runelite_prep_live_boundary.py
+          tools/runelite_prep_live.py
+          tests/test_runelite_prep_live_boundary.py
+      - name: Strict mypy first-live PREP source
+        run: >-
+          mypy --strict
+          src/mining_automation/validation/runelite_prep_live_boundary.py
+      - name: Exact-HWND and READY-frame regressions
+        run: >-
+          python -m pytest -q
+          tests/test_runelite_prep_live_boundary.py
+          tests/test_runelite_prep.py
+          tests/test_runelite_prep_focus_resize_regression.py
+          tests/test_runelite_prep_fresh_diagnostics_regression.py
+      - name: Mining remains separately authorized
+        shell: python
+        run: |
+          from pathlib import Path
+
+          text = Path("tools/runelite_prep_live.py").read_text(encoding="utf-8")
+          assert "run_mining_to_full" not in text
+          assert "dispatch_one_click" not in text
+          assert "camera_steps=()" in text
+          assert "separate mining-only authorization" in text.lower()
+      - name: Mining-to-full read-only plan unchanged
+        shell: python
+        run: |
+          import json
+          import subprocess
+          import sys
+
+          completed = subprocess.run(
+              [sys.executable, "tools/run_mining_to_full.py"],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          plan = json.loads(completed.stdout)
+          assert plan["mode"] == "read_only_plan"
+          assert plan["live_input_performed"] is False
+          assert plan["required_geometry"] == [1005, 1078]
+          assert plan["required_dpi"] == 96
+          assert plan["resource_threshold"] == 0.12
+          assert plan["resource_quorum"] == 5
+          assert plan["resource_zones_required"] == 3
+          assert plan["inventory_floor"] == 0.8
+          assert plan["maximum_clicks_per_attempt"] == 1
+          assert plan["navigation_started_on_full"] is False
