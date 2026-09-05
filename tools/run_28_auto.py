@@ -243,6 +243,8 @@ def main(argv: list[str] | None = None) -> int:
     prep_rc = prep_auto.main(
         [
             "--apply",
+            "--hwnd",
+            str(args.hwnd),
             "--confirm",
             prep_auto.PREP_CONFIRMATION,
             "--title",
