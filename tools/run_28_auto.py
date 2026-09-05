@@ -263,10 +263,12 @@ def main(argv: list[str] | None = None) -> int:
 
     prep_id = f"prep-28-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     prep_output = REPOSITORY_ROOT / "diagnostics" / prep_id
-    print("=== PREP: EXACT-HWND CAMERA-FREE RUNE LITE PREP ===")
+    print("=== PREP: EXACT-SHA/HWND CAMERA-FREE RUNE LITE PREP ===")
     prep_rc = prep_live.main(
         [
             "--apply",
+            "--authorize-execution-sha",
+            head,
             "--hwnd",
             str(args.hwnd),
             "--confirm",
