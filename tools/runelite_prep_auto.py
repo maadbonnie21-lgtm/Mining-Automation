@@ -14,6 +14,7 @@ banking, Resource-release, or Inventory-release authority.
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 import uuid
@@ -35,15 +36,10 @@ from mining_automation.validation.runelite_prep import (  # noqa: E402
     run_runelite_prep,
 )
 
-# Retained real-client camera evidence from 2026-09-03:
-# - the useful zoom correction was exactly four wheel-up detents;
-# - the remaining mismatch was pitch-dominant;
-# - the successful retained camera neighborhood was reached through bounded
-#   Down/Down/Up pitch corrections before the final profile/pose validation.
-#
-# Each element is intentionally a separate PREP step.  The controller captures
-# and reevaluates Resource + Inventory after every one, and stops immediately if
-# the frozen .12 / 5-of-6 / all-three-zones gate passes.
+# Retained real-client camera evidence from 2026-09-03. This is a bounded first
+# automatic correction path, not a claim that one universal deterministic camera
+# recipe has already been proven. PREP captures and reevaluates after every step,
+# stops immediately when the frozen gate passes, and otherwise stops on exhaustion.
 AUTO_CAMERA_SEARCH_STEPS: tuple[PrepCameraStep, ...] = (
     PrepCameraStep.WHEEL_POSITIVE_1,
     PrepCameraStep.WHEEL_POSITIVE_1,
@@ -55,11 +51,24 @@ AUTO_CAMERA_SEARCH_STEPS: tuple[PrepCameraStep, ...] = (
 )
 
 
+def _split_expected_hwnd(argv: list[str]) -> tuple[int | None, list[str]]:
+    """Extract the exact optional HWND without widening the base PREP CLI."""
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--hwnd", type=int)
+    known, remaining = parser.parse_known_args(argv)
+    return known.hwnd, remaining
+
+
 def _run_auto_apply(argv: list[str]) -> int:
-    args = base._parse_args(argv)
+    expected_hwnd, base_argv = _split_expected_hwnd(argv)
+    args = base._parse_args(base_argv)
+    if expected_hwnd is not None and expected_hwnd <= 0:
+        print("STOP: --hwnd must be a positive exact RuneLite HWND", file=sys.stderr)
+        return 2
     if not args.apply:
         # Preserve the original zero-input read-only behavior when --apply is absent.
-        return base.main(argv)
+        return base.main(base_argv)
     if args.confirm != PREP_CONFIRMATION:
         # Let the controller produce the canonical confirmation STOP receipt.
         pass
@@ -90,14 +99,24 @@ def _run_auto_apply(argv: list[str]) -> int:
             )
         else:
             try:
-                backend = base.RealPrepBackend(
+                real_backend = base.RealPrepBackend(
                     title_substring=args.title,
                     output=output,
                     prep_session_id=prep_session_id,
                 )
+                # Discovery is read-only. Bind the explicitly authorized HWND before
+                # any PREP camera/window action can run.
+                discovered_hwnd = real_backend.hwnd
+                if expected_hwnd is not None and discovered_hwnd != expected_hwnd:
+                    backend = base._ConstructionFailureBackend(
+                        "Explicit PREP HWND does not match the uniquely discovered "
+                        f"RuneLite HWND: expected {expected_hwnd}, got {discovered_hwnd}."
+                    )
+                else:
+                    backend = real_backend
             except Exception as exc:  # noqa: BLE001 - emit one fail-closed receipt
                 backend = base._ConstructionFailureBackend(
-                    "Could not construct real Windows PREP backend: "
+                    "Could not construct/bind real Windows PREP backend: "
                     f"{type(exc).__name__}: {exc}"
                 )
 
