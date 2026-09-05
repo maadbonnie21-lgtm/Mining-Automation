@@ -21,7 +21,6 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
-import runelite_prep as legacy_prep  # noqa: E402
 from mining_automation.validation.runelite_prep import (  # noqa: E402
     PREP_CONFIRMATION,
     PrepActionReceipt,
@@ -40,6 +39,8 @@ from mining_automation.validation.runelite_prep_live_boundary import (  # noqa: 
     ExactHwndPrepBackend,
     bind_ready_receipt_to_observation_window,
 )
+
+import runelite_prep as legacy_prep  # noqa: E402
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
