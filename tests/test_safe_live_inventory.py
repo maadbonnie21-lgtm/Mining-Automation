@@ -7,11 +7,11 @@ from mining_automation.controlled_mining_runner import (
     EXPECTED_CLIENT_HEIGHT,
     EXPECTED_CLIENT_WIDTH,
 )
+from mining_automation.perception.inventory.geometry import Region
+from mining_automation.perception.inventory.positive_v3_prototypes import SUPPORTED_REGION
 from mining_automation.safe_live_inventory import (
     SafeEmptyStartMiningPerceptionEvaluator,
 )
-from mining_automation.perception.inventory.geometry import Region
-from mining_automation.perception.inventory.positive_v3_prototypes import SUPPORTED_REGION
 
 
 def _frame_with_inventory_region(region_bytes: bytes) -> Frame:
