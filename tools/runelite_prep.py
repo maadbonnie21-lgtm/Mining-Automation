@@ -478,26 +478,23 @@ class RealPrepBackend(PrepBackend):
             registration_identity = (
                 f"{pose or 'candidate'}:distributed_affine_registration"
             )
-            first_diagnoses = diagnoses
             frame, frame_path = self._capture("clean-registered")
             epoch = self._epoch(frame, "clean-registered")
-            resource, pose, fresh = self.evaluate_resource(
+            resource, pose, diagnoses = self.evaluate_resource(
                 frame,
                 epoch,
                 self.pose_detectors,
                 frozenset(),
                 self.active_registration,
             )
-            diagnoses = fresh
             if isinstance(registration, dict):
                 # Retain the identity only; the final fresh frame must satisfy the
-                # actual Resource gate independently.
+                # actual Resource gate independently. Never reuse landmark evidence
+                # from the prior registration-capture frame.
                 registration_identity = (
                     f"{pose or 'candidate'}:"
                     f"{registration.get('kind', 'distributed_affine_registration')}"
                 )
-            if not diagnoses:
-                diagnoses = first_diagnoses
 
         gameplay = evaluate_client_input_readiness(frame)
         _, inventory = self.inventory_evaluator.evaluate(frame, epoch)
