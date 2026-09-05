@@ -13,6 +13,7 @@ on:
       - tools/runelite_prep.py
       - tests/test_runelite_prep.py
       - tests/test_runelite_prep_focus_resize_regression.py
+      - tests/test_runelite_prep_fresh_diagnostics_regression.py
       - .github/workflows/runelite-prep-readiness.yml
   workflow_dispatch:
 
@@ -47,6 +48,8 @@ jobs:
           src/mining_automation/validation/_runelite_prep_win32.py
           tools/runelite_prep.py
           tests/test_runelite_prep.py
+          tests/test_runelite_prep_focus_resize_regression.py
+          tests/test_runelite_prep_fresh_diagnostics_regression.py
       - name: Strict mypy PREP source
         run: >-
           mypy --strict
@@ -71,6 +74,7 @@ jobs:
           python -m pytest -q
           tests/test_runelite_prep.py
           tests/test_runelite_prep_focus_resize_regression.py
+          tests/test_runelite_prep_fresh_diagnostics_regression.py
           tests/test_windows_camera_nonactivating.py
       - name: Legacy capture contract tests
         if: runner.os == 'Linux'
