@@ -597,7 +597,10 @@ class ProductionMiningPerceptionEvaluator:
                     break
                 if not occupied:
                     saw_empty = True
-            if prefix_valid:
+            # Empty-slot hashes prove EMPTY only. Their complement is not positive
+            # item evidence: an unfamiliar empty panel previously became 28/28 at
+            # confidence 1.0. Nonempty counts must use the existing classifiers below.
+            if prefix_valid and not any(occupied_mask):
                 occupied_slots = occupied_mask.count(True)
                 if self._session_inventory_detector is None:
                     from .perception.inventory.configuration import (
