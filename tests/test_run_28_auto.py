@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
-from tools import run_28_auto
+TOOLS_ROOT = Path(__file__).resolve().parents[1] / "tools"
+sys.path.insert(0, str(TOOLS_ROOT))
+
+import run_28_auto  # noqa: E402
 
 HEAD = "a" * 40
 HWND = 3736178
