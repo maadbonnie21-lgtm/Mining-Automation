@@ -25,6 +25,7 @@ if str(TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLS_ROOT))
 
 import runelite_prep as base  # noqa: E402
+
 from mining_automation.validation.runelite_prep import (  # noqa: E402
     PREP_CONFIRMATION,
     PrepBackend,
