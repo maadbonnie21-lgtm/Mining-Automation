@@ -69,6 +69,7 @@ class PrepStopReason(StrEnum):
 class PrepCameraStep(StrEnum):
     """Small measured search steps retained from the 2026-09-03 live diagnosis."""
 
+    COMPASS_RESET = "compass_reset"
     PITCH_DOWN_100MS = "pitch_down_100ms"
     PITCH_UP_50MS = "pitch_up_50ms"
     WHEEL_POSITIVE_1 = "wheel_positive_1"

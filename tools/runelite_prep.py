@@ -37,6 +37,7 @@ from mining_automation.perception.live_pose_references import (  # noqa: E402
 from mining_automation.validation import _runelite_prep_win32  # noqa: E402
 from mining_automation.validation.camera_plan import (  # noqa: E402
     REVIEWED_CAMERA_WHEEL_POINT,
+    REVIEWED_COMPASS_POINT,
 )
 from mining_automation.validation.client_readiness import (  # noqa: E402
     evaluate_client_input_readiness,
@@ -536,6 +537,9 @@ class RealPrepBackend(PrepBackend):
     def camera_action(self, step: PrepCameraStep) -> tuple[PrepActionReceipt, ...]:
         control = self._control()
         try:
+            if step is PrepCameraStep.COMPASS_RESET:
+                receipt = control.click_compass(*REVIEWED_COMPASS_POINT)
+                return (self._convert_camera_receipt(receipt, detail=step.value),)
             if step is PrepCameraStep.PITCH_DOWN_100MS:
                 down = control.key_down("down")
                 receipts = [self._convert_camera_receipt(down, detail=step.value)]
