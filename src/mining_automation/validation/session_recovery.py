@@ -123,19 +123,22 @@ def is_pre_authenticated_play_now(frame: Frame) -> bool:
 # Connecting, Loading, and retained gameplay frames.
 WELCOME_CLICK_HERE_TO_PLAY: Final[tuple[SessionScreenFingerprint, ...]] = (
     SessionScreenFingerprint(
-        fingerprint_id="welcome-click-here-to-play-v2",
+        fingerprint_id="welcome-click-here-to-play-v3",
         anchors=(
+            # These small static patches were bit-identical across six real welcome
+            # frames from two different login sessions, while each differed from
+            # disconnect, Connecting, Loading, and retained gameplay frames.
             SessionScreenAnchor(
-                (95, 125, 390, 125),
-                "964a08d9dd1946756d8487402ccea3785a3f13e6a4bf8de493ca746bffe562bd",
+                (366, 76, 16, 16),
+                "103873a231bbd796f481a4df16600146ad7fc41abf959a24c493808582561d47",
             ),
             SessionScreenAnchor(
-                (510, 105, 225, 190),
-                "3889a76d7b0da34a3bff4c959e6f70532d5aef654a10c280b660dae63f8ec0dd",
+                (442, 76, 16, 16),
+                "7806d12cc3051366d9cb78b95e93ef34991ef903afe475929a266206aa052229",
             ),
             SessionScreenAnchor(
-                (335, 340, 155, 45),
-                "6f9c624c4df9e13c416dcb78d8cd54433d59fb277a0ddeb0b6c1c5e1078bdb6a",
+                (310, 363, 12, 12),
+                "4e72fe6b1a7c8a224456da63ffe22c92520433cac821e1e29200fe2de53bd188",
             ),
         ),
     ),

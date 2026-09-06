@@ -59,9 +59,9 @@ def test_disconnect_fingerprint_uses_four_capture_stable_anchors() -> None:
 def test_welcome_fingerprint_uses_proven_foreground_anchors() -> None:
     assert len(WELCOME_CLICK_HERE_TO_PLAY) == 1
     fingerprint = WELCOME_CLICK_HERE_TO_PLAY[0]
-    assert fingerprint.fingerprint_id == "welcome-click-here-to-play-v2"
+    assert fingerprint.fingerprint_id == "welcome-click-here-to-play-v3"
     assert tuple(anchor.region for anchor in fingerprint.anchors) == (
-        (95, 125, 390, 125),
-        (510, 105, 225, 190),
-        (335, 340, 155, 45),
+        (366, 76, 16, 16),
+        (442, 76, 16, 16),
+        (310, 363, 12, 12),
     )
