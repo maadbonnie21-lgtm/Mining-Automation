@@ -638,9 +638,9 @@ def test_campaign_and_profile_working_bytes_equal_exact_head_blobs() -> None:
     tool_binding = _REAL_GIT_BLOB_BINDING(_ROOT, readiness._TOOL_SOURCE_PATH)
     assert campaign_binding == {
         "path": readiness._CAMPAIGN_SOURCE_PATH,
-        "git_blob_sha": "0a68a8cd346a0b2482dbdbb864d02284a04ef9b7",
+        "git_blob_sha": "b699c0086d5350c430ee84ca019b4c8089b0cda7",
         "sha256": (
-            "50649a0195e2dea8e9dac645689dd4274efeea4c3ef80eaebbe40b271072aafd"
+            "7329f5ed63d7430fc2e8831749ecd5e96fc510fce0616d26cde18c86c827da3c"
         ),
     }
     assert profile_binding == {
