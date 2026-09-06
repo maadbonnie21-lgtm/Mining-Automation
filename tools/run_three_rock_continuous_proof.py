@@ -66,7 +66,27 @@ ROCK_IDS = (
 
 # These are position-specific detector regions, not an action sequence. A pose
 # is accepted only by its independently frozen 5/6, three-zone landmark gate.
+START_POSE_LANDMARK_REGIONS = (
+    ("north-west-a", (80, 200, 48, 48), MacroZone.NORTH_WEST),
+    ("north-west-b", (300, 300, 48, 48), MacroZone.NORTH_WEST),
+    ("north-east-a", (600, 250, 48, 48), MacroZone.NORTH_EAST),
+    ("north-east-b", (680, 350, 48, 48), MacroZone.NORTH_EAST),
+    ("south-west-a", (200, 620, 48, 48), MacroZone.SOUTH_WEST),
+    ("south-west-b", (300, 700, 48, 48), MacroZone.SOUTH_WEST),
+)
+
 POSES = {
+    "at_start": {
+        "reference": Path("diagnostics/current-start-pose-20260905/start-clean.bgra"),
+        "optional_local": True,
+        "landmark_regions": START_POSE_LANDMARK_REGIONS,
+        "regions": ((260, 380, 20, 20), (340, 380, 20, 20), (535, 300, 20, 20)),
+        "available_overrides": {
+            "varrock-east-iron-northwest": (94.448, 64.433, 49.39),
+            "varrock-east-iron-southwest": (89.425, 61.22, 47.343),
+            "varrock-east-iron-center": (92.93, 64.733, 49.153),
+        },
+    },
     "at_northwest": {
         "reference": Path("diagnostics/different-rock-ore3-20260903/ore-01-clean.bgra"),
         "regions": ((370, 540, 20, 20), (440, 545, 20, 20), (370, 640, 20, 20)),
@@ -146,7 +166,11 @@ def build_pose_detectors() -> dict[str, ProfiledResourceDetector]:
     base_candidates = {item.resource_id: item for item in base.candidates}
     detectors: dict[str, ProfiledResourceDetector] = {}
     for index, (pose_name, config) in enumerate(POSES.items(), start=1):
-        reference = frame_from_path(config["reference"], index)
+        reference_path = config["reference"]
+        if config.get("optional_local") and not reference_path.is_file():
+            continue
+        reference = frame_from_path(reference_path, index)
+        landmark_regions = config.get("landmark_regions", LANDMARK_REGIONS)
         landmarks = tuple(
             SceneLandmarkProfile(
                 landmark_id=f"{pose_name}-{landmark_id}",
@@ -156,7 +180,7 @@ def build_pose_detectors() -> dict[str, ProfiledResourceDetector]:
                 grid=4,
                 macro_zone=zone,
             )
-            for landmark_id, region, zone in LANDMARK_REGIONS
+            for landmark_id, region, zone in landmark_regions
         )
         candidates = tuple(
             RockCandidateProfile(
