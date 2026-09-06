@@ -207,6 +207,19 @@ def _fast_descriptor(integral, region):
     return values / scale
 
 
+def _registered_landmark_region_is_valid(
+    region: tuple[int, int, int, int], expected_zone: MacroZone
+) -> bool:
+    x, y, width, height = region
+    return (
+        x >= 0
+        and y >= 34
+        and x + width <= 767
+        and y + height <= 850
+        and macro_zone_for_region(region, WIDTH, HEIGHT) is expected_zone
+    )
+
+
 def register_translation(frame: Frame, detector: ProfiledResourceDetector):
     pixels = np.frombuffer(frame.payload, dtype=np.uint8).reshape(HEIGHT, WIDTH, 4)
     luma = (
@@ -296,6 +309,12 @@ def register_translation(frame: Frame, detector: ProfiledResourceDetector):
                 48,
                 48,
             )
+        # An affine estimate from the matched landmarks must never move an
+        # unmatched landmark across its frozen macro-zone boundary. That is an
+        # unsupported registration, not a backend exception and not a reason to
+        # weaken the three-zone Resource gate.
+        if not _registered_landmark_region_is_valid(new_region, landmark.macro_zone):
+            return None
         shifted_landmarks_list.append(replace(landmark, region=new_region))
     shifted_landmarks = tuple(shifted_landmarks_list)
     shifted_candidates_list = []
