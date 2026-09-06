@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PKG = ROOT / "validation/inventory_v3_production_source_closure_preparation"
 CONTRACT = PKG / "contract.json"
 PARENT = "519059e910bd196a9fdbeb8dcf5334c6ef74742c"
+FROZEN_SOURCE_CLOSURE = "c554b55023cbf10f8fd97bcd5f1fc5f0a40292ee"
 P0 = "6c675125cdfa1cd91763f2e8df07cb2faae67796"
 RUNNER = "src/mining_automation/controlled_mining_runner.py"
 INV_PREFIX = "src/mining_automation/perception/inventory/"
@@ -128,12 +129,11 @@ def test_contract_is_hash_bound_fail_closed_and_non_authoritative() -> None:
         "unknown_fail_closed": True,
     }
 def test_source_closure_child_is_additive_over_frozen_c8b() -> None:
-    head = _git("rev-parse", "HEAD")
     subprocess.run(
-        ("git", "-C", str(ROOT), "merge-base", "--is-ancestor", PARENT, head),
+        ("git", "-C", str(ROOT), "merge-base", "--is-ancestor", PARENT, FROZEN_SOURCE_CLOSURE),
         check=True,
     )
-    changed = set(_git("diff", "--name-only", PARENT, head).splitlines())
+    changed = set(_git("diff", "--name-only", PARENT, FROZEN_SOURCE_CLOSURE).splitlines())
     assert changed == {
         "tests/test_inventory_v3_production_binding_v2_preparation.py",
         "tests/test_inventory_v3_production_source_closure_preparation.py",
