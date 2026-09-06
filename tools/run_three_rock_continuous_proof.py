@@ -328,7 +328,8 @@ def register_translation(frame: Frame, detector: ProfiledResourceDetector):
     matched_ids = {item[0].landmark_id for item in matched}
     shifted_landmarks_list = []
     for landmark, _, dx, dy in recovered:
-        if landmark.landmark_id in matched_ids:
+        is_matched = landmark.landmark_id in matched_ids
+        if is_matched:
             new_region = (landmark.region[0] + dx, landmark.region[1] + dy, 48, 48)
         else:
             mapped = np.asarray([
@@ -343,7 +344,12 @@ def register_translation(frame: Frame, detector: ProfiledResourceDetector):
                 48,
             )
         if not registered_landmark_region_preserves_zone(landmark, new_region):
-            return None
+            # A matched inlier must always preserve its frozen macro zone.
+            # An already-unmatched landmark cannot veto a registration that
+            # independently proved the frozen 5/6 quorum across all 3 zones.
+            if is_matched:
+                return None
+            continue
         shifted_landmarks_list.append(replace(landmark, region=new_region))
     shifted_landmarks = tuple(shifted_landmarks_list)
     shifted_candidates_list = []
