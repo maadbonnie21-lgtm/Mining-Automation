@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import lzma
+import zlib
 from pathlib import Path
 
 import pytest
@@ -155,3 +156,28 @@ def test_one_corrupted_slot_does_not_create_full_inventory() -> None:
     rgb = _set_pixel(_composed_prefix(28), 15, 15, (255, 0, 255))
     state, _ = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(_frame(rgb))
     assert state.occupied_slots is None
+
+
+def test_real_fifth_iron_after_relogin_is_counted_without_empty_startup() -> None:
+    fixture = json.loads((FIXTURE.parent / "retained_iron_five_region.json").read_text())
+    rgb = zlib.decompress(base64.b64decode(fixture["rgb_zlib_base64"]))
+    assert hashlib.sha256(rgb).hexdigest() == fixture["region_rgb_sha256"]
+    state, reason = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(
+        _frame(rgb)
+    )
+    assert state.occupied_slots == 5
+    assert state.confidence >= 0.8
+    assert reason is None
+
+
+@pytest.mark.parametrize("fault", ["core", "border", "gutter"])
+def test_real_fifth_ore_still_rejects_corruption(fault: str) -> None:
+    fixture = json.loads((FIXTURE.parent / "retained_iron_five_region.json").read_text())
+    rgb = zlib.decompress(base64.b64decode(fixture["rgb_zlib_base64"]))
+    x, y = {"core": (15, 51), "border": (0, 36), "gutter": (34, 46)}[fault]
+    rgb = _set_pixel(rgb, x, y, (255, 0, 255))
+    state, reason = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(
+        _frame(rgb)
+    )
+    assert state.occupied_slots is None
+    assert reason is not None
