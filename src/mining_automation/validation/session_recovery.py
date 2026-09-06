@@ -129,10 +129,6 @@ WELCOME_CLICK_HERE_TO_PLAY: Final[tuple[SessionScreenFingerprint, ...]] = (
             # frames from two different login sessions, while each differed from
             # disconnect, Connecting, Loading, and retained gameplay frames.
             SessionScreenAnchor(
-                (366, 76, 16, 16),
-                "103873a231bbd796f481a4df16600146ad7fc41abf959a24c493808582561d47",
-            ),
-            SessionScreenAnchor(
                 (442, 76, 16, 16),
                 "7806d12cc3051366d9cb78b95e93ef34991ef903afe475929a266206aa052229",
             ),

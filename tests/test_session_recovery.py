@@ -61,7 +61,6 @@ def test_welcome_fingerprint_uses_proven_foreground_anchors() -> None:
     fingerprint = WELCOME_CLICK_HERE_TO_PLAY[0]
     assert fingerprint.fingerprint_id == "welcome-click-here-to-play-v3"
     assert tuple(anchor.region for anchor in fingerprint.anchors) == (
-        (366, 76, 16, 16),
         (442, 76, 16, 16),
         (310, 363, 12, 12),
     )
