@@ -102,6 +102,22 @@ LANDMARK_REGIONS = (
 )
 
 
+def registered_landmark_region_preserves_zone(
+    landmark: SceneLandmarkProfile,
+    region: tuple[int, int, int, int],
+) -> bool:
+    """Reject affine registrations that move a frozen landmark across macro zones."""
+
+    x, y, width, height = region
+    return (
+        x >= 0
+        and y >= 34
+        and x + width <= 767
+        and y + height <= 850
+        and macro_zone_for_region(region, WIDTH, HEIGHT) is landmark.macro_zone
+    )
+
+
 def frame_from_path(path: Path, frame_id: int) -> Frame:
     return Frame.from_raw(
         RawFrame(path.read_bytes(), WIDTH, HEIGHT, PixelFormat.BGRA8888),
@@ -296,6 +312,8 @@ def register_translation(frame: Frame, detector: ProfiledResourceDetector):
                 48,
                 48,
             )
+        if not registered_landmark_region_preserves_zone(landmark, new_region):
+            return None
         shifted_landmarks_list.append(replace(landmark, region=new_region))
     shifted_landmarks = tuple(shifted_landmarks_list)
     shifted_candidates_list = []
