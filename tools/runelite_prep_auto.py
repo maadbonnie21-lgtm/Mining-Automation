@@ -41,13 +41,16 @@ from mining_automation.validation.runelite_prep import (  # noqa: E402
 # recipe has already been proven. PREP captures and reevaluates after every step,
 # stops immediately when the frozen gate passes, and otherwise stops on exhaustion.
 AUTO_CAMERA_SEARCH_STEPS: tuple[PrepCameraStep, ...] = (
-    # Continuation of the 2026-09-05 measured live correction: the preceding
-    # run restored zoom to the successful scale and moved the player center to
-    # y~=395. The three retained successful poses cluster at y=409..412, while
-    # each 50 ms pitch-up step moved this live view by ~4..5 px in that direction.
+    # 2026-09-06 fresh-login live evidence: three 50 ms pitch-up steps,
+    # one north/compass reset, then two positive wheel detents reached the
+    # unchanged 0.12 / 5-of-6 / all-3-zone Resource gate from Inventory 0/28.
+    # PREP reobserves after every step and stops early if READY.
     PrepCameraStep.PITCH_UP_50MS,
     PrepCameraStep.PITCH_UP_50MS,
     PrepCameraStep.PITCH_UP_50MS,
+    PrepCameraStep.COMPASS_RESET,
+    PrepCameraStep.WHEEL_POSITIVE_1,
+    PrepCameraStep.WHEEL_POSITIVE_1,
 )
 
 

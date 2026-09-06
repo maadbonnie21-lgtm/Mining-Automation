@@ -140,8 +140,11 @@ def test_auto_sequence_matches_retained_bounded_camera_evidence() -> None:
         PrepCameraStep.PITCH_UP_50MS,
         PrepCameraStep.PITCH_UP_50MS,
         PrepCameraStep.PITCH_UP_50MS,
+        PrepCameraStep.COMPASS_RESET,
+        PrepCameraStep.WHEEL_POSITIVE_1,
+        PrepCameraStep.WHEEL_POSITIVE_1,
     )
-    assert len(AUTO_CAMERA_SEARCH_STEPS) == 3
+    assert len(AUTO_CAMERA_SEARCH_STEPS) == 6
 
 def test_already_ready_sends_zero_camera_input() -> None:
     backend = _FakeBackend([_observation(ready=True, frame_id=1)])

@@ -97,9 +97,15 @@ POSES = {
     },
     "at_southwest": {
         "reference": Path("diagnostics/third-rock-ore4-20260903/ore-01-clean.bgra"),
-        "regions": ((270, 550, 20, 20), (393, 546, 20, 20), (270, 640, 20, 20)),
+        # 2026-09-06 0->28 evidence + live hover proof: all three adjacent
+        # brown surfaces are exact "Mine Iron rocks" targets in this pose.
+        # Move only the center 20x20 sample onto its clean interior; thresholds
+        # and the 5/6 three-zone scene gate remain unchanged.
+        "regions": ((270, 550, 20, 20), (393, 546, 20, 20), (262, 636, 20, 20)),
         "available_overrides": {
+            "varrock-east-iron-northwest": (91.66, 61.52, 48.492),
             "varrock-east-iron-southwest": (88.8, 62.53, 45.25),
+            "varrock-east-iron-center": (80.695, 59.623, 40.002),
         },
     },
     "at_center": {
