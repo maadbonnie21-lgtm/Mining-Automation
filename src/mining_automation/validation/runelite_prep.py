@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final, Literal, Protocol, final
@@ -28,6 +29,8 @@ RESOURCE_REQUIRED_ZONES: Final[frozenset[str]] = frozenset(
 )
 PREP_CONFIRMATION: Final[str] = "PREP_RUNELITE_FOR_MINING"
 PREP_SCHEMA_VERSION: Final[int] = 1
+SESSION_RECOVERY_POLL_SECONDS: Final[float] = 0.5
+SESSION_RECOVERY_POLL_ATTEMPTS: Final[int] = 20
 _GIT_SHA_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{40}\Z")
 _SHA256_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -55,6 +58,7 @@ class PrepStopReason(StrEnum):
     WINDOW_FOCUS_FAILED = "window_focus_failed"
     NEUTRAL_CURSOR_FAILED = "neutral_cursor_failed"
     GAMEPLAY_CHROME_MISMATCH = "gameplay_chrome_mismatch"
+    SESSION_RECOVERY_FAILED = "session_recovery_failed"
     INVENTORY_UNKNOWN = "inventory_unknown"
     INVENTORY_CONFIDENCE_BELOW_FLOOR = "inventory_confidence_below_floor"
     RESOURCE_SCENE_UNSUPPORTED = "resource_scene_unsupported"
@@ -190,6 +194,8 @@ class PrepSceneObservation:
     landmark_distances: tuple[tuple[str, float], ...]
     diagnostic_score: float | None = None
     frame_path: str | None = None
+    session_recovery_ready: bool = False
+    session_recovery_stage: str | None = None
 
     def __post_init__(self) -> None:
         if self.frame_id < 0:
@@ -206,6 +212,12 @@ class PrepSceneObservation:
             raise ValueError("matched landmark count is outside the frozen ensemble")
         if len(set(self.matched_zones)) != len(self.matched_zones):
             raise ValueError("matched zones must be unique")
+        if not isinstance(self.session_recovery_ready, bool):
+            raise ValueError("session_recovery_ready must be a boolean")
+        if self.session_recovery_ready != (self.session_recovery_stage is not None):
+            raise ValueError(
+                "session recovery readiness must agree with its exact stage identity"
+            )
 
     @property
     def frozen_resource_gate_passed(self) -> bool:
@@ -256,6 +268,9 @@ class PrepBackend(Protocol):
         ...
 
     def neutralize_cursor(self) -> PrepActionReceipt:
+        ...
+
+    def recover_session(self, stage: str) -> PrepActionReceipt:
         ...
 
     def observe(self) -> PrepSceneObservation:
@@ -397,6 +412,7 @@ def run_runelite_prep(
     prep_session_id: str,
     confirm: str | None = None,
     camera_steps: tuple[PrepCameraStep, ...] = DEFAULT_CAMERA_SEARCH_STEPS,
+    session_recovery_sleeper: Callable[[float], None] = time.sleep,
 ) -> RunelitePrepResult:
     """Diagnose or prepare one RuneLite starting state and then relinquish authority."""
 
@@ -558,6 +574,55 @@ def run_runelite_prep(
             _require_complete(neutral, PrepStopReason.NEUTRAL_CURSOR_FAILED)
             observation = backend.observe()
             observations.append(observation)
+            recovery_stages_seen: set[str] = set()
+            while not observation.gameplay_ready and observation.session_recovery_ready:
+                stage = observation.session_recovery_stage
+                if stage is None or stage in recovery_stages_seen:
+                    raise PrepOperationError(
+                        PrepStopReason.SESSION_RECOVERY_FAILED,
+                        "Session recovery refused to repeat the same reviewed stage.",
+                    )
+                if len(recovery_stages_seen) >= 2:
+                    raise PrepOperationError(
+                        PrepStopReason.SESSION_RECOVERY_FAILED,
+                        "Session recovery exceeded the two reviewed re-entry stages.",
+                    )
+                recovery_stages_seen.add(stage)
+                recovery = backend.recover_session(stage)
+                actions.append(recovery)
+                _require_complete(recovery, PrepStopReason.SESSION_RECOVERY_FAILED)
+                next_stage: PrepSceneObservation | None = None
+                recovered = False
+                for _ in range(SESSION_RECOVERY_POLL_ATTEMPTS):
+                    session_recovery_sleeper(SESSION_RECOVERY_POLL_SECONDS)
+                    probe = backend.observe()
+                    observations.append(probe)
+                    if probe.gameplay_ready:
+                        neutral = backend.neutralize_cursor()
+                        actions.append(neutral)
+                        _require_complete(
+                            neutral, PrepStopReason.NEUTRAL_CURSOR_FAILED
+                        )
+                        observation = backend.observe()
+                        observations.append(observation)
+                        recovered = observation.gameplay_ready
+                        break
+                    if (
+                        probe.session_recovery_ready
+                        and probe.session_recovery_stage not in recovery_stages_seen
+                    ):
+                        next_stage = probe
+                        break
+                if recovered:
+                    break
+                if next_stage is not None:
+                    observation = next_stage
+                    continue
+                raise PrepOperationError(
+                    PrepStopReason.SESSION_RECOVERY_FAILED,
+                    "Reviewed session-recovery input did not reach gameplay or the "
+                    "next reviewed re-entry stage within the bounded passive window.",
+                )
             failure = _observation_stop(observation)
             if failure is not None:
                 raise failure

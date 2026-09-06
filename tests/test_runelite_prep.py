@@ -20,6 +20,10 @@ from mining_automation.validation.runelite_prep import (
     PrepWindowSnapshot,
     run_runelite_prep,
 )
+from mining_automation.validation.session_recovery import (
+    PREAUTHENTICATED_STAGE,
+    WELCOME_PLAY_STAGE,
+)
 
 GIT_SHA = "a" * 40
 FRAME_SHA = "b" * 64
@@ -67,7 +71,11 @@ def _observation(
     matched: int = 6,
     zones: tuple[str, ...] = ("north_west", "north_east", "south_west"),
     score: float | None = 0.0,
+    session_recovery_ready: bool = False,
+    session_recovery_stage: str | None = None,
 ) -> PrepSceneObservation:
+    if session_recovery_ready and session_recovery_stage is None:
+        session_recovery_stage = PREAUTHENTICATED_STAGE
     return PrepSceneObservation(
         frame_id=1,
         frame_sha256=FRAME_SHA,
@@ -88,6 +96,8 @@ def _observation(
         ),
         diagnostic_score=score,
         frame_path="diagnostics/fake.bgra",
+        session_recovery_ready=session_recovery_ready,
+        session_recovery_stage=session_recovery_stage,
     )
 
 
@@ -110,6 +120,9 @@ class FakePrepBackend:
         self.camera_error: PrepOperationError | None = None
         self.foreground_loss_after_camera = False
         self.identity_change_after_focus = False
+        self.partial_recovery = False
+        self.recovery_calls = 0
+        self.recovery_stages: list[str] = []
 
     @property
     def setup_event_count(self) -> int:
@@ -148,6 +161,13 @@ class FakePrepBackend:
         self.action_calls.append("neutral")
         # Simulate already-neutral/idempotent cursor state: no OS event required.
         return PrepActionReceipt("neutral_cursor", 0, 0)
+
+    def recover_session(self, stage: str) -> PrepActionReceipt:
+        self.recovery_calls += 1
+        self.recovery_stages.append(stage)
+        self.action_calls.append("recover_session")
+        action = "play_now_click" if stage == PREAUTHENTICATED_STAGE else "welcome_play_click"
+        return PrepActionReceipt(action, 2, 1 if self.partial_recovery else 2)
 
     def observe(self) -> PrepSceneObservation:
         self.action_calls.append("observe")
@@ -189,6 +209,7 @@ def _run(
         prep_session_id="prep-test",
         confirm=confirm,
         camera_steps=camera_steps,
+        session_recovery_sleeper=lambda _: None,
     )
 
 
@@ -256,6 +277,76 @@ def test_gameplay_chrome_mismatch_stops_before_camera_input() -> None:
     backend = FakePrepBackend(observations=[_observation(gameplay_ready=False, resource_supported=False, matched=0, zones=())])
     result = _run(backend)
     assert result.stop_reason is PrepStopReason.GAMEPLAY_CHROME_MISMATCH
+    assert backend.camera_calls == []
+    assert backend.recovery_calls == 0
+
+
+def test_pre_authenticated_session_recovers_once_then_reobserves_cleanly() -> None:
+    login = _observation(
+        gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
+        session_recovery_ready=True,
+    )
+    transition = _observation(
+        gameplay_ready=True, inventory=0, resource_supported=False, matched=0, zones=(),
+    )
+    ready = _observation(gameplay_ready=True, inventory=0, resource_supported=True)
+    backend = FakePrepBackend(observations=[login, transition, ready])
+    result = _run(backend)
+    assert result.ready_for_mining is True
+    assert backend.recovery_calls == 1
+    assert backend.camera_calls == []
+    assert backend.action_calls.count("recover_session") == 1
+    assert backend.action_calls.count("neutral") == 3
+
+
+def test_two_stage_session_recovery_enters_gameplay_without_repeating_stage() -> None:
+    login = _observation(
+        gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
+        session_recovery_ready=True, session_recovery_stage=PREAUTHENTICATED_STAGE,
+    )
+    transition = _observation(
+        gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
+    )
+    welcome = _observation(
+        gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
+        session_recovery_ready=True, session_recovery_stage=WELCOME_PLAY_STAGE,
+    )
+    gameplay_probe = _observation(
+        gameplay_ready=True, inventory=0, resource_supported=False, matched=0, zones=(),
+    )
+    ready = _observation(gameplay_ready=True, inventory=0, resource_supported=True)
+    backend = FakePrepBackend(
+        observations=[login, transition, welcome, gameplay_probe, ready]
+    )
+    result = _run(backend)
+    assert result.ready_for_mining is True
+    assert backend.recovery_calls == 2
+    assert backend.recovery_stages == [PREAUTHENTICATED_STAGE, WELCOME_PLAY_STAGE]
+    assert backend.camera_calls == []
+
+
+def test_pre_authenticated_session_short_click_receipt_stops_without_retry() -> None:
+    login = _observation(
+        gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
+        session_recovery_ready=True,
+    )
+    backend = FakePrepBackend(observations=[login])
+    backend.partial_recovery = True
+    result = _run(backend)
+    assert result.stop_reason is PrepStopReason.SESSION_RECOVERY_FAILED
+    assert backend.recovery_calls == 1
+    assert backend.camera_calls == []
+
+
+def test_pre_authenticated_session_never_clicks_twice_when_transition_stalls() -> None:
+    login = _observation(
+        gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
+        session_recovery_ready=True,
+    )
+    backend = FakePrepBackend(observations=[login])
+    result = _run(backend)
+    assert result.stop_reason is PrepStopReason.SESSION_RECOVERY_FAILED
+    assert backend.recovery_calls == 1
     assert backend.camera_calls == []
 
 
