@@ -33,6 +33,7 @@ class _Device:
 
 def test_verify_window_refocuses_exact_runelite(monkeypatch) -> None:
     monkeypatch.setattr(mining, "RealWin32MiningInputDevice", lambda: _Device())
+    monkeypatch.setattr(mining, "RealWindowsCameraApi", lambda: _Api())
     monkeypatch.setattr(mining.time, "sleep", lambda _: None)
     backend = mining.WindowsMiningToFullBackend(
         expected_hwnd=42,
