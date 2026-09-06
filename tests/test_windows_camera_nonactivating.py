@@ -4,6 +4,7 @@ import pytest
 
 from mining_automation.validation.camera_plan import CameraInputOperation
 from mining_automation.validation.session_recovery import (
+    DISCONNECTED_OK_CLIENT_POINT,
     PLAY_NOW_CLIENT_POINT,
     WELCOME_PLAY_CLIENT_POINT,
 )
@@ -98,6 +99,22 @@ def test_key_input_fails_closed_without_foreground_and_never_activates() -> None
 
     assert api.focus_calls == 0
     assert api.send_key_calls == 0
+
+
+def test_disconnect_ok_click_uses_only_reviewed_point_and_complete_pair() -> None:
+    api = _NoActivationCameraApi()
+    control = WindowsCameraControl(42, api=api, click_sleeper=lambda _: None)
+
+    receipt = control.click_disconnected_ok(*DISCONNECTED_OK_CLIENT_POINT)
+
+    assert receipt.operation is CameraInputOperation.DISCONNECTED_OK_CLICK
+    assert receipt.requested_events == 2
+    assert receipt.completed_events == 2
+    assert api.mouse_events == [False, True]
+    assert api.cursor == (
+        DISCONNECTED_OK_CLIENT_POINT[0] + 10,
+        DISCONNECTED_OK_CLIENT_POINT[1] + 20,
+    )
 
 
 def test_play_now_click_uses_only_reviewed_point_and_complete_pair() -> None:
