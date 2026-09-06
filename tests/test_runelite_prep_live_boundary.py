@@ -102,7 +102,8 @@ class InnerBackend:
         self.mutations.append("neutral")
         return PrepActionReceipt("neutral", 0, 0)
 
-    def recover_session(self) -> PrepActionReceipt:
+    def recover_session(self, stage: str) -> PrepActionReceipt:
+        del stage
         return PrepActionReceipt("play_now_click", 2, 2)
 
     def observe(self) -> PrepSceneObservation:

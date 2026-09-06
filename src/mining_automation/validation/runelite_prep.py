@@ -195,6 +195,7 @@ class PrepSceneObservation:
     diagnostic_score: float | None = None
     frame_path: str | None = None
     session_recovery_ready: bool = False
+    session_recovery_stage: str | None = None
 
     def __post_init__(self) -> None:
         if self.frame_id < 0:
@@ -213,6 +214,10 @@ class PrepSceneObservation:
             raise ValueError("matched zones must be unique")
         if not isinstance(self.session_recovery_ready, bool):
             raise ValueError("session_recovery_ready must be a boolean")
+        if self.session_recovery_ready != (self.session_recovery_stage is not None):
+            raise ValueError(
+                "session recovery readiness must agree with its exact stage identity"
+            )
 
     @property
     def frozen_resource_gate_passed(self) -> bool:
@@ -265,7 +270,7 @@ class PrepBackend(Protocol):
     def neutralize_cursor(self) -> PrepActionReceipt:
         ...
 
-    def recover_session(self) -> PrepActionReceipt:
+    def recover_session(self, stage: str) -> PrepActionReceipt:
         ...
 
     def observe(self) -> PrepSceneObservation:
@@ -569,30 +574,55 @@ def run_runelite_prep(
             _require_complete(neutral, PrepStopReason.NEUTRAL_CURSOR_FAILED)
             observation = backend.observe()
             observations.append(observation)
-            if not observation.gameplay_ready and observation.session_recovery_ready:
-                recovery = backend.recover_session()
+            recovery_stages_seen: set[str] = set()
+            while not observation.gameplay_ready and observation.session_recovery_ready:
+                stage = observation.session_recovery_stage
+                if stage is None or stage in recovery_stages_seen:
+                    raise PrepOperationError(
+                        PrepStopReason.SESSION_RECOVERY_FAILED,
+                        "Session recovery refused to repeat the same reviewed stage.",
+                    )
+                if len(recovery_stages_seen) >= 2:
+                    raise PrepOperationError(
+                        PrepStopReason.SESSION_RECOVERY_FAILED,
+                        "Session recovery exceeded the two reviewed re-entry stages.",
+                    )
+                recovery_stages_seen.add(stage)
+                recovery = backend.recover_session(stage)
                 actions.append(recovery)
                 _require_complete(recovery, PrepStopReason.SESSION_RECOVERY_FAILED)
+                next_stage: PrepSceneObservation | None = None
                 recovered = False
                 for _ in range(SESSION_RECOVERY_POLL_ATTEMPTS):
                     session_recovery_sleeper(SESSION_RECOVERY_POLL_SECONDS)
                     probe = backend.observe()
                     observations.append(probe)
-                    if not probe.gameplay_ready:
-                        continue
-                    neutral = backend.neutralize_cursor()
-                    actions.append(neutral)
-                    _require_complete(neutral, PrepStopReason.NEUTRAL_CURSOR_FAILED)
-                    observation = backend.observe()
-                    observations.append(observation)
-                    recovered = observation.gameplay_ready
+                    if probe.gameplay_ready:
+                        neutral = backend.neutralize_cursor()
+                        actions.append(neutral)
+                        _require_complete(
+                            neutral, PrepStopReason.NEUTRAL_CURSOR_FAILED
+                        )
+                        observation = backend.observe()
+                        observations.append(observation)
+                        recovered = observation.gameplay_ready
+                        break
+                    if (
+                        probe.session_recovery_ready
+                        and probe.session_recovery_stage not in recovery_stages_seen
+                    ):
+                        next_stage = probe
+                        break
+                if recovered:
                     break
-                if not recovered:
-                    raise PrepOperationError(
-                        PrepStopReason.SESSION_RECOVERY_FAILED,
-                        "One reviewed Play Now click did not return the client to "
-                        "gameplay within the bounded passive recovery window.",
-                    )
+                if next_stage is not None:
+                    observation = next_stage
+                    continue
+                raise PrepOperationError(
+                    PrepStopReason.SESSION_RECOVERY_FAILED,
+                    "Reviewed session-recovery input did not reach gameplay or the "
+                    "next reviewed re-entry stage within the bounded passive window.",
+                )
             failure = _observation_stop(observation)
             if failure is not None:
                 raise failure

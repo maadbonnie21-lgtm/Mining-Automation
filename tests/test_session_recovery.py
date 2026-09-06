@@ -5,6 +5,7 @@ import hashlib
 from mining_automation.capture import Frame, PixelFormat, RawFrame
 from mining_automation.validation.session_recovery import (
     PLAY_NOW_CLIENT_POINT,
+    WELCOME_PLAY_CLIENT_POINT,
     SessionScreenAnchor,
     SessionScreenFingerprint,
     matches_session_screen,
@@ -35,3 +36,6 @@ def test_reviewed_play_now_point_is_inside_client() -> None:
     x, y = PLAY_NOW_CLIENT_POINT
     assert 0 <= x < 1005
     assert 0 <= y < 1078
+    wx, wy = WELCOME_PLAY_CLIENT_POINT
+    assert 0 <= wx < 1005
+    assert 0 <= wy < 1078

@@ -83,6 +83,7 @@ class CameraInputOperation(StrEnum):
 
     COMPASS_CLICK = "compass_click"
     PLAY_NOW_CLICK = "play_now_click"
+    WELCOME_PLAY_CLICK = "welcome_play_click"
     KEY_DOWN = "key_down"
     KEY_UP = "key_up"
     CAMERA_WHEEL = "camera_wheel"

@@ -61,7 +61,10 @@ from mining_automation.validation.runelite_prep import (  # noqa: E402
 )
 from mining_automation.validation.session_recovery import (  # noqa: E402
     PLAY_NOW_CLIENT_POINT,
-    is_pre_authenticated_play_now,
+    PREAUTHENTICATED_STAGE,
+    WELCOME_PLAY_CLIENT_POINT,
+    WELCOME_PLAY_STAGE,
+    session_recovery_stage,
 )
 from mining_automation.validation.windows_camera import (  # noqa: E402
     RealWindowsCameraApi,
@@ -368,25 +371,33 @@ class RealPrepBackend(PrepBackend):
             detail="Moved to reviewed neutral client point and waited for tooltip clearance.",
         )
 
-    def recover_session(self) -> PrepActionReceipt:
-        """Perform one reviewed click only on the proven pre-authenticated screen."""
+    def recover_session(self, stage: str) -> PrepActionReceipt:
+        """Perform one exact click for the exact freshly re-proven recovery stage."""
 
-        frame, _ = self._capture("session-recovery-commit")
-        if not is_pre_authenticated_play_now(frame):
+        frame, _ = self._capture(f"session-recovery-commit-{stage}")
+        fresh_stage = session_recovery_stage(frame)
+        if fresh_stage != stage:
             raise PrepOperationError(
                 PrepStopReason.SESSION_RECOVERY_FAILED,
-                "Fresh recovery commit frame no longer matches the reviewed Play Now screen.",
+                "Fresh recovery commit frame no longer matches the requested "
+                f"reviewed stage: requested {stage!r}, observed {fresh_stage!r}.",
             )
         try:
-            receipt = self._control().click_play_now(*PLAY_NOW_CLIENT_POINT)
+            if stage == PREAUTHENTICATED_STAGE:
+                receipt = self._control().click_play_now(*PLAY_NOW_CLIENT_POINT)
+            elif stage == WELCOME_PLAY_STAGE:
+                receipt = self._control().click_welcome_play(*WELCOME_PLAY_CLIENT_POINT)
+            else:
+                raise PrepOperationError(
+                    PrepStopReason.SESSION_RECOVERY_FAILED,
+                    f"No reviewed recovery input exists for stage {stage!r}.",
+                )
         except WindowsCameraError as exc:
             raise PrepOperationError(
                 PrepStopReason.SESSION_RECOVERY_FAILED,
                 str(exc),
             ) from exc
-        return self._convert_camera_receipt(
-            receipt, detail="reviewed pre-authenticated Play Now"
-        )
+        return self._convert_camera_receipt(receipt, detail=stage)
 
     def _ensure_capture(self) -> CaptureSource:
         if self.capture_source is None:
@@ -527,6 +538,7 @@ class RealPrepBackend(PrepBackend):
             diagnoses,
             registration_identity=registration_identity,
         )
+        recovery_stage = session_recovery_stage(frame)
         return PrepSceneObservation(
             frame_id=frame.frame_id,
             frame_sha256=hashlib.sha256(frame.payload).hexdigest(),
@@ -544,7 +556,8 @@ class RealPrepBackend(PrepBackend):
             landmark_distances=distances,
             diagnostic_score=score,
             frame_path=frame_path,
-            session_recovery_ready=is_pre_authenticated_play_now(frame),
+            session_recovery_ready=recovery_stage is not None,
+            session_recovery_stage=recovery_stage,
         )
 
     @staticmethod
@@ -663,7 +676,8 @@ class _ConstructionFailureBackend(PrepBackend):
         self._raise()
         raise AssertionError
 
-    def recover_session(self) -> PrepActionReceipt:
+    def recover_session(self, stage: str) -> PrepActionReceipt:
+        del stage
         self._raise()
         raise AssertionError
 

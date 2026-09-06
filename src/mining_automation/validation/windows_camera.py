@@ -28,7 +28,7 @@ from .camera_plan import (
     Sleeper,
     camera_drag_path,
 )
-from .session_recovery import PLAY_NOW_CLIENT_POINT
+from .session_recovery import PLAY_NOW_CLIENT_POINT, WELCOME_PLAY_CLIENT_POINT
 
 __all__ = [
     "RealWindowsCameraApi",
@@ -39,6 +39,7 @@ __all__ = [
     "CAMERA_WHEEL_EVENT_INTERVAL_SECONDS",
     "COMPASS_CLICK_DWELL_SECONDS",
     "PLAY_NOW_CLICK_DWELL_SECONDS",
+    "WELCOME_PLAY_CLICK_DWELL_SECONDS",
     "WindowsCameraTargetIdentity",
     "WindowsCameraApi",
     "WindowsCameraControl",
@@ -53,6 +54,7 @@ CAMERA_MIDDLE_ARMING_SETTLE_SECONDS = 1.000
 CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS = 1.000
 COMPASS_CLICK_DWELL_SECONDS = 0.100
 PLAY_NOW_CLICK_DWELL_SECONDS = 0.100
+WELCOME_PLAY_CLICK_DWELL_SECONDS = 0.100
 
 _ARROW_KEYS: dict[str, int] = {
     "left": 0x25,
@@ -487,6 +489,39 @@ class WindowsCameraControl:
             completed_up = self._release_mouse_button()
         return CameraInputReceipt(
             CameraInputOperation.PLAY_NOW_CLICK,
+            requested_events=2,
+            completed_events=completed_down + completed_up,
+        )
+
+    def click_welcome_play(self, x: int, y: int) -> CameraInputReceipt:
+        """Click only the reviewed in-client CLICK HERE TO PLAY point."""
+
+        self._require_reviewed_point(
+            "welcome Play click", x, y, WELCOME_PLAY_CLIENT_POINT
+        )
+        self._require_ready()
+        self._require_all_control_inputs_released(operation="welcome Play click")
+        screen_point = self._move_to_client_point(x, y)
+        self._require_ready()
+        self._require_target_at_screen_point("welcome Play click", screen_point)
+        self._require_all_control_inputs_released(operation="welcome Play click")
+        completed_down = 0
+        self._left_button_owned = True
+        try:
+            completed_down = self._api.send_mouse_button(button_up=False)
+            if completed_down not in (0, 1):
+                raise WindowsCameraError(
+                    "Windows returned an invalid welcome Play left-button-down event count"
+                )
+            if completed_down == 1:
+                self._click_sleeper(WELCOME_PLAY_CLICK_DWELL_SECONDS)
+                self._require_owned_click_point_still_safe(
+                    x, y, operation="welcome Play click"
+                )
+        finally:
+            completed_up = self._release_mouse_button()
+        return CameraInputReceipt(
+            CameraInputOperation.WELCOME_PLAY_CLICK,
             requested_events=2,
             completed_events=completed_down + completed_up,
         )

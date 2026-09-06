@@ -133,9 +133,9 @@ class ExactHwndPrepBackend(PrepBackend):
         self._before_mutation()
         return self._inner.neutralize_cursor()
 
-    def recover_session(self) -> PrepActionReceipt:
+    def recover_session(self, stage: str) -> PrepActionReceipt:
         self._before_mutation()
-        return self._inner.recover_session()
+        return self._inner.recover_session(stage)
 
     def observe(self) -> PrepSceneObservation:
         before = self.snapshot()

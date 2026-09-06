@@ -3,7 +3,10 @@ from __future__ import annotations
 import pytest
 
 from mining_automation.validation.camera_plan import CameraInputOperation
-from mining_automation.validation.session_recovery import PLAY_NOW_CLIENT_POINT
+from mining_automation.validation.session_recovery import (
+    PLAY_NOW_CLIENT_POINT,
+    WELCOME_PLAY_CLIENT_POINT,
+)
 from mining_automation.validation.windows_camera import (
     WindowsCameraControl,
     WindowsCameraPreInputError,
@@ -108,3 +111,16 @@ def test_play_now_click_uses_only_reviewed_point_and_complete_pair() -> None:
     assert receipt.completed_events == 2
     assert api.mouse_events == [False, True]
     assert api.cursor == (PLAY_NOW_CLIENT_POINT[0] + 10, PLAY_NOW_CLIENT_POINT[1] + 20)
+
+
+def test_welcome_play_click_uses_only_reviewed_point_and_complete_pair() -> None:
+    api = _NoActivationCameraApi()
+    control = WindowsCameraControl(42, api=api, click_sleeper=lambda _: None)
+
+    receipt = control.click_welcome_play(*WELCOME_PLAY_CLIENT_POINT)
+
+    assert receipt.operation is CameraInputOperation.WELCOME_PLAY_CLICK
+    assert receipt.requested_events == 2
+    assert receipt.completed_events == 2
+    assert api.mouse_events == [False, True]
+    assert api.cursor == (WELCOME_PLAY_CLIENT_POINT[0] + 10, WELCOME_PLAY_CLIENT_POINT[1] + 20)
