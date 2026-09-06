@@ -120,6 +120,10 @@ class _ZeroMutationStopBackend(PrepBackend):
         self._raise()
         raise AssertionError
 
+    def recover_session(self) -> PrepActionReceipt:
+        self._raise()
+        raise AssertionError
+
     def observe(self) -> PrepSceneObservation:
         self._raise()
         raise AssertionError

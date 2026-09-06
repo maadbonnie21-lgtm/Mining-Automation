@@ -102,6 +102,9 @@ class InnerBackend:
         self.mutations.append("neutral")
         return PrepActionReceipt("neutral", 0, 0)
 
+    def recover_session(self) -> PrepActionReceipt:
+        return PrepActionReceipt("play_now_click", 2, 2)
+
     def observe(self) -> PrepSceneObservation:
         # Simulate a window change that occurs after the frame has been captured but
         # before the strict boundary performs its post-observation snapshot.

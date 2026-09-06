@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final, Literal, Protocol, final
@@ -28,6 +29,8 @@ RESOURCE_REQUIRED_ZONES: Final[frozenset[str]] = frozenset(
 )
 PREP_CONFIRMATION: Final[str] = "PREP_RUNELITE_FOR_MINING"
 PREP_SCHEMA_VERSION: Final[int] = 1
+SESSION_RECOVERY_POLL_SECONDS: Final[float] = 0.5
+SESSION_RECOVERY_POLL_ATTEMPTS: Final[int] = 20
 _GIT_SHA_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{40}\Z")
 _SHA256_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -55,6 +58,7 @@ class PrepStopReason(StrEnum):
     WINDOW_FOCUS_FAILED = "window_focus_failed"
     NEUTRAL_CURSOR_FAILED = "neutral_cursor_failed"
     GAMEPLAY_CHROME_MISMATCH = "gameplay_chrome_mismatch"
+    SESSION_RECOVERY_FAILED = "session_recovery_failed"
     INVENTORY_UNKNOWN = "inventory_unknown"
     INVENTORY_CONFIDENCE_BELOW_FLOOR = "inventory_confidence_below_floor"
     RESOURCE_SCENE_UNSUPPORTED = "resource_scene_unsupported"
@@ -190,6 +194,7 @@ class PrepSceneObservation:
     landmark_distances: tuple[tuple[str, float], ...]
     diagnostic_score: float | None = None
     frame_path: str | None = None
+    session_recovery_ready: bool = False
 
     def __post_init__(self) -> None:
         if self.frame_id < 0:
@@ -206,6 +211,8 @@ class PrepSceneObservation:
             raise ValueError("matched landmark count is outside the frozen ensemble")
         if len(set(self.matched_zones)) != len(self.matched_zones):
             raise ValueError("matched zones must be unique")
+        if not isinstance(self.session_recovery_ready, bool):
+            raise ValueError("session_recovery_ready must be a boolean")
 
     @property
     def frozen_resource_gate_passed(self) -> bool:
@@ -256,6 +263,9 @@ class PrepBackend(Protocol):
         ...
 
     def neutralize_cursor(self) -> PrepActionReceipt:
+        ...
+
+    def recover_session(self) -> PrepActionReceipt:
         ...
 
     def observe(self) -> PrepSceneObservation:
@@ -397,6 +407,7 @@ def run_runelite_prep(
     prep_session_id: str,
     confirm: str | None = None,
     camera_steps: tuple[PrepCameraStep, ...] = DEFAULT_CAMERA_SEARCH_STEPS,
+    session_recovery_sleeper: Callable[[float], None] = time.sleep,
 ) -> RunelitePrepResult:
     """Diagnose or prepare one RuneLite starting state and then relinquish authority."""
 
@@ -558,6 +569,30 @@ def run_runelite_prep(
             _require_complete(neutral, PrepStopReason.NEUTRAL_CURSOR_FAILED)
             observation = backend.observe()
             observations.append(observation)
+            if not observation.gameplay_ready and observation.session_recovery_ready:
+                recovery = backend.recover_session()
+                actions.append(recovery)
+                _require_complete(recovery, PrepStopReason.SESSION_RECOVERY_FAILED)
+                recovered = False
+                for _ in range(SESSION_RECOVERY_POLL_ATTEMPTS):
+                    session_recovery_sleeper(SESSION_RECOVERY_POLL_SECONDS)
+                    probe = backend.observe()
+                    observations.append(probe)
+                    if not probe.gameplay_ready:
+                        continue
+                    neutral = backend.neutralize_cursor()
+                    actions.append(neutral)
+                    _require_complete(neutral, PrepStopReason.NEUTRAL_CURSOR_FAILED)
+                    observation = backend.observe()
+                    observations.append(observation)
+                    recovered = observation.gameplay_ready
+                    break
+                if not recovered:
+                    raise PrepOperationError(
+                        PrepStopReason.SESSION_RECOVERY_FAILED,
+                        "One reviewed Play Now click did not return the client to "
+                        "gameplay within the bounded passive recovery window.",
+                    )
             failure = _observation_stop(observation)
             if failure is not None:
                 raise failure

@@ -28,6 +28,7 @@ from .camera_plan import (
     Sleeper,
     camera_drag_path,
 )
+from .session_recovery import PLAY_NOW_CLIENT_POINT
 
 __all__ = [
     "RealWindowsCameraApi",
@@ -37,6 +38,7 @@ __all__ = [
     "CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS",
     "CAMERA_WHEEL_EVENT_INTERVAL_SECONDS",
     "COMPASS_CLICK_DWELL_SECONDS",
+    "PLAY_NOW_CLICK_DWELL_SECONDS",
     "WindowsCameraTargetIdentity",
     "WindowsCameraApi",
     "WindowsCameraControl",
@@ -50,6 +52,7 @@ CAMERA_KEY_RELEASE_SETTLE_SECONDS = 1.000
 CAMERA_MIDDLE_ARMING_SETTLE_SECONDS = 1.000
 CAMERA_MIDDLE_RELEASE_SETTLE_SECONDS = 1.000
 COMPASS_CLICK_DWELL_SECONDS = 0.100
+PLAY_NOW_CLICK_DWELL_SECONDS = 0.100
 
 _ARROW_KEYS: dict[str, int] = {
     "left": 0x25,
@@ -457,6 +460,37 @@ class WindowsCameraControl:
             completed_events=completed_down + completed_up,
         )
 
+    def click_play_now(self, x: int, y: int) -> CameraInputReceipt:
+        """Click only the reviewed pre-authenticated Play Now point."""
+
+        self._require_reviewed_point("Play Now click", x, y, PLAY_NOW_CLIENT_POINT)
+        self._require_ready()
+        self._require_all_control_inputs_released(operation="Play Now click")
+        screen_point = self._move_to_client_point(x, y)
+        self._require_ready()
+        self._require_target_at_screen_point("Play Now click", screen_point)
+        self._require_all_control_inputs_released(operation="Play Now click")
+        completed_down = 0
+        self._left_button_owned = True
+        try:
+            completed_down = self._api.send_mouse_button(button_up=False)
+            if completed_down not in (0, 1):
+                raise WindowsCameraError(
+                    "Windows returned an invalid Play Now left-button-down event count"
+                )
+            if completed_down == 1:
+                self._click_sleeper(PLAY_NOW_CLICK_DWELL_SECONDS)
+                self._require_owned_click_point_still_safe(
+                    x, y, operation="Play Now click"
+                )
+        finally:
+            completed_up = self._release_mouse_button()
+        return CameraInputReceipt(
+            CameraInputOperation.PLAY_NOW_CLICK,
+            requested_events=2,
+            completed_events=completed_down + completed_up,
+        )
+
     def key_down(self, key: str) -> CameraInputReceipt:
         try:
             self._require_ready()
@@ -770,8 +804,10 @@ class WindowsCameraControl:
             )
         return actual
 
-    def _require_owned_click_point_still_safe(self, x: int, y: int) -> None:
-        """Revalidate an unchanged compass point while left-down is owned."""
+    def _require_owned_click_point_still_safe(
+        self, x: int, y: int, *, operation: str = "compass click"
+    ) -> None:
+        """Revalidate one unchanged reviewed click point while left-down is owned."""
 
         self._require_ready()
         self._require_owned_left_button_down()
@@ -779,10 +815,10 @@ class WindowsCameraControl:
         actual_point = self._api.cursor_position()
         if actual_point != expected_point:
             raise WindowsCameraError(
-                "compass-click cursor moved during its bounded dwell: "
+                f"{operation} cursor moved during its bounded dwell: "
                 f"expected {expected_point}, got {actual_point}"
             )
-        self._require_target_at_screen_point("compass click", actual_point)
+        self._require_target_at_screen_point(operation, actual_point)
 
     def _move_to_verified_drag_point(
         self,

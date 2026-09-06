@@ -78,6 +78,9 @@ class _FocusShrinksClientBackend:
         self.actions.append("neutral")
         return PrepActionReceipt("neutral_cursor", 0, 0)
 
+    def recover_session(self) -> PrepActionReceipt:
+        return PrepActionReceipt("play_now_click", 2, 2)
+
     def observe(self) -> PrepSceneObservation:
         self.actions.append("observe")
         return PrepSceneObservation(

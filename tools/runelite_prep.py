@@ -59,6 +59,10 @@ from mining_automation.validation.runelite_prep import (  # noqa: E402
     RunelitePrepResult,
     run_runelite_prep,
 )
+from mining_automation.validation.session_recovery import (  # noqa: E402
+    PLAY_NOW_CLIENT_POINT,
+    is_pre_authenticated_play_now,
+)
 from mining_automation.validation.windows_camera import (  # noqa: E402
     RealWindowsCameraApi,
     WindowsCameraControl,
@@ -364,6 +368,26 @@ class RealPrepBackend(PrepBackend):
             detail="Moved to reviewed neutral client point and waited for tooltip clearance.",
         )
 
+    def recover_session(self) -> PrepActionReceipt:
+        """Perform one reviewed click only on the proven pre-authenticated screen."""
+
+        frame, _ = self._capture("session-recovery-commit")
+        if not is_pre_authenticated_play_now(frame):
+            raise PrepOperationError(
+                PrepStopReason.SESSION_RECOVERY_FAILED,
+                "Fresh recovery commit frame no longer matches the reviewed Play Now screen.",
+            )
+        try:
+            receipt = self._control().click_play_now(*PLAY_NOW_CLIENT_POINT)
+        except WindowsCameraError as exc:
+            raise PrepOperationError(
+                PrepStopReason.SESSION_RECOVERY_FAILED,
+                str(exc),
+            ) from exc
+        return self._convert_camera_receipt(
+            receipt, detail="reviewed pre-authenticated Play Now"
+        )
+
     def _ensure_capture(self) -> CaptureSource:
         if self.capture_source is None:
             self.capture_backend = WindowsCaptureBackend(
@@ -520,6 +544,7 @@ class RealPrepBackend(PrepBackend):
             landmark_distances=distances,
             diagnostic_score=score,
             frame_path=frame_path,
+            session_recovery_ready=is_pre_authenticated_play_now(frame),
         )
 
     @staticmethod
@@ -635,6 +660,10 @@ class _ConstructionFailureBackend(PrepBackend):
         raise AssertionError
 
     def observe(self) -> PrepSceneObservation:
+        self._raise()
+        raise AssertionError
+
+    def recover_session(self) -> PrepActionReceipt:
         self._raise()
         raise AssertionError
 
