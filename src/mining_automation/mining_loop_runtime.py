@@ -42,6 +42,7 @@ EXPECTED_CLIENT_HEIGHT: Final[int] = 1078
 EXPECTED_CLIENT_DPI: Final[int] = 96
 EXPECTED_PRIMARY_ACTION: Final[str] = "Mine Iron rocks"
 DEFAULT_MAX_PASSIVE_OBSERVATIONS: Final[int] = 30
+NO_PROGRESS_RECOVERY_OBSERVATIONS: Final[int] = 8
 ATTEMPTS_PER_REQUIRED_ORE: Final[int] = 8
 
 
@@ -630,13 +631,20 @@ def run_mining_until_full(
             witness: PassiveMiningObservation | None = None
             progress_hint: str | None = None
 
-            for passive_index in range(1, config.max_passive_observations + 1):
+            last_passive: PassiveMiningObservation | None = None
+            saw_known_inventory = False
+            passive_limit = min(
+                config.max_passive_observations,
+                NO_PROGRESS_RECOVERY_OBSERVATIONS,
+            )
+            for passive_index in range(1, passive_limit + 1):
                 passive = backend.observe_passive(
                     proposal,
                     dispatched.receipt,
                     iteration=iteration,
                     passive_index=passive_index,
                 )
+                last_passive = passive
                 occupied = passive.inventory.occupied_slots
                 delta = None if occupied is None else occupied - before
                 events.append(
@@ -690,6 +698,7 @@ def run_mining_until_full(
                     # Do not infer progress and do not click again; simply wait for a
                     # later passive frame within the same bounded observation window.
                     continue
+                saw_known_inventory = True
                 confidence = passive.inventory.confidence
                 if (
                     passive.inventory.capacity != INVENTORY_CAPACITY
@@ -723,12 +732,26 @@ def run_mining_until_full(
                     )
 
             if witness is None:
-                return finish(
-                    False,
-                    MiningOnlyPhase.STOPPED,
-                    MiningLoopStopReason.PASSIVE_PROGRESS_TIMEOUT,
-                    MiningOnlyStopReason.NO_OBSERVED_PROGRESS,
-                    "bounded passive window ended without inventory progress or target depletion",
+                if last_passive is None or not saw_known_inventory:
+                    return finish(
+                        False,
+                        MiningOnlyPhase.STOPPED,
+                        MiningLoopStopReason.PASSIVE_PROGRESS_TIMEOUT,
+                        MiningOnlyStopReason.NO_OBSERVED_PROGRESS,
+                        "bounded passive window ended without a known Inventory observation",
+                    )
+                witness = last_passive
+                progress_hint = "attempt_timeout_no_inventory"
+                events.append(
+                    {
+                        "kind": "attempt_timeout_reacquire",
+                        "iteration": iteration,
+                        "attempt_id": proposal.attempt_id,
+                        "target_id": proposal.target_id,
+                        "inventory_before": before,
+                        "inventory_after": last_passive.inventory.occupied_slots,
+                        "passive_observations": passive_limit,
+                    }
                 )
 
             clean = backend.acquire_clean_observation(
@@ -803,7 +826,10 @@ def run_mining_until_full(
                     MiningOnlyStopReason.NEWER_OBSERVATION_REQUIRED,
                     "post-movement clean state was not newer than the passive witness",
                 )
-            if progress_hint == "target_depleted" and state.inventory.occupied_slots == before:
+            if progress_hint in {
+                "target_depleted",
+                "attempt_timeout_no_inventory",
+            } and state.inventory.occupied_slots == before:
                 if (
                     state.resource_release != proposal.resource_release
                     or state.inventory_release != proposal.inventory_release
@@ -837,7 +863,11 @@ def run_mining_until_full(
                         "target_id": proposal.target_id,
                         "inventory_before": before,
                         "inventory_after": state.inventory.occupied_slots,
-                        "progress_kind": MiningProgressKind.RESOURCE_DEPLETED.value,
+                        "progress_kind": (
+                            MiningProgressKind.RESOURCE_DEPLETED.value
+                            if progress_hint == "target_depleted"
+                            else MiningProgressKind.NONE.value
+                        ),
                         "progress_hint": progress_hint,
                         "next_phase": decision.session.phase.value,
                         "next_target_id": decision.proposal.target_id,

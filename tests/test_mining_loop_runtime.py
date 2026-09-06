@@ -420,14 +420,42 @@ def test_resource_unknown_during_normal_movement_is_tolerated_until_inventory_pl
     assert backend.dispatch_calls == 1
 
 
-def test_no_progress_after_bounded_passive_window_stops_without_retry() -> None:
-    backend = _FakeBackend([_state(100, 5)], [[5, 5, 5]])
+def test_known_no_progress_reacquires_and_tries_another_available_rock() -> None:
+    backend = _FakeBackend(
+        [
+            _state(100, 27, available=frozenset({"northwest", "southwest"})),
+            _state(200, 27, available=frozenset({"northwest", "southwest"})),
+            _state(300, 28, available=frozenset({"center"})),
+        ],
+        [[27, 27, 27], [28]],
+    )
     result = run_mining_until_full(backend, _config(max_passive=3))
-    assert result.stop_reason is MiningLoopStopReason.PASSIVE_PROGRESS_TIMEOUT
+    assert result.success is True
+    assert result.click_count == 2
+    assert result.verified_ores == 1
+    assert result.target_sequence == (
+        "varrock-east-iron-northwest",
+        "varrock-east-iron-southwest",
+    )
+    assert any(
+        event["kind"] == "attempt_timeout_reacquire"
+        for event in result.events
+    )
+
+
+def test_seven_second_success_is_not_abandoned_by_recovery_window() -> None:
+    backend = _FakeBackend(
+        [_state(100, 27), _state(200, 28)],
+        [[27, 27, 27, 27, 27, 27, 28]],
+    )
+    result = run_mining_until_full(backend, _config(max_passive=8))
+    assert result.success is True
     assert result.click_count == 1
-    assert result.attempt_count == 1
-    assert backend.dispatch_calls == 1
-    assert backend.clean_calls == 1
+    assert result.verified_ores == 1
+    assert not any(
+        event["kind"] == "attempt_timeout_reacquire"
+        for event in result.events
+    )
 
 
 def test_depleted_target_without_ore_is_lost_race_then_miner_continues() -> None:
