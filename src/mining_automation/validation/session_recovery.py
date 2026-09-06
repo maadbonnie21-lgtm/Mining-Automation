@@ -90,19 +90,10 @@ def is_pre_authenticated_play_now(frame: Frame) -> bool:
     return matches_preauthenticated_play_now(frame)
 
 
-# The welcome screen has two source-proven render states during its first second.
-# Both variants were stable across the recovery trace; neither shares the
-# pre-authenticated Play Now anchors or normal gameplay chrome.
+# The first two post-launch frames have a distinct transitional render and are
+# intentionally NOT eligible for input.  Only the later steady render, which
+# remained stable across the prior trace, may expose the reviewed stage-2 click.
 WELCOME_CLICK_HERE_TO_PLAY: Final[tuple[SessionScreenFingerprint, ...]] = (
-    SessionScreenFingerprint(
-        fingerprint_id="welcome-click-here-to-play-initial-v1",
-        anchors=(
-            SessionScreenAnchor((330, 340, 115, 45), "dd51b308f9646b1e23606771b15c521b8b56ea37c52e2daf219d779461a25307"),
-            SessionScreenAnchor((275, 318, 220, 15), "f01790b48f3aefc4e01cad994abd250d474124379de36d015847040744126153"),
-            SessionScreenAnchor((35, 320, 215, 90), "56c0eb0246d0c980c961a0de177f42540166c6a6d857f86a1861fd4ae24b2c2a"),
-            SessionScreenAnchor((520, 320, 220, 90), "284dea224a0c643df52d50fe0628332fb3fdc1a444492d7ed2dcb550b74714f9"),
-        ),
-    ),
     SessionScreenFingerprint(
         fingerprint_id="welcome-click-here-to-play-steady-v1",
         anchors=(

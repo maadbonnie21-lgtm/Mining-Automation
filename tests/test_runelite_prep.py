@@ -304,6 +304,9 @@ def test_two_stage_session_recovery_enters_gameplay_without_repeating_stage() ->
         gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
         session_recovery_ready=True, session_recovery_stage=PREAUTHENTICATED_STAGE,
     )
+    transition = _observation(
+        gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
+    )
     welcome = _observation(
         gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
         session_recovery_ready=True, session_recovery_stage=WELCOME_PLAY_STAGE,
@@ -312,7 +315,9 @@ def test_two_stage_session_recovery_enters_gameplay_without_repeating_stage() ->
         gameplay_ready=True, inventory=0, resource_supported=False, matched=0, zones=(),
     )
     ready = _observation(gameplay_ready=True, inventory=0, resource_supported=True)
-    backend = FakePrepBackend(observations=[login, welcome, gameplay_probe, ready])
+    backend = FakePrepBackend(
+        observations=[login, transition, welcome, gameplay_probe, ready]
+    )
     result = _run(backend)
     assert result.ready_for_mining is True
     assert backend.recovery_calls == 2
