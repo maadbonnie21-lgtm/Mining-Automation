@@ -29,7 +29,7 @@ RESOURCE_REQUIRED_ZONES: Final[frozenset[str]] = frozenset(
 )
 PREP_CONFIRMATION: Final[str] = "PREP_RUNELITE_FOR_MINING"
 PREP_SCHEMA_VERSION: Final[int] = 1
-SESSION_RECOVERY_POLL_SECONDS: Final[float] = 0.5
+SESSION_RECOVERY_POLL_SECONDS: Final[float] = 0.1
 SESSION_RECOVERY_POLL_ATTEMPTS: Final[int] = 20
 _GIT_SHA_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{40}\Z")
 _SHA256_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}\Z")
