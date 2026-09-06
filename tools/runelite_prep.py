@@ -783,16 +783,25 @@ def _write_result(output: Path, result: RunelitePrepResult) -> Path:
     return path
 
 
+def _safe_console_print(*values: object, sep: str = ' ', end: str = '\n') -> None:
+    '''Print owner-facing text without crashing on legacy Windows encodings.'''
+
+    text = sep.join(str(value) for value in values)
+    encoding = getattr(sys.stdout, 'encoding', None) or 'utf-8'
+    safe_text = text.encode(encoding, errors='replace').decode(encoding, errors='replace')
+    print(safe_text, end=end)
+
+
 def _print_owner_summary(result: RunelitePrepResult, receipt: Path) -> None:
     initial = result.initial_window
     final = result.final_window
     observation = result.observations[-1] if result.observations else None
-    print("RUNE LITE PREP DIAGNOSTIC\n")
+    _safe_console_print("RUNE LITE PREP DIAGNOSTIC\n")
     if initial is None:
-        print("✗ RuneLite not safely bound")
+        _safe_console_print("✗ RuneLite not safely bound")
     else:
-        print(f"✓ RuneLite found — HWND {initial.hwnd}")
-        print(
+        _safe_console_print(f"✓ RuneLite found — HWND {initial.hwnd}")
+        _safe_console_print(
             "✓ HWND identity bound — "
             f"PID {initial.identity.process_id}, TID {initial.identity.thread_id}, "
             f"class {initial.identity.class_name!r}"
@@ -802,22 +811,22 @@ def _print_owner_summary(result: RunelitePrepResult, receipt: Path) -> None:
             window.client_width == EXPECTED_CLIENT_WIDTH
             and window.client_height == EXPECTED_CLIENT_HEIGHT
         ) else "✗"
-        print(
+        _safe_console_print(
             f"{geometry_mark} Client {window.client_width} x {window.client_height} "
             f"— expected {EXPECTED_CLIENT_WIDTH} x {EXPECTED_CLIENT_HEIGHT}"
         )
         dpi_mark = "✓" if window.dpi == EXPECTED_CLIENT_DPI else "✗"
-        print(f"{dpi_mark} DPI {window.dpi} — expected {EXPECTED_CLIENT_DPI}")
-        print(
+        _safe_console_print(f"{dpi_mark} DPI {window.dpi} — expected {EXPECTED_CLIENT_DPI}")
+        _safe_console_print(
             f"{'✓' if window.foreground else '✗'} Foreground "
             f"{'yes' if window.foreground else 'no'}"
         )
     if result.pose_references:
-        print(f"✓ Local pose references {len(result.pose_references)}/3 verified")
+        _safe_console_print(f"✓ Local pose references {len(result.pose_references)}/3 verified")
     else:
-        print("✗ Local pose references not verified")
+        _safe_console_print("✗ Local pose references not verified")
     if observation is not None:
-        print(
+        _safe_console_print(
             f"{'✓' if observation.gameplay_ready else '✗'} Gameplay chrome "
             f"{'ready' if observation.gameplay_ready else 'not ready'}"
         )
@@ -830,27 +839,27 @@ def _print_owner_summary(result: RunelitePrepResult, receipt: Path) -> None:
             if observation.inventory_occupied is not None
             else "UNKNOWN"
         )
-        print(
+        _safe_console_print(
             f"{'✓' if inventory_ready else '✗'} Inventory {rendered_inventory}/28 "
             f"confidence {observation.inventory_confidence:.3f}"
         )
-        print(
+        _safe_console_print(
             f"{'✓' if observation.frozen_resource_gate_passed else '✗'} Resource "
             f"{observation.matched_landmarks}/6 landmarks across "
             f"{len(observation.matched_zones)}/3 zones"
         )
     else:
-        print("? Scene/Inventory not evaluated")
-    print()
+        _safe_console_print("? Scene/Inventory not evaluated")
+    _safe_console_print()
     if result.ready_for_mining:
-        print("READY FOR MINING")
+        _safe_console_print("READY FOR MINING")
     else:
-        print(f"NOT READY: {result.stop_reason.value} — {result.detail}")
+        _safe_console_print(f"NOT READY: {result.stop_reason.value} — {result.detail}")
     if final is not None:
-        print(f"HWND: {final.hwnd}")
-    print(f"READY receipt: {receipt}")
-    print("PREP authority: RELINQUISHED")
-    print("Mining input authority: FALSE")
+        _safe_console_print(f"HWND: {final.hwnd}")
+    _safe_console_print(f"READY receipt: {receipt}")
+    _safe_console_print("PREP authority: RELINQUISHED")
+    _safe_console_print("Mining input authority: FALSE")
 
 
 def main(argv: list[str] | None = None) -> int:
