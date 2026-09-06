@@ -732,36 +732,36 @@ def _print_owner_summary(result: RunelitePrepResult, receipt: Path) -> None:
     observation = result.observations[-1] if result.observations else None
     print("RUNE LITE PREP DIAGNOSTIC\n")
     if initial is None:
-        print("✗ RuneLite not safely bound")
+        print("[X] RuneLite not safely bound")
     else:
-        print(f"✓ RuneLite found — HWND {initial.hwnd}")
+        print(f"[OK] RuneLite found - HWND {initial.hwnd}")
         print(
-            "✓ HWND identity bound — "
+            "[OK] HWND identity bound - "
             f"PID {initial.identity.process_id}, TID {initial.identity.thread_id}, "
             f"class {initial.identity.class_name!r}"
         )
         window = final or initial
-        geometry_mark = "✓" if (
+        geometry_mark = "[OK]" if (
             window.client_width == EXPECTED_CLIENT_WIDTH
             and window.client_height == EXPECTED_CLIENT_HEIGHT
-        ) else "✗"
+        ) else "[X]"
         print(
             f"{geometry_mark} Client {window.client_width} x {window.client_height} "
-            f"— expected {EXPECTED_CLIENT_WIDTH} x {EXPECTED_CLIENT_HEIGHT}"
+            f"- expected {EXPECTED_CLIENT_WIDTH} x {EXPECTED_CLIENT_HEIGHT}"
         )
-        dpi_mark = "✓" if window.dpi == EXPECTED_CLIENT_DPI else "✗"
-        print(f"{dpi_mark} DPI {window.dpi} — expected {EXPECTED_CLIENT_DPI}")
+        dpi_mark = "[OK]" if window.dpi == EXPECTED_CLIENT_DPI else "[X]"
+        print(f"{dpi_mark} DPI {window.dpi} - expected {EXPECTED_CLIENT_DPI}")
         print(
-            f"{'✓' if window.foreground else '✗'} Foreground "
+            f"{'[OK]' if window.foreground else '[X]'} Foreground "
             f"{'yes' if window.foreground else 'no'}"
         )
     if result.pose_references:
-        print(f"✓ Local pose references {len(result.pose_references)}/3 verified")
+        print(f"[OK] Local pose references {len(result.pose_references)}/3 verified")
     else:
-        print("✗ Local pose references not verified")
+        print("[X] Local pose references not verified")
     if observation is not None:
         print(
-            f"{'✓' if observation.gameplay_ready else '✗'} Gameplay chrome "
+            f"{'[OK]' if observation.gameplay_ready else '[X]'} Gameplay chrome "
             f"{'ready' if observation.gameplay_ready else 'not ready'}"
         )
         inventory_ready = (
@@ -774,11 +774,11 @@ def _print_owner_summary(result: RunelitePrepResult, receipt: Path) -> None:
             else "UNKNOWN"
         )
         print(
-            f"{'✓' if inventory_ready else '✗'} Inventory {rendered_inventory}/28 "
+            f"{'[OK]' if inventory_ready else '[X]'} Inventory {rendered_inventory}/28 "
             f"confidence {observation.inventory_confidence:.3f}"
         )
         print(
-            f"{'✓' if observation.frozen_resource_gate_passed else '✗'} Resource "
+            f"{'[OK]' if observation.frozen_resource_gate_passed else '[X]'} Resource "
             f"{observation.matched_landmarks}/6 landmarks across "
             f"{len(observation.matched_zones)}/3 zones"
         )
@@ -788,7 +788,7 @@ def _print_owner_summary(result: RunelitePrepResult, receipt: Path) -> None:
     if result.ready_for_mining:
         print("READY FOR MINING")
     else:
-        print(f"NOT READY: {result.stop_reason.value} — {result.detail}")
+        print(f"NOT READY: {result.stop_reason.value} - {result.detail}")
     if final is not None:
         print(f"HWND: {final.hwnd}")
     print(f"READY receipt: {receipt}")

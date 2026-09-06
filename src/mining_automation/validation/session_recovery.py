@@ -90,30 +90,29 @@ def is_pre_authenticated_play_now(frame: Frame) -> bool:
     return matches_preauthenticated_play_now(frame)
 
 
-# The welcome screen has two source-proven render states during its first second.
-# Both variants were stable across the recovery trace; neither shares the
-# pre-authenticated Play Now anchors or normal gameplay chrome.
+# The real 2026-09-05 recovery trace proved the actual welcome screen only
+# after the transient Connecting/Loading canvases.  These three disjoint
+# anchors are stable across frames 006/008/024 and differ from Play Now,
+# Connecting, Loading, and retained gameplay frames.
 WELCOME_CLICK_HERE_TO_PLAY: Final[tuple[SessionScreenFingerprint, ...]] = (
     SessionScreenFingerprint(
-        fingerprint_id="welcome-click-here-to-play-initial-v1",
+        fingerprint_id="welcome-click-here-to-play-v2",
         anchors=(
-            SessionScreenAnchor((330, 340, 115, 45), "dd51b308f9646b1e23606771b15c521b8b56ea37c52e2daf219d779461a25307"),
-            SessionScreenAnchor((275, 318, 220, 15), "f01790b48f3aefc4e01cad994abd250d474124379de36d015847040744126153"),
-            SessionScreenAnchor((35, 320, 215, 90), "56c0eb0246d0c980c961a0de177f42540166c6a6d857f86a1861fd4ae24b2c2a"),
-            SessionScreenAnchor((520, 320, 220, 90), "284dea224a0c643df52d50fe0628332fb3fdc1a444492d7ed2dcb550b74714f9"),
-        ),
-    ),
-    SessionScreenFingerprint(
-        fingerprint_id="welcome-click-here-to-play-steady-v1",
-        anchors=(
-            SessionScreenAnchor((330, 340, 115, 45), "3c3c7244f72e8bfb868e2b5730b637a92445557cddad19fc78064ffeb1cb4046"),
-            SessionScreenAnchor((275, 318, 220, 15), "1879d5951437b7d4a3ecfd3172068de26ed67f65470ce88006831481cd41ef3a"),
-            SessionScreenAnchor((35, 320, 215, 90), "0247e71654eb24c56cb0640ea2af7ffbd379cb03e5ddb45e7e18c1f6d8cf91f3"),
-            SessionScreenAnchor((520, 320, 220, 90), "f5af52195b47495011920e6e8720f5bceccd1cd861b2a09b00ead0aa7b0468c4"),
+            SessionScreenAnchor(
+                (95, 125, 390, 125),
+                "964a08d9dd1946756d8487402ccea3785a3f13e6a4bf8de493ca746bffe562bd",
+            ),
+            SessionScreenAnchor(
+                (510, 105, 225, 190),
+                "3889a76d7b0da34a3bff4c959e6f70532d5aef654a10c280b660dae63f8ec0dd",
+            ),
+            SessionScreenAnchor(
+                (335, 340, 155, 45),
+                "6f9c624c4df9e13c416dcb78d8cd54433d59fb277a0ddeb0b6c1c5e1078bdb6a",
+            ),
         ),
     ),
 )
-
 
 def matches_welcome_click_here_to_play(frame: Frame) -> bool:
     """Recognize either reviewed render state of the in-client welcome screen."""

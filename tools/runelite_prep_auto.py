@@ -122,7 +122,7 @@ def _run_auto_apply(argv: list[str]) -> int:
 
     output.mkdir(parents=True)
     print(
-        "AUTO CAMERA PREP: enabled — "
+        "AUTO CAMERA PREP: enabled - "
         f"maximum {len(AUTO_CAMERA_SEARCH_STEPS)} measured correction steps"
     )
     result = run_runelite_prep(

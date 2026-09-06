@@ -5,6 +5,7 @@ import hashlib
 from mining_automation.capture import Frame, PixelFormat, RawFrame
 from mining_automation.validation.session_recovery import (
     PLAY_NOW_CLIENT_POINT,
+    WELCOME_CLICK_HERE_TO_PLAY,
     WELCOME_PLAY_CLIENT_POINT,
     SessionScreenAnchor,
     SessionScreenFingerprint,
@@ -39,3 +40,14 @@ def test_reviewed_play_now_point_is_inside_client() -> None:
     wx, wy = WELCOME_PLAY_CLIENT_POINT
     assert 0 <= wx < 1005
     assert 0 <= wy < 1078
+
+
+def test_welcome_fingerprint_uses_proven_foreground_anchors() -> None:
+    assert len(WELCOME_CLICK_HERE_TO_PLAY) == 1
+    fingerprint = WELCOME_CLICK_HERE_TO_PLAY[0]
+    assert fingerprint.fingerprint_id == "welcome-click-here-to-play-v2"
+    assert tuple(anchor.region for anchor in fingerprint.anchors) == (
+        (95, 125, 390, 125),
+        (510, 105, 225, 190),
+        (335, 340, 155, 45),
+    )

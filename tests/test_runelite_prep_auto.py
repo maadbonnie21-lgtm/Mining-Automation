@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import sys
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from mining_automation.validation.runelite_prep import (
 TOOLS_ROOT = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_ROOT))
 
+import runelite_prep as base  # noqa: E402
 from runelite_prep_auto import AUTO_CAMERA_SEARCH_STEPS  # noqa: E402
 
 GIT_SHA = "a" * 40
@@ -185,3 +187,20 @@ def test_short_camera_receipt_stops_after_first_attempt() -> None:
     assert result.stop_reason is PrepStopReason.CAMERA_RECEIPT_INCOMPLETE
     assert backend.camera_calls == [AUTO_CAMERA_SEARCH_STEPS[0]]
     assert backend.cleanup_calls == 1
+
+
+def test_owner_summary_is_cp1252_safe(monkeypatch, tmp_path: Path) -> None:
+    backend = _FakeBackend([_observation(ready=True, frame_id=1)])
+    result = _run(backend)
+    buffer = io.BytesIO()
+    console = io.TextIOWrapper(buffer, encoding="cp1252", errors="strict")
+    try:
+        monkeypatch.setattr(sys, "stdout", console)
+        base._print_owner_summary(result, tmp_path / "result.json")
+        console.flush()
+        text = buffer.getvalue().decode("cp1252")
+    finally:
+        console.close()
+    assert "[OK] RuneLite found" in text
+    assert "READY FOR MINING" in text
+    assert "Traceback" not in text
