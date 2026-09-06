@@ -137,19 +137,11 @@ def _run(backend: _FakeBackend):
 
 def test_auto_sequence_matches_retained_bounded_camera_evidence() -> None:
     assert AUTO_CAMERA_SEARCH_STEPS == (
-        PrepCameraStep.WHEEL_NEGATIVE_1,
-        PrepCameraStep.WHEEL_NEGATIVE_1,
-        PrepCameraStep.WHEEL_NEGATIVE_1,
-        PrepCameraStep.WHEEL_NEGATIVE_1,
-        PrepCameraStep.PITCH_UP_50MS,
-        PrepCameraStep.PITCH_UP_50MS,
-        PrepCameraStep.PITCH_UP_50MS,
-        PrepCameraStep.PITCH_UP_50MS,
         PrepCameraStep.PITCH_UP_50MS,
         PrepCameraStep.PITCH_UP_50MS,
         PrepCameraStep.PITCH_UP_50MS,
     )
-    assert len(AUTO_CAMERA_SEARCH_STEPS) == 11
+    assert len(AUTO_CAMERA_SEARCH_STEPS) == 3
 
 def test_already_ready_sends_zero_camera_input() -> None:
     backend = _FakeBackend([_observation(ready=True, frame_id=1)])
