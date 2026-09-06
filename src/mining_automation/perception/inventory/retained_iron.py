@@ -120,3 +120,86 @@ def retained_iron_count(
         else:
             return None
     return count if count else None
+
+
+def retained_iron_count_from_empty_difference(
+    frame: Frame,
+    guarded: InventoryPositiveV3DevelopmentResult,
+    empty_region_bgra: bytes,
+) -> int | None:
+    """Count a contiguous iron prefix from same-slot difference to packaged EMPTY.
+
+    Real 2/3/4-ore frames and the 2026-09-05 live 5-ore frame show the same
+    per-slot iron delta across rows: roughly 576-581 pixels differ by >=10 and
+    119-121 differ by >=60, while true empty slots differ by zero. This fallback
+    keeps the existing raw occupancy guard and prefix rule, but tolerates the few
+    RGB levels of normal row/column rendering variation that exact hashes reject.
+    """
+    if (
+        (frame.width, frame.height) != (SUPPORTED_FRAME_WIDTH, SUPPORTED_FRAME_HEIGHT)
+        or frame.pixel_format is not PixelFormat.BGRA8888
+        or len(guarded.slots) != 28
+    ):
+        return None
+    inventory_region = Region(*SUPPORTED_REGION)
+    expected = inventory_region.width * inventory_region.height * 4
+    if len(empty_region_bgra) != expected:
+        return None
+    layout = InventoryGridLayout(
+        SUPPORTED_PROFILE_ID, SUPPORTED_COLUMN_STRIDE, SUPPORTED_ROW_STRIDE,
+    )
+    slots = layout.all_slot_regions(inventory_region)
+    count = 0
+    saw_empty = False
+    for index, (decision, slot) in enumerate(zip(guarded.slots, slots, strict=True)):
+        if decision.index != index:
+            return None
+        changed_10 = 0
+        changed_20 = 0
+        changed_60 = 0
+        absolute_sum = 0
+        bright_corruption = False
+        for y in range(32):
+            for x in range(32):
+                frame_offset = ((slot.y + y) * frame.width + slot.x + x) * 4
+                ref_x = slot.x - inventory_region.x + x
+                ref_y = slot.y - inventory_region.y + y
+                ref_offset = (ref_y * inventory_region.width + ref_x) * 4
+                deltas = tuple(
+                    abs(frame.payload[frame_offset + channel] - empty_region_bgra[ref_offset + channel])
+                    for channel in range(3)
+                )
+                strongest = max(deltas)
+                if strongest >= 10:
+                    live_bgr = tuple(
+                        frame.payload[frame_offset + channel] for channel in range(3)
+                    )
+                    if max(live_bgr) > 180 or sum(live_bgr) > 450:
+                        bright_corruption = True
+                absolute_sum += sum(deltas)
+                changed_10 += strongest >= 10
+                changed_20 += strongest >= 20
+                changed_60 += strongest >= 60
+        mean_absolute = absolute_sum / float(32 * 32 * 3)
+        iron_like = (
+            decision.raw_v1_state is SlotOccupancy.OCCUPIED
+            and not bright_corruption
+            and 560 <= changed_10 <= 600
+            and 440 <= changed_20 <= 485
+            and 110 <= changed_60 <= 135
+            and 17.5 <= mean_absolute <= 20.0
+        )
+        empty_like = (
+            decision.raw_v1_state is SlotOccupancy.EMPTY
+            and decision.raw_v1_confidence >= 0.8
+            and changed_10 <= 8
+            and changed_60 == 0
+            and mean_absolute <= 0.10
+        )
+        if iron_like and not saw_empty:
+            count += 1
+        elif empty_like:
+            saw_empty = True
+        else:
+            return None
+    return count if count else None

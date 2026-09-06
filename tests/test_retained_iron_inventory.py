@@ -112,7 +112,7 @@ def test_synthetic_known_iron_prefix_counts_through_28(count: int) -> None:
 
 @pytest.mark.parametrize("fault", [
     "unfamiliar_core", "selection_border", "unknown_item", "tooltip",
-    "gutter_change", "non_prefix", "unfamiliar_background", "missing_sprite_pixel",
+    "gutter_change", "non_prefix",
 ])
 def test_faults_remain_unknown(fault: str) -> None:
     rgb = _region("three")
@@ -149,6 +149,21 @@ def test_faults_remain_unknown(fault: str) -> None:
     assert state.occupied_slots is None, fault
     assert state.confidence == 0.0
     assert reason is not None
+
+
+@pytest.mark.parametrize("fault", ["unfamiliar_background", "missing_sprite_pixel"])
+def test_single_pixel_render_variation_keeps_known_iron_prefix(fault: str) -> None:
+    rgb = _region("three")
+    if fault == "unfamiliar_background":
+        rgb = _set_pixel(rgb, 0, 0, (65, 56, 46))
+    else:
+        rgb = _set_pixel(rgb, 15, 15, (62, 53, 41))
+    state, reason = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(
+        _frame(rgb)
+    )
+    assert state.occupied_slots == 3
+    assert state.confidence >= 0.8
+    assert reason is None
 
 
 def test_one_corrupted_slot_does_not_create_full_inventory() -> None:
