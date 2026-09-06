@@ -34,6 +34,7 @@ def _load_dll(name: str) -> Any:  # noqa: ANN401 - ctypes DLL handles are untype
 
 _user32 = _load_dll("user32")
 _gdi32 = _load_dll("gdi32")
+_kernel32 = _load_dll("kernel32")
 
 _INPUT_MOUSE: Final[int] = 0
 _INPUT_KEYBOARD: Final[int] = 1
@@ -163,6 +164,12 @@ _user32.GetClassNameW.restype = ctypes.c_int
 _user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
 _user32.SetForegroundWindow.restype = wintypes.BOOL
 _user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+_user32.AttachThreadInput.restype = wintypes.BOOL
+_user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+_user32.BringWindowToTop.restype = wintypes.BOOL
+_user32.BringWindowToTop.argtypes = [wintypes.HWND]
+_kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+_kernel32.GetCurrentThreadId.argtypes = []
 _user32.GetForegroundWindow.restype = wintypes.HWND
 _user32.GetForegroundWindow.argtypes = []
 _user32.GetClientRect.restype = wintypes.BOOL
@@ -353,7 +360,44 @@ def _window_title(hwnd: int) -> str:
 
 
 def focus_window(hwnd: int) -> bool:
-    return bool(_user32.SetForegroundWindow(hwnd))
+    """Bring one verified HWND to foreground using the caller's input queue.
+
+    Windows may reject ``SetForegroundWindow`` when the caller is not currently
+    attached to the foreground input queue.  PREP commonly runs from a host
+    process while Codex/ChatGPT is foreground, so attach the caller to the
+    current foreground and target GUI threads for only this bounded focus
+    transaction.  Always detach before returning and prove success by reading
+    the actual foreground HWND rather than trusting one API return value.
+    """
+
+    if not is_window(hwnd):
+        return False
+    if foreground_window() == hwnd:
+        return True
+
+    current_thread = int(_kernel32.GetCurrentThreadId())
+    target_thread = _window_owner(hwnd)[1]
+    current_foreground = foreground_window()
+    foreground_thread = (
+        _window_owner(current_foreground)[1] if current_foreground is not None else 0
+    )
+
+    attached_threads: list[int] = []
+    try:
+        for thread_id in (foreground_thread, target_thread):
+            if (
+                thread_id > 0
+                and thread_id != current_thread
+                and thread_id not in attached_threads
+            ):
+                if _user32.AttachThreadInput(current_thread, thread_id, True):
+                    attached_threads.append(thread_id)
+        _user32.BringWindowToTop(hwnd)
+        _user32.SetForegroundWindow(hwnd)
+        return foreground_window() == hwnd
+    finally:
+        for thread_id in reversed(attached_threads):
+            _user32.AttachThreadInput(current_thread, thread_id, False)
 
 
 def foreground_window() -> int | None:
