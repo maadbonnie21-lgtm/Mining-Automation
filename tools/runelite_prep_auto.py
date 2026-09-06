@@ -41,12 +41,22 @@ from mining_automation.validation.runelite_prep import (  # noqa: E402
 # recipe has already been proven. PREP captures and reevaluates after every step,
 # stops immediately when the frozen gate passes, and otherwise stops on exhaustion.
 AUTO_CAMERA_SEARCH_STEPS: tuple[PrepCameraStep, ...] = (
-    PrepCameraStep.WHEEL_POSITIVE_1,
-    PrepCameraStep.WHEEL_POSITIVE_1,
-    PrepCameraStep.WHEEL_POSITIVE_1,
-    PrepCameraStep.WHEEL_POSITIVE_1,
-    PrepCameraStep.PITCH_DOWN_100MS,
-    PrepCameraStep.PITCH_DOWN_100MS,
+    # 2026-09-05 live evidence proved the previous directions were backwards for
+    # the current starting state. Four positive wheel events enlarged the player
+    # from a ~24x33 hair box to ~43x45, while the three retained successful poses
+    # are ~25x24. Two pitch-down holds moved the hair center from ~375 to ~340;
+    # successful poses cluster near y=410. Undo the zoom-in first, then raise pitch
+    # in 50 ms increments, reevaluating the unchanged Resource gate after each step.
+    PrepCameraStep.WHEEL_NEGATIVE_1,
+    PrepCameraStep.WHEEL_NEGATIVE_1,
+    PrepCameraStep.WHEEL_NEGATIVE_1,
+    PrepCameraStep.WHEEL_NEGATIVE_1,
+    PrepCameraStep.PITCH_UP_50MS,
+    PrepCameraStep.PITCH_UP_50MS,
+    PrepCameraStep.PITCH_UP_50MS,
+    PrepCameraStep.PITCH_UP_50MS,
+    PrepCameraStep.PITCH_UP_50MS,
+    PrepCameraStep.PITCH_UP_50MS,
     PrepCameraStep.PITCH_UP_50MS,
 )
 
