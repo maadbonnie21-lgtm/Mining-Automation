@@ -393,6 +393,43 @@ def register_translation(frame: Frame, detector: ProfiledResourceDetector):
     )
 
 
+def _regions_overlap(first, second):
+    ax, ay, aw, ah = first
+    bx, by, bw, bh = second
+    return ax < bx + bw and bx < ax + aw and ay < by + bh and by < ay + ah
+
+
+def _choose_consensus_available_registration(candidates):
+    if len(candidates) < 2:
+        return None
+    common_ids = set.intersection(*(set(states) for _, _, _, states in candidates))
+    available_ids = sorted(
+        resource_id
+        for resource_id in common_ids
+        if all(states[resource_id].available is True for _, _, _, states in candidates)
+    )
+    if len(available_ids) != 1:
+        return None
+    resource_id = available_ids[0]
+    states = [item[3][resource_id] for item in candidates]
+    regions = [state.interaction_region for state in states]
+    if any(region is None for region in regions):
+        return None
+    first_region = regions[0]
+    assert first_region is not None
+    if any(not _regions_overlap(first_region, region) for region in regions[1:] if region is not None):
+        return None
+    best_index = max(range(len(states)), key=lambda index: states[index].confidence)
+    pose_name, detector, evidence, _ = candidates[best_index]
+    selected_state = states[best_index]
+    consensus_evidence = dict(evidence)
+    consensus_evidence['kind'] = 'distributed_affine_consensus_registration'
+    consensus_evidence['consensus_poses'] = [item[0] for item in candidates]
+    consensus_evidence['consensus_resource_id'] = resource_id
+    consensus_evidence['consensus_regions'] = [list(region) for region in regions if region is not None]
+    return pose_name, detector, consensus_evidence, selected_state
+
+
 def evaluate_resource(frame: Frame, epoch: PerceptionEpoch, detectors, excluded, active):
     passed = []
     diagnoses = {}
@@ -435,6 +472,30 @@ def evaluate_resource(frame: Frame, epoch: PerceptionEpoch, detectors, excluded,
             pose_name, detector, registration_evidence = translated[0]
             passed.append((pose_name, detector))
             diagnoses["software_registration"] = registration_evidence
+        elif len(translated) > 1:
+            consensus_candidates = []
+            for pose_name, detector, registration_evidence in translated:
+                states = {
+                    state.resource_id: state
+                    for observation in detector.detect(frame)
+                    if observation.evidence["resource_id"] not in excluded
+                    for state in (resource_state_from_observation(observation),)
+                }
+                consensus_candidates.append(
+                    (pose_name, detector, registration_evidence, states)
+                )
+            consensus = _choose_consensus_available_registration(consensus_candidates)
+            if consensus is not None:
+                pose_name, detector, registration_evidence, selected_state = consensus
+                active["pose"] = pose_name
+                active["detector"] = detector
+                diagnoses["software_registration"] = registration_evidence
+                return ResourcePerceptionEnvelope(
+                    epoch=epoch,
+                    release=CANONICAL_RESOURCE_RELEASE,
+                    view=ResourceViewState.SUPPORTED,
+                    resources=(selected_state,),
+                ), pose_name, diagnoses
     if len(passed) != 1:
         return ResourcePerceptionEnvelope(
             epoch=epoch,
