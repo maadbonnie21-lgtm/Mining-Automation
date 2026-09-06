@@ -340,14 +340,36 @@ def test_inventory_tooltip_unknown_stops_before_click() -> None:
     assert backend.dispatch_calls == 0
 
 
-def test_resource_unknown_stops_before_click() -> None:
+def test_resource_unknown_waits_then_stops_if_it_never_settles() -> None:
     backend = _FakeBackend(
-        [_state(100, 0, resource_view=ResourceViewState.UNKNOWN)],
+        [
+            _state(100, 0, resource_view=ResourceViewState.UNKNOWN),
+            _state(200, 0, resource_view=ResourceViewState.UNKNOWN),
+            _state(300, 0, resource_view=ResourceViewState.UNKNOWN),
+            _state(400, 0, resource_view=ResourceViewState.UNKNOWN),
+        ],
         [],
     )
-    result = run_mining_until_full(backend, _config())
+    result = run_mining_until_full(backend, _config(max_passive=3))
     assert result.stop_reason is MiningLoopStopReason.INITIAL_STATE_BLOCKED
+    assert backend.clean_calls == 4
     assert backend.dispatch_calls == 0
+
+
+def test_resource_unknown_at_start_settles_then_mines() -> None:
+    backend = _FakeBackend(
+        [
+            _state(100, 27, resource_view=ResourceViewState.UNKNOWN),
+            _state(200, 27, available=frozenset({"northwest"})),
+            _state(300, 28, available=frozenset({"southwest"})),
+        ],
+        [[28]],
+    )
+    result = run_mining_until_full(backend, _config(max_passive=3))
+    assert result.success is True
+    assert result.start_inventory == 27
+    assert result.end_inventory == 28
+    assert result.click_count == 1
 
 
 @pytest.mark.parametrize("action", (None, "Walk here", "Mine Copper rocks"))

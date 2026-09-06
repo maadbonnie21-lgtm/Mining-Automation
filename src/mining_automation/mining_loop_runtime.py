@@ -366,7 +366,6 @@ def run_mining_until_full(
             iteration=1,
         )
         state = clean.state
-        start_inventory = state.inventory.occupied_slots
         events.append(_clean_event("initial_clean_observation", 1, clean))
         if not _window_ok(config, clean.window):
             return finish(
@@ -384,14 +383,52 @@ def run_mining_until_full(
                 MiningOnlyStopReason.PUBLICATION_BLOCKED,
                 "clean perception was not captured after neutral-cursor proof",
             )
+        recoverable_initial = {
+            MiningOnlyStopReason.RESOURCE_UNKNOWN,
+            MiningOnlyStopReason.RESOURCE_VIEW_NOT_SUPPORTED,
+            MiningOnlyStopReason.NO_AVAILABLE_IRON,
+        }
+        if (
+            state.status is WorldStatePublicationStatus.BLOCKED
+            and state.stop_reason in recoverable_initial
+        ):
+            for wait_index in range(1, config.max_passive_observations + 1):
+                clean = backend.acquire_clean_observation(
+                    session_id=config.session_id,
+                    iteration=1,
+                )
+                state = clean.state
+                events.append(_clean_event("initial_settle_reacquisition", wait_index, clean))
+                if not _window_ok(config, clean.window):
+                    return finish(
+                        False,
+                        MiningOnlyPhase.STOPPED,
+                        MiningLoopStopReason.CLEAN_WINDOW_MISMATCH,
+                        MiningOnlyStopReason.PUBLICATION_BLOCKED,
+                        "initial settle lost exact visible foreground client identity",
+                    )
+                if clean.neutral_cursor_proven is not True:
+                    return finish(
+                        False,
+                        MiningOnlyPhase.STOPPED,
+                        MiningLoopStopReason.CLEAN_CURSOR_NOT_NEUTRAL,
+                        MiningOnlyStopReason.PUBLICATION_BLOCKED,
+                        "initial settle was not neutral-cursor clean",
+                    )
+                if (
+                    state.status is not WorldStatePublicationStatus.BLOCKED
+                    or state.stop_reason not in recoverable_initial
+                ):
+                    break
         if state.status is WorldStatePublicationStatus.BLOCKED:
             return finish(
                 False,
                 MiningOnlyPhase.STOPPED,
                 MiningLoopStopReason.INITIAL_STATE_BLOCKED,
                 state.stop_reason,
-                f"initial atomic state blocked: {state.stop_reason.value}",
+                f"initial atomic state blocked after settle: {state.stop_reason.value}",
             )
+        start_inventory = state.inventory.occupied_slots
         if state.status is WorldStatePublicationStatus.FULL:
             return finish(
                 True,
