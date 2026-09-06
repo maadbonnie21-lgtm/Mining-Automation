@@ -686,10 +686,13 @@ def run_mining_until_full(
                         "passive Inventory release identity changed",
                     )
                 if occupied is None:
-                    # A single animation/occlusion frame can make Inventory unreadable.
-                    # Do not infer progress and do not click again; simply wait for a
-                    # later passive frame within the same bounded observation window.
-                    continue
+                    return finish(
+                        False,
+                        MiningOnlyPhase.STOPPED,
+                        MiningLoopStopReason.PASSIVE_INVENTORY_UNKNOWN,
+                        MiningOnlyStopReason.INVENTORY_UNKNOWN,
+                        f"passive Inventory became UNKNOWN: {passive.unknown_reason}",
+                    )
                 confidence = passive.inventory.confidence
                 if (
                     passive.inventory.capacity != INVENTORY_CAPACITY
