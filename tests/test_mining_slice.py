@@ -168,6 +168,18 @@ def _assert_atomic_blocked(state: AtomicMiningWorldState, reason: MiningOnlyStop
     assert state.banking_authority is False
 
 
+def test_one_unknown_resource_does_not_block_known_available_iron() -> None:
+    resource, inventory = _envelopes(
+        resources=_resources(target_available=None, second_available=True)
+    )
+    state = assemble_atomic_mining_world_state(
+        resource=resource, inventory=inventory, evaluated_monotonic_s=1.25
+    )
+    assert state.status is WorldStatePublicationStatus.READY
+    assert state.selected_target is not None
+    assert state.selected_target.resource_id == "iron-center"
+
+
 def test_atomic_same_epoch_publication_selects_first_valid_source_order_not_confidence() -> None:
     state = _state()
 
@@ -191,7 +203,7 @@ def test_atomic_same_epoch_publication_selects_first_valid_source_order_not_conf
         ("mixed-frame", MiningOnlyStopReason.MIXED_PERCEPTION_EPOCH),
         ("unsupported", MiningOnlyStopReason.RESOURCE_VIEW_NOT_SUPPORTED),
         ("unknown-view", MiningOnlyStopReason.RESOURCE_VIEW_NOT_SUPPORTED),
-        ("resource-unknown", MiningOnlyStopReason.RESOURCE_UNKNOWN),
+        ("all-resources-unknown", MiningOnlyStopReason.RESOURCE_UNKNOWN),
         ("inventory-unknown", MiningOnlyStopReason.INVENTORY_UNKNOWN),
         ("inventory-floor", MiningOnlyStopReason.INVENTORY_CONFIDENCE_BELOW_FLOOR),
         ("stale", MiningOnlyStopReason.STALE_PERCEPTION),
@@ -218,8 +230,11 @@ def test_publication_failures_clear_both_perceptions_atomically(
         resource_input = replace(resource, view=ResourceViewState.UNSUPPORTED)
     elif case == "unknown-view":
         resource_input = replace(resource, view=ResourceViewState.UNKNOWN)
-    elif case == "resource-unknown":
-        resource_input = replace(resource, resources=_resources(target_available=None))
+    elif case == "all-resources-unknown":
+        resource_input = replace(
+            resource,
+            resources=_resources(target_available=None, second_available=None),
+        )
     elif case == "inventory-unknown":
         inventory_input = InventoryPerceptionEnvelope(
             epoch=epoch,

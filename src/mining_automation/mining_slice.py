@@ -370,6 +370,8 @@ def _resource_ensemble_issues(
         return (MiningOnlyStopReason.RESOURCE_ENSEMBLE_INVALID,)
     seen: set[str] = set()
     issues: list[MiningOnlyStopReason] = []
+    has_available_iron = False
+    has_unknown = False
     for resource in resources:
         if (
             not resource.resource_id
@@ -383,15 +385,17 @@ def _resource_ensemble_issues(
                 issues.append(MiningOnlyStopReason.RESOURCE_ENSEMBLE_INVALID)
         seen.add(resource.resource_id)
         if resource.available is None:
-            if MiningOnlyStopReason.RESOURCE_UNKNOWN not in issues:
-                issues.append(MiningOnlyStopReason.RESOURCE_UNKNOWN)
+            has_unknown = True
         elif resource.available is True:
+            has_available_iron = True
             if not _valid_region(resource.interaction_region):
                 if MiningOnlyStopReason.RESOURCE_ENSEMBLE_INVALID not in issues:
                     issues.append(MiningOnlyStopReason.RESOURCE_ENSEMBLE_INVALID)
         elif resource.interaction_region is not None:
             if MiningOnlyStopReason.RESOURCE_ENSEMBLE_INVALID not in issues:
                 issues.append(MiningOnlyStopReason.RESOURCE_ENSEMBLE_INVALID)
+    if has_unknown and not has_available_iron:
+        issues.append(MiningOnlyStopReason.RESOURCE_UNKNOWN)
     return tuple(issues)
 
 
