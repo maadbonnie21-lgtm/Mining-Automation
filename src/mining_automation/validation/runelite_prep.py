@@ -29,8 +29,8 @@ RESOURCE_REQUIRED_ZONES: Final[frozenset[str]] = frozenset(
 )
 PREP_CONFIRMATION: Final[str] = "PREP_RUNELITE_FOR_MINING"
 PREP_SCHEMA_VERSION: Final[int] = 1
-SESSION_RECOVERY_POLL_SECONDS: Final[float] = 0.5
-SESSION_RECOVERY_POLL_ATTEMPTS: Final[int] = 20
+SESSION_RECOVERY_POLL_SECONDS: Final[float] = 0.1
+SESSION_RECOVERY_POLL_ATTEMPTS: Final[int] = 100
 _GIT_SHA_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{40}\Z")
 _SHA256_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -582,10 +582,10 @@ def run_runelite_prep(
                         PrepStopReason.SESSION_RECOVERY_FAILED,
                         "Session recovery refused to repeat the same reviewed stage.",
                     )
-                if len(recovery_stages_seen) >= 2:
+                if len(recovery_stages_seen) >= 3:
                     raise PrepOperationError(
                         PrepStopReason.SESSION_RECOVERY_FAILED,
-                        "Session recovery exceeded the two reviewed re-entry stages.",
+                        "Session recovery exceeded the three reviewed re-entry stages.",
                     )
                 recovery_stages_seen.add(stage)
                 recovery = backend.recover_session(stage)

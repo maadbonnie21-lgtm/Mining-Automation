@@ -60,6 +60,8 @@ from mining_automation.validation.runelite_prep import (  # noqa: E402
     run_runelite_prep,
 )
 from mining_automation.validation.session_recovery import (  # noqa: E402
+    DISCONNECTED_OK_CLIENT_POINT,
+    DISCONNECTED_STAGE,
     PLAY_NOW_CLIENT_POINT,
     PREAUTHENTICATED_STAGE,
     WELCOME_PLAY_CLIENT_POINT,
@@ -383,7 +385,11 @@ class RealPrepBackend(PrepBackend):
                 f"reviewed stage: requested {stage!r}, observed {fresh_stage!r}.",
             )
         try:
-            if stage == PREAUTHENTICATED_STAGE:
+            if stage == DISCONNECTED_STAGE:
+                receipt = self._control().click_disconnected_ok(
+                    *DISCONNECTED_OK_CLIENT_POINT
+                )
+            elif stage == PREAUTHENTICATED_STAGE:
                 receipt = self._control().click_play_now(*PLAY_NOW_CLIENT_POINT)
             elif stage == WELCOME_PLAY_STAGE:
                 receipt = self._control().click_welcome_play(*WELCOME_PLAY_CLIENT_POINT)
@@ -500,6 +506,33 @@ class RealPrepBackend(PrepBackend):
             )
         frame, frame_path = self._capture("clean")
         epoch = self._epoch(frame, "clean")
+        gameplay = evaluate_client_input_readiness(frame)
+        recovery_stage = session_recovery_stage(frame)
+        if not gameplay.safe_to_attempt_camera_input:
+            # Login/disconnect/transition canvases cannot contain usable Resource or
+            # Inventory evidence. Return immediately so recovery polling stays fast
+            # and cannot invoke world-scene registration on a non-gameplay frame.
+            return PrepSceneObservation(
+                frame_id=frame.frame_id,
+                frame_sha256=hashlib.sha256(frame.payload).hexdigest(),
+                gameplay_ready=False,
+                gameplay_reason=gameplay.detail,
+                inventory_occupied=None,
+                inventory_confidence=0.0,
+                inventory_unknown_reason="gameplay_not_ready",
+                resource_supported=False,
+                resource_view=ResourceViewState.UNSUPPORTED.value,
+                accepted_pose_id=None,
+                software_registration_identity=None,
+                matched_landmarks=0,
+                matched_zones=(),
+                landmark_distances=(),
+                diagnostic_score=None,
+                frame_path=frame_path,
+                session_recovery_ready=recovery_stage is not None,
+                session_recovery_stage=recovery_stage,
+            )
+
         resource, pose, diagnoses = self.evaluate_resource(
             frame,
             epoch,
@@ -531,14 +564,38 @@ class RealPrepBackend(PrepBackend):
                     f"{registration.get('kind', 'distributed_affine_registration')}"
                 )
 
+        # Registration may consume a second capture. Re-bind session/gameplay facts
+        # to the exact final frame before Inventory publication.
         gameplay = evaluate_client_input_readiness(frame)
+        recovery_stage = session_recovery_stage(frame)
+        if not gameplay.safe_to_attempt_camera_input:
+            return PrepSceneObservation(
+                frame_id=frame.frame_id,
+                frame_sha256=hashlib.sha256(frame.payload).hexdigest(),
+                gameplay_ready=False,
+                gameplay_reason=gameplay.detail,
+                inventory_occupied=None,
+                inventory_confidence=0.0,
+                inventory_unknown_reason="gameplay_not_ready",
+                resource_supported=False,
+                resource_view=ResourceViewState.UNSUPPORTED.value,
+                accepted_pose_id=None,
+                software_registration_identity=None,
+                matched_landmarks=0,
+                matched_zones=(),
+                landmark_distances=(),
+                diagnostic_score=None,
+                frame_path=frame_path,
+                session_recovery_ready=recovery_stage is not None,
+                session_recovery_stage=recovery_stage,
+            )
+
         _, inventory = self.inventory_evaluator.evaluate(frame, epoch)
         matched, zones, distances, score = self._diagnosis_summary(
             pose,
             diagnoses,
             registration_identity=registration_identity,
         )
-        recovery_stage = session_recovery_stage(frame)
         return PrepSceneObservation(
             frame_id=frame.frame_id,
             frame_sha256=hashlib.sha256(frame.payload).hexdigest(),
@@ -726,16 +783,25 @@ def _write_result(output: Path, result: RunelitePrepResult) -> Path:
     return path
 
 
+def _safe_console_print(*values: object, sep: str = ' ', end: str = '\n') -> None:
+    '''Print owner-facing text without crashing on legacy Windows encodings.'''
+
+    text = sep.join(str(value) for value in values)
+    encoding = getattr(sys.stdout, 'encoding', None) or 'utf-8'
+    safe_text = text.encode(encoding, errors='replace').decode(encoding, errors='replace')
+    print(safe_text, end=end)
+
+
 def _print_owner_summary(result: RunelitePrepResult, receipt: Path) -> None:
     initial = result.initial_window
     final = result.final_window
     observation = result.observations[-1] if result.observations else None
-    print("RUNE LITE PREP DIAGNOSTIC\n")
+    _safe_console_print("RUNE LITE PREP DIAGNOSTIC\n")
     if initial is None:
-        print("✗ RuneLite not safely bound")
+        _safe_console_print("✗ RuneLite not safely bound")
     else:
-        print(f"✓ RuneLite found — HWND {initial.hwnd}")
-        print(
+        _safe_console_print(f"✓ RuneLite found — HWND {initial.hwnd}")
+        _safe_console_print(
             "✓ HWND identity bound — "
             f"PID {initial.identity.process_id}, TID {initial.identity.thread_id}, "
             f"class {initial.identity.class_name!r}"
@@ -745,22 +811,22 @@ def _print_owner_summary(result: RunelitePrepResult, receipt: Path) -> None:
             window.client_width == EXPECTED_CLIENT_WIDTH
             and window.client_height == EXPECTED_CLIENT_HEIGHT
         ) else "✗"
-        print(
+        _safe_console_print(
             f"{geometry_mark} Client {window.client_width} x {window.client_height} "
             f"— expected {EXPECTED_CLIENT_WIDTH} x {EXPECTED_CLIENT_HEIGHT}"
         )
         dpi_mark = "✓" if window.dpi == EXPECTED_CLIENT_DPI else "✗"
-        print(f"{dpi_mark} DPI {window.dpi} — expected {EXPECTED_CLIENT_DPI}")
-        print(
+        _safe_console_print(f"{dpi_mark} DPI {window.dpi} — expected {EXPECTED_CLIENT_DPI}")
+        _safe_console_print(
             f"{'✓' if window.foreground else '✗'} Foreground "
             f"{'yes' if window.foreground else 'no'}"
         )
     if result.pose_references:
-        print(f"✓ Local pose references {len(result.pose_references)}/3 verified")
+        _safe_console_print(f"✓ Local pose references {len(result.pose_references)}/3 verified")
     else:
-        print("✗ Local pose references not verified")
+        _safe_console_print("✗ Local pose references not verified")
     if observation is not None:
-        print(
+        _safe_console_print(
             f"{'✓' if observation.gameplay_ready else '✗'} Gameplay chrome "
             f"{'ready' if observation.gameplay_ready else 'not ready'}"
         )
@@ -773,27 +839,27 @@ def _print_owner_summary(result: RunelitePrepResult, receipt: Path) -> None:
             if observation.inventory_occupied is not None
             else "UNKNOWN"
         )
-        print(
+        _safe_console_print(
             f"{'✓' if inventory_ready else '✗'} Inventory {rendered_inventory}/28 "
             f"confidence {observation.inventory_confidence:.3f}"
         )
-        print(
+        _safe_console_print(
             f"{'✓' if observation.frozen_resource_gate_passed else '✗'} Resource "
             f"{observation.matched_landmarks}/6 landmarks across "
             f"{len(observation.matched_zones)}/3 zones"
         )
     else:
-        print("? Scene/Inventory not evaluated")
-    print()
+        _safe_console_print("? Scene/Inventory not evaluated")
+    _safe_console_print()
     if result.ready_for_mining:
-        print("READY FOR MINING")
+        _safe_console_print("READY FOR MINING")
     else:
-        print(f"NOT READY: {result.stop_reason.value} — {result.detail}")
+        _safe_console_print(f"NOT READY: {result.stop_reason.value} — {result.detail}")
     if final is not None:
-        print(f"HWND: {final.hwnd}")
-    print(f"READY receipt: {receipt}")
-    print("PREP authority: RELINQUISHED")
-    print("Mining input authority: FALSE")
+        _safe_console_print(f"HWND: {final.hwnd}")
+    _safe_console_print(f"READY receipt: {receipt}")
+    _safe_console_print("PREP authority: RELINQUISHED")
+    _safe_console_print("Mining input authority: FALSE")
 
 
 def main(argv: list[str] | None = None) -> int:

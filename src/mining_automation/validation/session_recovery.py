@@ -10,8 +10,10 @@ from ..capture import Frame, PixelFormat
 
 EXPECTED_WIDTH: Final[int] = 1005
 EXPECTED_HEIGHT: Final[int] = 1078
+DISCONNECTED_OK_CLIENT_POINT: Final[tuple[int, int]] = (384, 329)
 PLAY_NOW_CLIENT_POINT: Final[tuple[int, int]] = (383, 289)
 WELCOME_PLAY_CLIENT_POINT: Final[tuple[int, int]] = (384, 365)
+DISCONNECTED_STAGE: Final[str] = "disconnected_ok"
 PREAUTHENTICATED_STAGE: Final[str] = "preauthenticated_play_now"
 WELCOME_PLAY_STAGE: Final[str] = "welcome_click_here_to_play"
 
@@ -55,6 +57,31 @@ def matches_session_screen(
     )
 
 
+DISCONNECTED_SCREEN: Final[SessionScreenFingerprint] = SessionScreenFingerprint(
+    fingerprint_id="disconnected-ok-v1",
+    anchors=(
+        SessionScreenAnchor(
+            (235, 240, 305, 40),
+            "d25add6731eb9f7e16c5fbfeae577703739c2b1b890f6347c7ccf84158403b6f",
+        ),
+        SessionScreenAnchor(
+            (305, 305, 160, 50),
+            "bfc2dcb1d7a8e2d99cb1911d1a81e02039be0501465f3b4bd0e103c4c5553887",
+        ),
+        SessionScreenAnchor(
+            (205, 198, 360, 200),
+            "ad23f019afea83c999bc9f9aabf89219cbb4dc42587de4fd115cbb20f0548c7e",
+        ),
+    ),
+)
+
+
+def matches_disconnected_screen(frame: Frame) -> bool:
+    """Recognize the source-proven normal disconnect dialog."""
+
+    return matches_session_screen(frame, DISCONNECTED_SCREEN)
+
+
 PREAUTHENTICATED_PLAY_NOW: Final[SessionScreenFingerprint] = SessionScreenFingerprint(
     fingerprint_id="preauthenticated-play-now-v1",
     anchors=(
@@ -90,17 +117,22 @@ def is_pre_authenticated_play_now(frame: Frame) -> bool:
     return matches_preauthenticated_play_now(frame)
 
 
-# The first two post-launch frames have a distinct transitional render and are
-# intentionally NOT eligible for input.  Only the later steady render may expose
-# the reviewed stage-2 click.  Its three retained anchors were byte-identical
-# across independent steady sessions; the animated button-top strip is excluded.
+# The real recovery traces proved the steady Welcome screen only after the
+# passive Connecting/Loading transition canvases.  These small static patches
+# matched across independent login sessions and differ from disconnect, Play Now,
+# Connecting, Loading, and retained gameplay frames.
 WELCOME_CLICK_HERE_TO_PLAY: Final[tuple[SessionScreenFingerprint, ...]] = (
     SessionScreenFingerprint(
-        fingerprint_id="welcome-click-here-to-play-steady-v1",
+        fingerprint_id="welcome-click-here-to-play-v3",
         anchors=(
-            SessionScreenAnchor((330, 340, 115, 45), "3c3c7244f72e8bfb868e2b5730b637a92445557cddad19fc78064ffeb1cb4046"),
-            SessionScreenAnchor((35, 320, 215, 90), "0247e71654eb24c56cb0640ea2af7ffbd379cb03e5ddb45e7e18c1f6d8cf91f3"),
-            SessionScreenAnchor((520, 320, 220, 90), "f5af52195b47495011920e6e8720f5bceccd1cd861b2a09b00ead0aa7b0468c4"),
+            SessionScreenAnchor(
+                (442, 76, 16, 16),
+                "7806d12cc3051366d9cb78b95e93ef34991ef903afe475929a266206aa052229",
+            ),
+            SessionScreenAnchor(
+                (310, 363, 12, 12),
+                "4e72fe6b1a7c8a224456da63ffe22c92520433cac821e1e29200fe2de53bd188",
+            ),
         ),
     ),
 )
@@ -115,6 +147,8 @@ def matches_welcome_click_here_to_play(frame: Frame) -> bool:
 def session_recovery_stage(frame: Frame) -> str | None:
     """Return the one reviewed recovery stage visible in this exact frame."""
 
+    if matches_disconnected_screen(frame):
+        return DISCONNECTED_STAGE
     if matches_preauthenticated_play_now(frame):
         return PREAUTHENTICATED_STAGE
     if matches_welcome_click_here_to_play(frame):

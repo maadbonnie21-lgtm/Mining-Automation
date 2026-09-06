@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from mining_automation.validation.runelite_prep import (
     run_runelite_prep,
 )
 from mining_automation.validation.session_recovery import (
+    DISCONNECTED_STAGE,
     PREAUTHENTICATED_STAGE,
     WELCOME_PLAY_STAGE,
 )
@@ -166,7 +168,12 @@ class FakePrepBackend:
         self.recovery_calls += 1
         self.recovery_stages.append(stage)
         self.action_calls.append("recover_session")
-        action = "play_now_click" if stage == PREAUTHENTICATED_STAGE else "welcome_play_click"
+        if stage == DISCONNECTED_STAGE:
+            action = "disconnected_ok_click"
+        elif stage == PREAUTHENTICATED_STAGE:
+            action = "play_now_click"
+        else:
+            action = "welcome_play_click"
         return PrepActionReceipt(action, 2, 1 if self.partial_recovery else 2)
 
     def observe(self) -> PrepSceneObservation:
@@ -201,6 +208,7 @@ def _run(
         PrepCameraStep.PITCH_DOWN_100MS,
         PrepCameraStep.PITCH_UP_50MS,
     ),
+    session_recovery_sleeper: Callable[[float], None] = lambda _: None,
 ):
     return run_runelite_prep(
         backend,
@@ -209,7 +217,7 @@ def _run(
         prep_session_id="prep-test",
         confirm=confirm,
         camera_steps=camera_steps,
-        session_recovery_sleeper=lambda _: None,
+        session_recovery_sleeper=session_recovery_sleeper,
     )
 
 
@@ -323,6 +331,81 @@ def test_two_stage_session_recovery_enters_gameplay_without_repeating_stage() ->
     assert backend.recovery_calls == 2
     assert backend.recovery_stages == [PREAUTHENTICATED_STAGE, WELCOME_PLAY_STAGE]
     assert backend.camera_calls == []
+
+
+def test_three_stage_disconnect_recovery_enters_gameplay_once_per_stage() -> None:
+    disconnected = _observation(
+        gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
+        session_recovery_ready=True, session_recovery_stage=DISCONNECTED_STAGE,
+    )
+    login = _observation(
+        gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
+        session_recovery_ready=True, session_recovery_stage=PREAUTHENTICATED_STAGE,
+    )
+    welcome = _observation(
+        gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
+        session_recovery_ready=True, session_recovery_stage=WELCOME_PLAY_STAGE,
+    )
+    gameplay_probe = _observation(
+        gameplay_ready=True, inventory=0, resource_supported=False, matched=0, zones=(),
+    )
+    ready = _observation(gameplay_ready=True, inventory=0, resource_supported=True)
+    backend = FakePrepBackend(
+        observations=[disconnected, login, welcome, gameplay_probe, ready]
+    )
+    result = _run(backend)
+    assert result.ready_for_mining is True
+    assert backend.recovery_calls == 3
+    assert backend.recovery_stages == [
+        DISCONNECTED_STAGE,
+        PREAUTHENTICATED_STAGE,
+        WELCOME_PLAY_STAGE,
+    ]
+    assert backend.camera_calls == []
+
+
+def test_recovery_keeps_fast_polling_for_more_than_two_seconds() -> None:
+    login = _observation(
+        gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
+        session_recovery_ready=True, session_recovery_stage=PREAUTHENTICATED_STAGE,
+    )
+    transition = _observation(
+        gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
+    )
+    gameplay_probe = _observation(
+        gameplay_ready=True, inventory=0, resource_supported=False, matched=0, zones=(),
+    )
+    ready = _observation(gameplay_ready=True, inventory=0, resource_supported=True)
+    sleeps: list[float] = []
+    backend = FakePrepBackend(
+        observations=[login, *([transition] * 21), gameplay_probe, ready]
+    )
+
+    result = _run(backend, session_recovery_sleeper=sleeps.append)
+
+    assert result.ready_for_mining is True
+    assert len(sleeps) == 22
+    assert sum(sleeps) == pytest.approx(2.2)
+    assert backend.recovery_calls == 1
+
+
+def test_recovery_exhausts_full_ten_second_bound_without_retry() -> None:
+    login = _observation(
+        gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
+        session_recovery_ready=True, session_recovery_stage=PREAUTHENTICATED_STAGE,
+    )
+    transition = _observation(
+        gameplay_ready=False, inventory=None, resource_supported=False, matched=0, zones=(),
+    )
+    sleeps: list[float] = []
+    backend = FakePrepBackend(observations=[login, transition])
+
+    result = _run(backend, session_recovery_sleeper=sleeps.append)
+
+    assert result.stop_reason is PrepStopReason.SESSION_RECOVERY_FAILED
+    assert len(sleeps) == 100
+    assert sum(sleeps) == pytest.approx(10.0)
+    assert backend.recovery_calls == 1
 
 
 def test_pre_authenticated_session_short_click_receipt_stops_without_retry() -> None:
