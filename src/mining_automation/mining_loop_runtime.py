@@ -28,6 +28,7 @@ from .mining_slice import (
     MiningAttemptProposal,
     MiningOnlyPhase,
     MiningOnlyStopReason,
+    MiningProgressKind,
     PerceptionEpoch,
     PerceptionReleaseIdentity,
     WorldStatePublicationStatus,
@@ -41,6 +42,7 @@ EXPECTED_CLIENT_HEIGHT: Final[int] = 1078
 EXPECTED_CLIENT_DPI: Final[int] = 96
 EXPECTED_PRIMARY_ACTION: Final[str] = "Mine Iron rocks"
 DEFAULT_MAX_PASSIVE_OBSERVATIONS: Final[int] = 30
+ATTEMPTS_PER_REQUIRED_ORE: Final[int] = 8
 
 
 class MiningLoopStopReason(StrEnum):
@@ -400,7 +402,8 @@ def run_mining_until_full(
             )
         assert state.epoch is not None
         assert start_inventory is not None
-        maximum_attempts = INVENTORY_CAPACITY - start_inventory
+        remaining_ores = INVENTORY_CAPACITY - start_inventory
+        maximum_attempts = max(remaining_ores, remaining_ores * ATTEMPTS_PER_REQUIRED_ORE)
         decision = begin_mining_only_session(
             session_id=config.session_id,
             state=state,
@@ -549,6 +552,7 @@ def run_mining_until_full(
             before = proposal.inventory_occupied_before
             last_epoch = proof.hover_epoch
             witness: PassiveMiningObservation | None = None
+            progress_hint: str | None = None
 
             for passive_index in range(1, config.max_passive_observations + 1):
                 passive = backend.observe_passive(
@@ -622,6 +626,11 @@ def run_mining_until_full(
                 assert delta is not None
                 if delta == 1:
                     witness = passive
+                    progress_hint = "inventory_incremented"
+                    break
+                if delta == 0 and passive.selected_target_available is False:
+                    witness = passive
+                    progress_hint = "target_depleted"
                     break
                 if delta != 0:
                     return finish(
@@ -638,7 +647,7 @@ def run_mining_until_full(
                     MiningOnlyPhase.STOPPED,
                     MiningLoopStopReason.PASSIVE_PROGRESS_TIMEOUT,
                     MiningOnlyStopReason.NO_OBSERVED_PROGRESS,
-                    "bounded passive window ended without +1; no retry was attempted",
+                    "bounded passive window ended without inventory progress or target depletion",
                 )
 
             clean = backend.acquire_clean_observation(
@@ -646,7 +655,7 @@ def run_mining_until_full(
                 iteration=iteration + 1,
             )
             state = clean.state
-            events.append(_clean_event("post_progress_clean_reacquisition", iteration, clean))
+            events.append(_clean_event("post_attempt_clean_reacquisition", iteration, clean))
             if not _window_ok(config, clean.window):
                 return finish(
                     False,
@@ -663,13 +672,28 @@ def run_mining_until_full(
                     MiningOnlyStopReason.PUBLICATION_BLOCKED,
                     "post-movement perception was not neutral-cursor clean",
                 )
+            if state.status is WorldStatePublicationStatus.BLOCKED and state.stop_reason is MiningOnlyStopReason.NO_AVAILABLE_IRON:
+                for wait_index in range(1, config.max_passive_observations + 1):
+                    events.append({
+                        "kind": "wait_for_iron_respawn",
+                        "iteration": iteration,
+                        "index": wait_index,
+                    })
+                    clean = backend.acquire_clean_observation(
+                        session_id=config.session_id,
+                        iteration=iteration + 1,
+                    )
+                    state = clean.state
+                    events.append(_clean_event("respawn_reacquisition", iteration, clean))
+                    if state.status is not WorldStatePublicationStatus.BLOCKED or state.stop_reason is not MiningOnlyStopReason.NO_AVAILABLE_IRON:
+                        break
             if state.status is WorldStatePublicationStatus.BLOCKED:
                 return finish(
                     False,
                     MiningOnlyPhase.STOPPED,
                     MiningLoopStopReason.REACQUISITION_BLOCKED,
                     state.stop_reason,
-                    f"fresh post-movement state blocked: {state.stop_reason.value}",
+                    f"fresh post-attempt state blocked: {state.stop_reason.value}",
                 )
             assert state.epoch is not None
             if not state.epoch.strictly_newer_than(witness.epoch):
@@ -696,10 +720,15 @@ def run_mining_until_full(
                     decision.stop_reason,
                     f"fresh +1 state was rejected: {decision.stop_reason.value}",
                 )
-            verified_ores += 1
+            ore_gained = decision.progress in {
+                MiningProgressKind.INVENTORY_INCREMENTED,
+                MiningProgressKind.RESOURCE_DEPLETED_AND_INVENTORY_INCREMENTED,
+            }
+            if ore_gained:
+                verified_ores += 1
             events.append(
                 {
-                    "kind": "verified_progress",
+                    "kind": "verified_progress" if ore_gained else "lost_race_reacquired",
                     "iteration": iteration,
                     "attempt_id": proposal.attempt_id,
                     "dispatch_id": dispatched.receipt.dispatch_id,
@@ -707,6 +736,7 @@ def run_mining_until_full(
                     "inventory_before": before,
                     "inventory_after": state.inventory.occupied_slots,
                     "progress_kind": decision.progress.value,
+                    "progress_hint": progress_hint,
                     "next_phase": decision.session.phase.value,
                     "next_target_id": (
                         None if decision.proposal is None else decision.proposal.target_id
@@ -717,7 +747,7 @@ def run_mining_until_full(
                 end = state.inventory.occupied_slots
                 if (
                     end != INVENTORY_CAPACITY
-                    or verified_ores != click_count
+                    or verified_ores > click_count
                     or verified_ores != end - start_inventory
                     or decision.proposal is not None
                 ):
