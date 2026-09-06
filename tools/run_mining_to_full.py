@@ -140,6 +140,23 @@ class WindowsMiningToFullBackend:
         self._mine_hover_signature = mine_hover_signature
         self._evaluate_resource = evaluate_resource
         self.pose_detectors = build_pose_detectors()
+
+        # Autonomous startup owns bringing the exact reviewed RuneLite HWND to
+        # foreground once. Do it inside the mining process so the caller/UI cannot
+        # steal focus between a separate focus command and the first clean frame.
+        device = RealWin32MiningInputDevice()
+        window = device.verify_target_window(self.title_substring)
+        if window.hwnd != self.expected_hwnd:
+            raise RuntimeError(
+                f"RuneLite HWND changed: expected {self.expected_hwnd}, got {window.hwnd}"
+            )
+        if self.api.foreground_window() != self.expected_hwnd:
+            if not self.api.focus_window(self.expected_hwnd):
+                raise RuntimeError("failed to focus exact RuneLite HWND at mining startup")
+            time.sleep(0.20)
+        if self.api.foreground_window() != self.expected_hwnd:
+            raise RuntimeError("RuneLite did not remain foreground at mining startup")
+
         self.capture_source.open()
         self.opened = True
 
