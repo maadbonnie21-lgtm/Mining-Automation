@@ -620,6 +620,13 @@ class ProductionMiningPerceptionEvaluator:
                 ), None
 
         result = self._inventory_analyzer.analyze(frame)
+        # The retained experiment has a known iron sprite absent from frozen V3.
+        # Require full positive evidence; never restore the empty-hash complement.
+        from .perception.inventory.retained_iron import retained_iron_count
+
+        iron_count = retained_iron_count(frame, result)
+        if iron_count is not None:
+            return InventoryState(iron_count, INVENTORY_CAPACITY, 1.0), None
         if self._session_inventory_detector is not None:
             from .perception.inventory.adapter import inventory_state_from_observation
 
