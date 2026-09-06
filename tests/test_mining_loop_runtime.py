@@ -632,23 +632,25 @@ def test_inventory_27_to_28_completes_with_no_29th_click() -> None:
     assert result.phase is MiningOnlyPhase.COMPLETE
 
 
-def test_passive_inventory_unknown_waits_for_readable_plus_one_frame() -> None:
+def test_passive_inventory_unknown_stops_before_later_readable_frame() -> None:
     backend = _FakeBackend(
         [_state(100, 27), _state(200, 28)],
-        [[None, None, 28]],
+        [[None, 28]],
     )
     result = run_mining_until_full(backend, _config(max_passive=3))
-    assert result.success is True
-    assert result.end_inventory == 28
+    assert result.success is False
+    assert result.stop_reason is MiningLoopStopReason.PASSIVE_INVENTORY_UNKNOWN
+    assert result.state_stop_reason is MiningOnlyStopReason.INVENTORY_UNKNOWN
     assert result.click_count == 1
-    assert result.verified_ores == 1
+    assert result.verified_ores == 0
     assert backend.dispatch_calls == 1
 
 
-def test_passive_inventory_unknown_for_entire_window_times_out_without_retry() -> None:
+def test_passive_inventory_unknown_stops_without_retry() -> None:
     backend = _FakeBackend([_state(100, 5)], [[None, None, None]])
     result = run_mining_until_full(backend, _config(max_passive=3))
-    assert result.stop_reason is MiningLoopStopReason.PASSIVE_PROGRESS_TIMEOUT
+    assert result.stop_reason is MiningLoopStopReason.PASSIVE_INVENTORY_UNKNOWN
+    assert result.state_stop_reason is MiningOnlyStopReason.INVENTORY_UNKNOWN
     assert result.click_count == 1
     assert backend.dispatch_calls == 1
 
