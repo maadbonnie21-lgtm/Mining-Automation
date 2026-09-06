@@ -421,6 +421,7 @@ def run_mining_until_full(
             MiningOnlyStopReason.RESOURCE_UNKNOWN,
             MiningOnlyStopReason.RESOURCE_VIEW_NOT_SUPPORTED,
             MiningOnlyStopReason.NO_AVAILABLE_IRON,
+            MiningOnlyStopReason.STALE_PERCEPTION,
         }
         if (
             state.status is WorldStatePublicationStatus.BLOCKED
@@ -757,6 +758,7 @@ def run_mining_until_full(
                 MiningOnlyStopReason.RESOURCE_UNKNOWN,
                 MiningOnlyStopReason.RESOURCE_VIEW_NOT_SUPPORTED,
                 MiningOnlyStopReason.NO_AVAILABLE_IRON,
+                MiningOnlyStopReason.STALE_PERCEPTION,
             }
             if (
                 state.status is WorldStatePublicationStatus.BLOCKED

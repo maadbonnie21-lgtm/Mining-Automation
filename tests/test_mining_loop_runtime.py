@@ -24,10 +24,12 @@ from mining_automation.mining_slice import (
     MiningAttemptDispatchReceipt,
     MiningAttemptProposal,
     MiningOnlyPhase,
+    MiningOnlyStopReason,
     PerceptionEpoch,
     PerceptionReleaseIdentity,
     ResourcePerceptionEnvelope,
     ResourceViewState,
+    WorldStatePublicationStatus,
     assemble_atomic_mining_world_state,
 )
 
@@ -487,6 +489,36 @@ def test_exact_plus_one_reacquires_then_continues_to_full() -> None:
     assert result.verified_ores == 2
     assert result.click_count == 2
     assert result.phase is MiningOnlyPhase.COMPLETE
+
+
+def test_stale_perception_after_plus_one_recaptures_without_extra_click() -> None:
+    backend = _FakeBackend(
+        [
+            _state(100, 26, available=frozenset({"northwest"})),
+            _state(200, 27, available=frozenset({"southwest"})),
+            _state(300, 28, available=frozenset({"center"})),
+        ],
+        [[27], [28]],
+    )
+    stale = replace(
+        backend.clean_states[1],
+        status=WorldStatePublicationStatus.BLOCKED,
+        stop_reason=MiningOnlyStopReason.STALE_PERCEPTION,
+        epoch=None,
+        resource_release=None,
+        inventory_release=None,
+        resources=(),
+        inventory=InventoryState(None, INVENTORY_CAPACITY, 0.0),
+        selected_target=None,
+        blockers=(MiningOnlyStopReason.STALE_PERCEPTION,),
+    )
+    backend.clean_states.insert(1, stale)
+    backend.clean_windows.insert(1, _window())
+    result = run_mining_until_full(backend, _config())
+    assert result.success is True
+    assert result.click_count == 2
+    waits = [event for event in result.events if event["kind"] == "wait_for_resource_reacquisition"]
+    assert len(waits) == 1
 
 
 def test_resource_unknown_after_plus_one_waits_for_settled_reacquisition() -> None:
