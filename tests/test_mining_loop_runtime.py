@@ -160,6 +160,7 @@ class _FakeBackend:
         hover_source_override_on_attempt: int | None = None,
         dispatch_ids: list[str] | None = None,
         passive_confidence: float = 1.0,
+        passive_resource_release: PerceptionReleaseIdentity = _RESOURCE_RELEASE,
         passive_release: PerceptionReleaseIdentity = _INVENTORY_RELEASE,
         passive_availability: list[list[bool | None]] | None = None,
     ) -> None:
@@ -172,6 +173,7 @@ class _FakeBackend:
             f"dispatch-{index}" for index in range(1, len(passive_counts) + 1)
         ]
         self.passive_confidence = passive_confidence
+        self.passive_resource_release = passive_resource_release
         self.passive_release = passive_release
         self.passive_availability = passive_availability or [
             [None] * len(row) for row in passive_counts
@@ -281,6 +283,7 @@ class _FakeBackend:
         sequence = proposal.source_epoch.cycle_sequence + 1 + passive_index
         return PassiveMiningObservation(
             epoch=_epoch(sequence, label=f"passive-{iteration}-{passive_index}"),
+            resource_release=self.passive_resource_release,
             inventory_release=self.passive_release,
             inventory=InventoryState(
                 occupied_slots=occupied,
@@ -447,6 +450,25 @@ def test_depleted_target_without_ore_is_lost_race_then_miner_continues() -> None
     assert len(lost) == 1
     assert lost[0]["progress_kind"] == "resource_depleted"
     assert lost[0]["inventory_before"] == lost[0]["inventory_after"] == 26
+
+
+def test_lost_race_survives_same_target_respawn_before_reacquisition() -> None:
+    backend = _FakeBackend(
+        [
+            _state(100, 27, available=frozenset({"northwest"})),
+            _state(200, 27, available=frozenset()),
+            _state(300, 27, available=frozenset({"northwest"})),
+            _state(400, 28, available=frozenset({"southwest"})),
+        ],
+        [[27], [28]],
+        passive_availability=[[False], [False]],
+    )
+    result = run_mining_until_full(backend, _config())
+    assert result.success is True
+    assert result.end_inventory == 28
+    assert result.click_count == 2
+    assert result.verified_ores == 1
+    assert len([event for event in result.events if event["kind"] == "lost_race_reacquired"]) == 1
 
 
 def test_exact_plus_one_reacquires_then_continues_to_full() -> None:
@@ -616,6 +638,21 @@ def test_post_progress_clean_reacquisition_must_be_strictly_newer() -> None:
     backend = _FakeBackend([_state(100, 27), _state(100, 28)], [[28]])
     result = run_mining_until_full(backend, _config())
     assert result.stop_reason is MiningLoopStopReason.REACQUISITION_NOT_NEWER
+    assert result.click_count == 1
+
+
+def test_changed_passive_resource_release_is_rejected() -> None:
+    foreign_release = replace(
+        _RESOURCE_RELEASE,
+        release_record_sha256=_digest("foreign-resource-release"),
+    )
+    backend = _FakeBackend(
+        [_state(100, 27)],
+        [[28]],
+        passive_resource_release=foreign_release,
+    )
+    result = run_mining_until_full(backend, _config())
+    assert result.stop_reason is MiningLoopStopReason.PASSIVE_RESOURCE_LINEAGE_CHANGED
     assert result.click_count == 1
 
 

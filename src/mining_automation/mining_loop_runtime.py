@@ -59,6 +59,7 @@ class MiningLoopStopReason(StrEnum):
     DISPATCH_RECEIPT_INVALID = "dispatch_receipt_invalid"
     DISPATCH_RECEIPT_REPLAYED = "dispatch_receipt_replayed"
     PASSIVE_OBSERVATION_NOT_NEWER = "passive_observation_not_newer"
+    PASSIVE_RESOURCE_LINEAGE_CHANGED = "passive_resource_lineage_changed"
     PASSIVE_INVENTORY_LINEAGE_CHANGED = "passive_inventory_lineage_changed"
     PASSIVE_INVENTORY_UNKNOWN = "passive_inventory_unknown"
     PASSIVE_INVENTORY_CONFIDENCE_BELOW_FLOOR = (
@@ -171,6 +172,7 @@ class MiningDispatchResult:
 @dataclass(frozen=True, slots=True)
 class PassiveMiningObservation:
     epoch: PerceptionEpoch
+    resource_release: PerceptionReleaseIdentity
     inventory_release: PerceptionReleaseIdentity
     inventory: InventoryState
     unknown_reason: str | None
@@ -180,6 +182,10 @@ class PassiveMiningObservation:
     def __post_init__(self) -> None:
         if type(self.epoch) is not PerceptionEpoch:
             raise ValueError("passive epoch must be exact")
+        if type(self.resource_release) is not PerceptionReleaseIdentity:
+            raise ValueError("passive Resource release must be exact")
+        if self.resource_release.release_role != "released-resource-perception":
+            raise ValueError("passive evidence must use the Resource release role")
         if type(self.inventory_release) is not PerceptionReleaseIdentity:
             raise ValueError("passive Inventory release must be exact")
         if self.inventory_release.release_role != "released-inventory-perception":
@@ -630,6 +636,14 @@ def run_mining_until_full(
                         "passive verification was stale, replayed, or predates dispatch",
                     )
                 last_epoch = passive.epoch
+                if passive.resource_release != proposal.resource_release:
+                    return finish(
+                        False,
+                        MiningOnlyPhase.STOPPED,
+                        MiningLoopStopReason.PASSIVE_RESOURCE_LINEAGE_CHANGED,
+                        MiningOnlyStopReason.PERCEPTION_LINEAGE_CHANGED,
+                        "passive Resource release identity changed",
+                    )
                 if passive.inventory_release != proposal.inventory_release:
                     return finish(
                         False,
@@ -751,8 +765,49 @@ def run_mining_until_full(
                     MiningOnlyPhase.STOPPED,
                     MiningLoopStopReason.REACQUISITION_NOT_NEWER,
                     MiningOnlyStopReason.NEWER_OBSERVATION_REQUIRED,
-                    "post-movement clean state was not newer than the +1 witness",
+                    "post-movement clean state was not newer than the passive witness",
                 )
+            if progress_hint == "target_depleted" and state.inventory.occupied_slots == before:
+                if (
+                    state.resource_release != proposal.resource_release
+                    or state.inventory_release != proposal.inventory_release
+                ):
+                    return finish(
+                        False,
+                        MiningOnlyPhase.STOPPED,
+                        MiningLoopStopReason.STATE_MACHINE_STOPPED,
+                        MiningOnlyStopReason.PERCEPTION_LINEAGE_CHANGED,
+                        "fresh lost-race reacquisition changed perception lineage",
+                    )
+                decision = begin_mining_only_session(
+                    session_id=config.session_id,
+                    state=state,
+                    now_monotonic_s=max(time.monotonic(), state.epoch.captured_monotonic_s),
+                )
+                if decision.session.phase is not MiningOnlyPhase.READY or decision.proposal is None:
+                    return finish(
+                        False,
+                        MiningOnlyPhase.STOPPED,
+                        MiningLoopStopReason.STATE_MACHINE_STOPPED,
+                        decision.stop_reason,
+                        "fresh lost-race state did not expose a new READY target",
+                    )
+                events.append(
+                    {
+                        "kind": "lost_race_reacquired",
+                        "iteration": iteration,
+                        "attempt_id": proposal.attempt_id,
+                        "dispatch_id": dispatched.receipt.dispatch_id,
+                        "target_id": proposal.target_id,
+                        "inventory_before": before,
+                        "inventory_after": state.inventory.occupied_slots,
+                        "progress_kind": MiningProgressKind.RESOURCE_DEPLETED.value,
+                        "progress_hint": progress_hint,
+                        "next_phase": decision.session.phase.value,
+                        "next_target_id": decision.proposal.target_id,
+                    }
+                )
+                continue
             decision = reobserve_mining_attempt(
                 attempted.session,
                 state,
