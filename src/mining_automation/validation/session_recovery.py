@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final
 
@@ -140,10 +141,63 @@ WELCOME_CLICK_HERE_TO_PLAY: Final[tuple[SessionScreenFingerprint, ...]] = (
     ),
 )
 
-def matches_welcome_click_here_to_play(frame: Frame) -> bool:
-    """Recognize either reviewed render state of the in-client welcome screen."""
+WELCOME_BUTTON_REGION: Final[tuple[int, int, int, int]] = (270, 320, 230, 90)
+WELCOME_TEXT_REGION: Final[tuple[int, int, int, int]] = (350, 350, 140, 28)
+WELCOME_MIN_RED_DOMINANT_FRACTION: Final[float] = 0.25
+WELCOME_MIN_BRIGHT_TEXT_FRACTION: Final[float] = 0.08
 
-    return any(matches_session_screen(frame, item) for item in WELCOME_CLICK_HERE_TO_PLAY)
+
+def _region_fraction(
+    frame: Frame,
+    region: tuple[int, int, int, int],
+    predicate: Callable[[int, int, int], bool],
+) -> float:
+    x, y, width, height = region
+    stride = frame.width * 4
+    matched = 0
+    total = width * height
+    payload = frame.payload
+    for row in range(y, y + height):
+        start = row * stride + x * 4
+        for offset in range(start, start + width * 4, 4):
+            blue = payload[offset]
+            green = payload[offset + 1]
+            red = payload[offset + 2]
+            if predicate(red, green, blue):
+                matched += 1
+    return matched / total
+
+
+def _matches_welcome_button_signature(frame: Frame) -> bool:
+    if (
+        frame.width != EXPECTED_WIDTH
+        or frame.height != EXPECTED_HEIGHT
+        or frame.pixel_format is not PixelFormat.BGRA8888
+    ):
+        return False
+    red_fraction = _region_fraction(
+        frame,
+        WELCOME_BUTTON_REGION,
+        lambda red, green, blue: (
+            red > 90 and red * 4 > green * 5 and red * 4 > blue * 5
+        ),
+    )
+    if red_fraction < WELCOME_MIN_RED_DOMINANT_FRACTION:
+        return False
+    bright_fraction = _region_fraction(
+        frame,
+        WELCOME_TEXT_REGION,
+        lambda red, green, blue: red + green + blue > 570,
+    )
+    return bright_fraction >= WELCOME_MIN_BRIGHT_TEXT_FRACTION
+
+
+def matches_welcome_click_here_to_play(frame: Frame) -> bool:
+    """Recognize the reviewed Welcome screen across normal animation variance."""
+
+    return any(
+        matches_session_screen(frame, item) for item in WELCOME_CLICK_HERE_TO_PLAY
+    ) or _matches_welcome_button_signature(frame)
 
 
 def session_recovery_stage(frame: Frame) -> str | None:
