@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import lzma
+import random
 import zlib
 from pathlib import Path
 
@@ -178,6 +179,25 @@ def test_real_fifth_ore_still_rejects_corruption(fault: str) -> None:
     rgb = _set_pixel(rgb, x, y, (255, 0, 255))
     state, reason = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(
         _frame(rgb)
+    )
+    assert state.occupied_slots is None
+    assert reason is not None
+
+
+def test_scrambled_sprite_is_not_iron_even_with_the_same_color_totals() -> None:
+    """Synthetic adversarial image, not a real gameplay observation."""
+    rgb = bytearray(_region("three"))
+    coords = [(x, y) for y in range(32) for x in range(32)
+              if not _BACKGROUND_MASK[(y * 32 + x) // 8] & (1 << ((y * 32 + x) % 8))]
+    width = SUPPORTED_REGION[2]
+    values = [bytes(rgb[(y * width + x) * 3:(y * width + x) * 3 + 3])
+              for x, y in coords]
+    random.Random(0).shuffle(values)
+    for (x, y), value in zip(coords, values, strict=True):
+        offset = (y * width + x) * 3
+        rgb[offset:offset + 3] = value
+    state, reason = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(
+        _frame(bytes(rgb))
     )
     assert state.occupied_slots is None
     assert reason is not None
