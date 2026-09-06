@@ -31,9 +31,15 @@ class _Device:
         )
 
 
+class _CaptureBackend:
+    def __init__(self, *, title_substring: str) -> None:
+        assert title_substring == "RuneLite - Chief Luma"
+
+
 def test_verify_window_refocuses_exact_runelite(monkeypatch) -> None:
     monkeypatch.setattr(mining, "RealWin32MiningInputDevice", lambda: _Device())
     monkeypatch.setattr(mining, "RealWindowsCameraApi", lambda: _Api())
+    monkeypatch.setattr(mining, "WindowsCaptureBackend", _CaptureBackend)
     monkeypatch.setattr(mining.time, "sleep", lambda _: None)
     backend = mining.WindowsMiningToFullBackend(
         expected_hwnd=42,
@@ -46,6 +52,7 @@ def test_verify_window_refocuses_exact_runelite(monkeypatch) -> None:
     )
     api = _Api()
     backend.api = api
+    assert api.foreground == 99
     _, snapshot = backend._verify_window()
     assert api.focus_calls == [42]
     assert snapshot.foreground_hwnd == 42
