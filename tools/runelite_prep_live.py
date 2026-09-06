@@ -4,7 +4,9 @@
 Read-only mode may diagnose by title alone. ``--apply`` requires both the exact Git
 SHA and exact RuneLite HWND that the operator is authorizing for this PREP session.
 This command ends at READY and never starts mining; mining requires a separate later
-authorization and separate command.
+authorization and separate command. An explicitly requested --camera-step permits
+one existing bounded camera primitive after an unsupported observation; it is a
+measurement experiment, not an automatic search recipe. No camera input is default.
 """
 
 from __future__ import annotations
@@ -66,12 +68,21 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--title", default="RuneLite")
     parser.add_argument(
+        "--camera-step",
+        choices=tuple(step.value for step in PrepCameraStep),
+        default=None,
+        help="explicitly authorize at most one bounded camera measurement; requires --apply",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=None,
         help="new local evidence directory; default diagnostics/runelite-prep-live-<id>",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.camera_step is not None and not args.apply:
+        parser.error("--camera-step requires --apply and its exact SHA/HWND authorization")
+    return args
 
 
 class _ZeroMutationStopBackend(PrepBackend):
@@ -212,8 +223,9 @@ def main(argv: list[str] | None = None) -> int:
         git_sha=git_sha,
         prep_session_id=prep_session_id,
         confirm=args.confirm,
-        # First-live PREP remains camera-free. Unsupported Resource -> STOP.
-        camera_steps=(),
+        # Default remains camera-free. Only the single explicitly requested step
+        # may run, after current-view evaluation and all existing input guards.
+        camera_steps=(PrepCameraStep(args.camera_step),) if args.camera_step else (),
     )
     if strict_backend is not None:
         result = bind_ready_receipt_to_observation_window(result, strict_backend)
