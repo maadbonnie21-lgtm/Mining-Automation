@@ -672,10 +672,22 @@ def run_mining_until_full(
                     MiningOnlyStopReason.PUBLICATION_BLOCKED,
                     "post-movement perception was not neutral-cursor clean",
                 )
-            if state.status is WorldStatePublicationStatus.BLOCKED and state.stop_reason is MiningOnlyStopReason.NO_AVAILABLE_IRON:
+            recoverable_reacquisition = {
+                MiningOnlyStopReason.RESOURCE_UNKNOWN,
+                MiningOnlyStopReason.RESOURCE_VIEW_NOT_SUPPORTED,
+                MiningOnlyStopReason.NO_AVAILABLE_IRON,
+            }
+            if (
+                state.status is WorldStatePublicationStatus.BLOCKED
+                and state.stop_reason in recoverable_reacquisition
+            ):
                 for wait_index in range(1, config.max_passive_observations + 1):
                     events.append({
-                        "kind": "wait_for_iron_respawn",
+                        "kind": (
+                            "wait_for_iron_respawn"
+                            if state.stop_reason is MiningOnlyStopReason.NO_AVAILABLE_IRON
+                            else "wait_for_resource_reacquisition"
+                        ),
                         "iteration": iteration,
                         "index": wait_index,
                     })
@@ -684,8 +696,11 @@ def run_mining_until_full(
                         iteration=iteration + 1,
                     )
                     state = clean.state
-                    events.append(_clean_event("respawn_reacquisition", iteration, clean))
-                    if state.status is not WorldStatePublicationStatus.BLOCKED or state.stop_reason is not MiningOnlyStopReason.NO_AVAILABLE_IRON:
+                    events.append(_clean_event("settled_reacquisition", iteration, clean))
+                    if (
+                        state.status is not WorldStatePublicationStatus.BLOCKED
+                        or state.stop_reason not in recoverable_reacquisition
+                    ):
                         break
             if state.status is WorldStatePublicationStatus.BLOCKED:
                 return finish(
