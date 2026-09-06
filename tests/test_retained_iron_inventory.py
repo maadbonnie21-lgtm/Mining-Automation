@@ -212,3 +212,20 @@ def test_real_eighteen_iron_across_five_rows() -> None:
     )
     assert state.occupied_slots == 18
     assert reason is None
+
+
+def test_real_twenty_eight_iron_is_full_and_corruption_is_unknown() -> None:
+    fixture = json.loads((FIXTURE.parent / "retained_iron_twenty_eight_region.json").read_text())
+    rgb = zlib.decompress(base64.b64decode(fixture["rgb_zlib_base64"]))
+    assert hashlib.sha256(rgb).hexdigest() == fixture["region_rgb_sha256"]
+    state, reason = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(
+        _frame(rgb)
+    )
+    assert state.occupied_slots == 28
+    assert reason is None
+    corrupt = _set_pixel(rgb, 15, 231, (255, 0, 255))
+    state, reason = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(
+        _frame(corrupt)
+    )
+    assert state.occupied_slots is None
+    assert reason is not None

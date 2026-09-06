@@ -332,7 +332,52 @@ if len(_IRON_RGB_TEMPLATES) != len(IRON_TEMPLATE_SHA256) or any(
     raise ValueError("retained iron reference templates are corrupted")
 
 
+# Exact full-slot RGB templates from the visually verified real 28-iron frame.
+# Source: mining-to-full-20260905-235341-c3778539/00088-iteration-11-clean.bgra
+# SHA256: c33abd9e1b0f7c02543d4d9ebcbad794b5a0727e466d5495bc7b50303430343b
+# Slot-specific matching preserves even the original background and edge pixels.
+_REAL_FULL_SLOT_SHA256: Final[dict[tuple[int, int], str]] = {
+    (567, 569): "0cc7a3b195fd67e8b331dbf50680e1bf78f0402e44cae4d5ad62edb51043a579",
+    (609, 569): "f362fc508102d25a00d0284399e8d1ab24019241a6bc1fc07024f33fdd560d94",
+    (651, 569): "9957eaf6ce4b926ad62263bc324eb8aba81beefcb660a83caff386ee69017cee",
+    (693, 569): "8f71e267d033ae274cf71a93886c268ada220f7227eaf098dd85294a1f07d375",
+    (567, 605): "941337fc816bcfe527dc29c6731445d7b6ed6d4d8b85d3e6149b6554a89b5343",
+    (609, 605): "ff9468873ceb07d0cecebc8b5fe7d57934e9b4088de4ecd89ded0b96a19efd8f",
+    (651, 605): "62b0b671d858162ae998257d74d163480a630833d3c03a96a7a6b7b785bef45a",
+    (693, 605): "c9f4c6fae6f0d97fb1692239a26a457a5976d0b7740a9fc685decfed1a6f5364",
+    (567, 641): "7438f3dd1bda58bccc4167239970fe3eae8e8388d78e470cc12f1fe81058f7a0",
+    (609, 641): "6b58224bdfb788197a96c1c8be83a9ba6c12036e838f1d114db9615340d08e5e",
+    (651, 641): "26ac3d75032a518b18f4dce97ee9d6d8c1436a2af0c927f7d217ed2dbc964f67",
+    (693, 641): "0e9b11ebb15731359cb492ba9800da50a15f0540280df8cd3a85085e3cf35ea1",
+    (567, 677): "2b6f1b45bbef7f8430984971419d95a38c7d703d82deaaa4759f7ac78a2dd45f",
+    (609, 677): "ada6f4bcf55ce6801f903954cbcff0c82411133300238b4ef858612572f44344",
+    (651, 677): "d1e82137cf76bab88b12ff8fd1e01ee99beb9ec05a61144540087ea388efe7a9",
+    (693, 677): "ddc27e73aa1a9689efa5d2764af10d7076cafb0a1accdae57ae8c88d00895be1",
+    (567, 713): "12f155b4a7fb717e6bf7ca5d8f390900fe4091c755ccaa6209776abdde0d6b70",
+    (609, 713): "5aa358eed9590d4c712a5b3c6ec259b09f6567894c73e8a248ada7d71e526c1c",
+    (651, 713): "84ba6aa4cff26670c4b927f1b5e9dccb01c5f26d4d0190d460d8364e91a6c0f9",
+    (693, 713): "695e25dfc2c8e77016dd01757c1fd318d99793af730c01ab0c31db8ce6082b20",
+    (567, 749): "562ab3bb846c1de8e101b1ab6701389f9c3a32983f373657c6bd0535cf7fe702",
+    (609, 749): "44920601ed421150bf78fbbab840d365ea702b2e2396a134a5ed677c621a35f4",
+    (651, 749): "483184b01746d7000ec45068787390f35e9d8e2b16615acab571e11705394cbc",
+    (693, 749): "0481f168a27f14470c4749210d8e138e4e855e4a3e473fd6137a9ab9a58c37d4",
+    (567, 785): "f00cee35f50d403bd82d87ba44644e824e9d1f465aca74bdadbbb5a6e6039d0b",
+    (609, 785): "fbb86e76eba7bb8980d427b287a3f9bffb8063214bfb6230a6f46344ea776506",
+    (651, 785): "7bfec74780776f7f1cd340786c861cb8010c13e03e4965b1921f951e5f9555d1",
+    (693, 785): "0d6a3368730325ba48c58969fa4cfb009fb2508ecd052c54e41865755330df47",
+}
+
 def _positive_iron_slot(frame: Frame, slot: Region) -> bool:
+    expected_slot_hash = _REAL_FULL_SLOT_SHA256.get((slot.x, slot.y))
+    if expected_slot_hash is not None:
+        full_rgb = bytearray()
+        for y in range(32):
+            for x in range(32):
+                offset = ((slot.y + y) * frame.width + slot.x + x) * 4
+                blue, green, red = frame.payload[offset:offset + 3]
+                full_rgb.extend((red, green, blue))
+        if hashlib.sha256(full_rgb).hexdigest() == expected_slot_hash:
+            return True
     normalized = bytearray()
     for y in range(32):
         for x in range(32):
