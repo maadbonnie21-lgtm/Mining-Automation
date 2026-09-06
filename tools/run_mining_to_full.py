@@ -426,6 +426,7 @@ class WindowsMiningToFullBackend:
             )
         return PassiveMiningObservation(
             epoch=epoch,
+            resource_release=resource.release,
             inventory_release=inventory.release,
             inventory=inventory.inventory,
             unknown_reason=inventory.unknown_reason,
