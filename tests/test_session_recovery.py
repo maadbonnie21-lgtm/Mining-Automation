@@ -4,6 +4,8 @@ import hashlib
 
 from mining_automation.capture import Frame, PixelFormat, RawFrame
 from mining_automation.validation.session_recovery import (
+    DISCONNECTED_OK_CLIENT_POINT,
+    DISCONNECTED_SCREEN,
     PLAY_NOW_CLIENT_POINT,
     WELCOME_CLICK_HERE_TO_PLAY,
     WELCOME_PLAY_CLIENT_POINT,
@@ -34,12 +36,24 @@ def test_fingerprint_engine_rejects_wrong_geometry() -> None:
 
 
 def test_reviewed_play_now_point_is_inside_client() -> None:
+    dx, dy = DISCONNECTED_OK_CLIENT_POINT
+    assert 0 <= dx < 1005
+    assert 0 <= dy < 1078
     x, y = PLAY_NOW_CLIENT_POINT
     assert 0 <= x < 1005
     assert 0 <= y < 1078
     wx, wy = WELCOME_PLAY_CLIENT_POINT
     assert 0 <= wx < 1005
     assert 0 <= wy < 1078
+
+
+def test_disconnect_fingerprint_uses_four_capture_stable_anchors() -> None:
+    assert DISCONNECTED_SCREEN.fingerprint_id == "disconnected-ok-v1"
+    assert tuple(anchor.region for anchor in DISCONNECTED_SCREEN.anchors) == (
+        (235, 240, 305, 40),
+        (305, 305, 160, 50),
+        (205, 198, 360, 200),
+    )
 
 
 def test_welcome_fingerprint_uses_proven_foreground_anchors() -> None:

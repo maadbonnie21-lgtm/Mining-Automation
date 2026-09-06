@@ -582,10 +582,10 @@ def run_runelite_prep(
                         PrepStopReason.SESSION_RECOVERY_FAILED,
                         "Session recovery refused to repeat the same reviewed stage.",
                     )
-                if len(recovery_stages_seen) >= 2:
+                if len(recovery_stages_seen) >= 3:
                     raise PrepOperationError(
                         PrepStopReason.SESSION_RECOVERY_FAILED,
-                        "Session recovery exceeded the two reviewed re-entry stages.",
+                        "Session recovery exceeded the three reviewed re-entry stages.",
                     )
                 recovery_stages_seen.add(stage)
                 recovery = backend.recover_session(stage)

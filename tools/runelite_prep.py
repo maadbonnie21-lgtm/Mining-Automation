@@ -60,6 +60,8 @@ from mining_automation.validation.runelite_prep import (  # noqa: E402
     run_runelite_prep,
 )
 from mining_automation.validation.session_recovery import (  # noqa: E402
+    DISCONNECTED_OK_CLIENT_POINT,
+    DISCONNECTED_STAGE,
     PLAY_NOW_CLIENT_POINT,
     PREAUTHENTICATED_STAGE,
     WELCOME_PLAY_CLIENT_POINT,
@@ -383,7 +385,11 @@ class RealPrepBackend(PrepBackend):
                 f"reviewed stage: requested {stage!r}, observed {fresh_stage!r}.",
             )
         try:
-            if stage == PREAUTHENTICATED_STAGE:
+            if stage == DISCONNECTED_STAGE:
+                receipt = self._control().click_disconnected_ok(
+                    *DISCONNECTED_OK_CLIENT_POINT
+                )
+            elif stage == PREAUTHENTICATED_STAGE:
                 receipt = self._control().click_play_now(*PLAY_NOW_CLIENT_POINT)
             elif stage == WELCOME_PLAY_STAGE:
                 receipt = self._control().click_welcome_play(*WELCOME_PLAY_CLIENT_POINT)

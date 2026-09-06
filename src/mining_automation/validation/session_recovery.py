@@ -10,8 +10,10 @@ from ..capture import Frame, PixelFormat
 
 EXPECTED_WIDTH: Final[int] = 1005
 EXPECTED_HEIGHT: Final[int] = 1078
+DISCONNECTED_OK_CLIENT_POINT: Final[tuple[int, int]] = (384, 329)
 PLAY_NOW_CLIENT_POINT: Final[tuple[int, int]] = (383, 289)
 WELCOME_PLAY_CLIENT_POINT: Final[tuple[int, int]] = (384, 365)
+DISCONNECTED_STAGE: Final[str] = "disconnected_ok"
 PREAUTHENTICATED_STAGE: Final[str] = "preauthenticated_play_now"
 WELCOME_PLAY_STAGE: Final[str] = "welcome_click_here_to_play"
 
@@ -53,6 +55,31 @@ def matches_session_screen(
         _region_sha256(frame, anchor.region) == anchor.sha256
         for anchor in fingerprint.anchors
     )
+
+
+DISCONNECTED_SCREEN: Final[SessionScreenFingerprint] = SessionScreenFingerprint(
+    fingerprint_id="disconnected-ok-v1",
+    anchors=(
+        SessionScreenAnchor(
+            (235, 240, 305, 40),
+            "d25add6731eb9f7e16c5fbfeae577703739c2b1b890f6347c7ccf84158403b6f",
+        ),
+        SessionScreenAnchor(
+            (305, 305, 160, 50),
+            "bfc2dcb1d7a8e2d99cb1911d1a81e02039be0501465f3b4bd0e103c4c5553887",
+        ),
+        SessionScreenAnchor(
+            (205, 198, 360, 200),
+            "ad23f019afea83c999bc9f9aabf89219cbb4dc42587de4fd115cbb20f0548c7e",
+        ),
+    ),
+)
+
+
+def matches_disconnected_screen(frame: Frame) -> bool:
+    """Recognize the source-proven normal disconnect dialog."""
+
+    return matches_session_screen(frame, DISCONNECTED_SCREEN)
 
 
 PREAUTHENTICATED_PLAY_NOW: Final[SessionScreenFingerprint] = SessionScreenFingerprint(
@@ -123,6 +150,8 @@ def matches_welcome_click_here_to_play(frame: Frame) -> bool:
 def session_recovery_stage(frame: Frame) -> str | None:
     """Return the one reviewed recovery stage visible in this exact frame."""
 
+    if matches_disconnected_screen(frame):
+        return DISCONNECTED_STAGE
     if matches_preauthenticated_play_now(frame):
         return PREAUTHENTICATED_STAGE
     if matches_welcome_click_here_to_play(frame):
