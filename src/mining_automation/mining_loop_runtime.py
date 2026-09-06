@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Final, Literal, Protocol, final
 
@@ -319,6 +319,32 @@ def _clean_event(kind: str, iteration: int, clean: CleanMiningObservation) -> di
     }
 
 
+def _balance_available_target(
+    state: AtomicMiningWorldState,
+    target_attempt_counts: dict[str, int],
+) -> AtomicMiningWorldState:
+    """Prefer the least-used currently proven iron target; preserve source order on ties."""
+
+    if state.status is not WorldStatePublicationStatus.READY:
+        return state
+    available = tuple(
+        candidate
+        for candidate in state.resources
+        if candidate.available is True
+        and candidate.resource_type == "iron"
+        and candidate.interaction_region is not None
+    )
+    if not available:
+        return state
+    chosen = min(
+        available,
+        key=lambda candidate: target_attempt_counts.get(candidate.resource_id, 0),
+    )
+    if chosen == state.selected_target:
+        return state
+    return replace(state, selected_target=chosen)
+
+
 def run_mining_until_full(
     backend: MiningLoopBackend,
     config: MiningLoopConfig,
@@ -338,6 +364,7 @@ def run_mining_until_full(
     verified_ores = 0
     click_count = 0
     attempt_count = 0
+    target_attempt_counts: dict[str, int] = {}
     opened = False
 
     def finish(
@@ -371,7 +398,8 @@ def run_mining_until_full(
             session_id=config.session_id,
             iteration=1,
         )
-        state = clean.state
+        state = _balance_available_target(clean.state, target_attempt_counts)
+        clean = replace(clean, state=state)
         events.append(_clean_event("initial_clean_observation", 1, clean))
         if not _window_ok(config, clean.window):
             return finish(
@@ -403,7 +431,8 @@ def run_mining_until_full(
                     session_id=config.session_id,
                     iteration=1,
                 )
-                state = clean.state
+                state = _balance_available_target(clean.state, target_attempt_counts)
+                clean = replace(clean, state=state)
                 events.append(_clean_event("initial_settle_reacquisition", wait_index, clean))
                 if not _window_ok(config, clean.window):
                     return finish(
@@ -589,6 +618,9 @@ def run_mining_until_full(
                     f"one-click receipt rejected: {attempted.stop_reason.value}",
                 )
 
+            target_attempt_counts[proposal.target_id] = (
+                target_attempt_counts.get(proposal.target_id, 0) + 1
+            )
             click_count += 1
             targets.append(proposal.target_id)
             dispatch_ids.append(dispatched.receipt.dispatch_id)
@@ -702,7 +734,8 @@ def run_mining_until_full(
                 session_id=config.session_id,
                 iteration=iteration + 1,
             )
-            state = clean.state
+            state = _balance_available_target(clean.state, target_attempt_counts)
+            clean = replace(clean, state=state)
             events.append(_clean_event("post_attempt_clean_reacquisition", iteration, clean))
             if not _window_ok(config, clean.window):
                 return finish(
@@ -743,7 +776,8 @@ def run_mining_until_full(
                         session_id=config.session_id,
                         iteration=iteration + 1,
                     )
-                    state = clean.state
+                    state = _balance_available_target(clean.state, target_attempt_counts)
+                    clean = replace(clean, state=state)
                     events.append(_clean_event("settled_reacquisition", iteration, clean))
                     if (
                         state.status is not WorldStatePublicationStatus.BLOCKED

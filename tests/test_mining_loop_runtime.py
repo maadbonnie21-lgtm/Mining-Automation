@@ -545,6 +545,30 @@ def test_three_distinct_current_state_targets_are_selected_dynamically() -> None
     )
 
 
+def test_all_three_available_rotate_by_least_used_attempt_count() -> None:
+    backend = _FakeBackend(
+        [
+            _state(sequence, occupied, available=frozenset({"northwest", "southwest", "center"}))
+            for sequence, occupied in zip(
+                (100, 200, 300, 400, 500, 600, 700),
+                (22, 23, 24, 25, 26, 27, 28),
+                strict=True,
+            )
+        ],
+        [[23], [24], [25], [26], [27], [28]],
+    )
+    result = run_mining_until_full(backend, _config())
+    assert result.success is True
+    assert result.target_sequence == (
+        "varrock-east-iron-northwest",
+        "varrock-east-iron-southwest",
+        "varrock-east-iron-center",
+        "varrock-east-iron-northwest",
+        "varrock-east-iron-southwest",
+        "varrock-east-iron-center",
+    )
+
+
 def test_respawned_rock_can_be_selected_again_from_fresh_current_state() -> None:
     backend = _FakeBackend(
         [
