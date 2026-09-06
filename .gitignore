@@ -13,3 +13,8 @@ htmlcov/
 # Private real-client resource campaign sessions. Only an explicitly reviewed
 # export package may be placed outside this ignored root.
 /diagnostics/resource-release-campaigns/
+
+# Private real-client RuneLite PREP sessions. PREP writes local frames/receipts
+# here, but those artifacts must not dirty the exact checkout subsequently used
+# by the separately authorized mining-only runner.
+/diagnostics/runelite-prep-*/

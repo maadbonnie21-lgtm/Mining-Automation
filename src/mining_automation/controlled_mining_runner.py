@@ -597,7 +597,10 @@ class ProductionMiningPerceptionEvaluator:
                     break
                 if not occupied:
                     saw_empty = True
-            if prefix_valid:
+            # Empty-slot hashes prove EMPTY only. Their complement is not positive
+            # item evidence: an unfamiliar empty panel previously became 28/28 at
+            # confidence 1.0. Nonempty counts must use the existing classifiers below.
+            if prefix_valid and not any(occupied_mask):
                 occupied_slots = occupied_mask.count(True)
                 if self._session_inventory_detector is None:
                     from .perception.inventory.configuration import (
@@ -617,6 +620,13 @@ class ProductionMiningPerceptionEvaluator:
                 ), None
 
         result = self._inventory_analyzer.analyze(frame)
+        # The retained experiment has a known iron sprite absent from frozen V3.
+        # Require full positive evidence; never restore the empty-hash complement.
+        from .perception.inventory.retained_iron import retained_iron_count
+
+        iron_count = retained_iron_count(frame, result)
+        if iron_count is not None:
+            return InventoryState(iron_count, INVENTORY_CAPACITY, 1.0), None
         if self._session_inventory_detector is not None:
             from .perception.inventory.adapter import inventory_state_from_observation
 
