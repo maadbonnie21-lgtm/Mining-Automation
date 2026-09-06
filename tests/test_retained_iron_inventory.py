@@ -5,6 +5,8 @@ import base64
 import hashlib
 import json
 import lzma
+import random
+import zlib
 from pathlib import Path
 
 import pytest
@@ -112,7 +114,7 @@ def test_synthetic_known_iron_prefix_counts_through_28(count: int) -> None:
 
 @pytest.mark.parametrize("fault", [
     "unfamiliar_core", "selection_border", "unknown_item", "tooltip",
-    "gutter_change", "non_prefix",
+    "gutter_change", "non_prefix", "unfamiliar_background", "missing_sprite_pixel",
 ])
 def test_faults_remain_unknown(fault: str) -> None:
     rgb = _region("three")
@@ -151,22 +153,79 @@ def test_faults_remain_unknown(fault: str) -> None:
     assert reason is not None
 
 
-@pytest.mark.parametrize("fault", ["unfamiliar_background", "missing_sprite_pixel"])
-def test_single_pixel_render_variation_keeps_known_iron_prefix(fault: str) -> None:
-    rgb = _region("three")
-    if fault == "unfamiliar_background":
-        rgb = _set_pixel(rgb, 0, 0, (65, 56, 46))
-    else:
-        rgb = _set_pixel(rgb, 15, 15, (62, 53, 41))
-    state, reason = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(
-        _frame(rgb)
-    )
-    assert state.occupied_slots == 3
-    assert state.confidence >= 0.8
-    assert reason is None
-
-
 def test_one_corrupted_slot_does_not_create_full_inventory() -> None:
     rgb = _set_pixel(_composed_prefix(28), 15, 15, (255, 0, 255))
     state, _ = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(_frame(rgb))
     assert state.occupied_slots is None
+
+
+def test_real_fifth_iron_after_relogin_is_counted_without_empty_startup() -> None:
+    fixture = json.loads((FIXTURE.parent / "retained_iron_five_region.json").read_text())
+    rgb = zlib.decompress(base64.b64decode(fixture["rgb_zlib_base64"]))
+    assert hashlib.sha256(rgb).hexdigest() == fixture["region_rgb_sha256"]
+    state, reason = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(
+        _frame(rgb)
+    )
+    assert state.occupied_slots == 5
+    assert state.confidence >= 0.8
+    assert reason is None
+
+
+@pytest.mark.parametrize("fault", ["core", "border", "gutter"])
+def test_real_fifth_ore_still_rejects_corruption(fault: str) -> None:
+    fixture = json.loads((FIXTURE.parent / "retained_iron_five_region.json").read_text())
+    rgb = zlib.decompress(base64.b64decode(fixture["rgb_zlib_base64"]))
+    x, y = {"core": (15, 51), "border": (0, 36), "gutter": (34, 46)}[fault]
+    rgb = _set_pixel(rgb, x, y, (255, 0, 255))
+    state, reason = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(
+        _frame(rgb)
+    )
+    assert state.occupied_slots is None
+    assert reason is not None
+
+
+def test_scrambled_sprite_is_not_iron_even_with_the_same_color_totals() -> None:
+    """Synthetic adversarial image, not a real gameplay observation."""
+    rgb = bytearray(_region("three"))
+    coords = [(x, y) for y in range(32) for x in range(32)
+              if not _BACKGROUND_MASK[(y * 32 + x) // 8] & (1 << ((y * 32 + x) % 8))]
+    width = SUPPORTED_REGION[2]
+    values = [bytes(rgb[(y * width + x) * 3:(y * width + x) * 3 + 3])
+              for x, y in coords]
+    random.Random(0).shuffle(values)
+    for (x, y), value in zip(coords, values, strict=True):
+        offset = (y * width + x) * 3
+        rgb[offset:offset + 3] = value
+    state, reason = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(
+        _frame(bytes(rgb))
+    )
+    assert state.occupied_slots is None
+    assert reason is not None
+
+
+def test_real_eighteen_iron_across_five_rows() -> None:
+    fixture = json.loads((FIXTURE.parent / "retained_iron_eighteen_region.json").read_text())
+    rgb = zlib.decompress(base64.b64decode(fixture["rgb_zlib_base64"]))
+    assert hashlib.sha256(rgb).hexdigest() == fixture["region_rgb_sha256"]
+    state, reason = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(
+        _frame(rgb)
+    )
+    assert state.occupied_slots == 18
+    assert reason is None
+
+
+def test_real_twenty_eight_iron_is_full_and_corruption_is_unknown() -> None:
+    fixture = json.loads((FIXTURE.parent / "retained_iron_twenty_eight_region.json").read_text())
+    rgb = zlib.decompress(base64.b64decode(fixture["rgb_zlib_base64"]))
+    assert hashlib.sha256(rgb).hexdigest() == fixture["region_rgb_sha256"]
+    state, reason = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(
+        _frame(rgb)
+    )
+    assert state.occupied_slots == 28
+    assert reason is None
+    corrupt = _set_pixel(rgb, 15, 231, (255, 0, 255))
+    state, reason = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(
+        _frame(corrupt)
+    )
+    assert state.occupied_slots is None
+    assert reason is not None
