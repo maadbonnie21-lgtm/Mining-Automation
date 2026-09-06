@@ -10,6 +10,9 @@ on:
       - src/mining_automation/mining_full_proof.py
       - src/mining_automation/controlled_mining_runner.py
       - tests/test_inventory_empty_hash_not_occupied.py
+      - tests/test_retained_iron_inventory.py
+      - tests/fixtures/retained_iron_inventory_regions.json
+      - src/mining_automation/perception/inventory/retained_iron.py
       - tests/test_mining_loop_runtime.py
       - tests/test_mining_full_proof.py
       - tests/test_live_mining_evidence_contract.py
@@ -47,11 +50,13 @@ jobs:
       - name: Ruff focused mining path
         run: >-
           ruff check
+          src/mining_automation/perception/inventory/retained_iron.py
           src/mining_automation/mining_loop_runtime.py
           src/mining_automation/mining_full_proof.py
           tests/test_mining_loop_runtime.py
           tests/test_mining_full_proof.py
           tests/test_inventory_empty_hash_not_occupied.py
+          tests/test_retained_iron_inventory.py
           tests/test_live_mining_evidence_contract.py
           tools/run_mining_to_full.py
           tools/validate_mining_to_full_result.py
@@ -70,6 +75,7 @@ jobs:
           tests/test_mining_slice_endurance.py
           tests/test_controlled_mining_runner.py
           tests/test_inventory_empty_hash_not_occupied.py
+          tests/test_retained_iron_inventory.py
           tests/test_windows_camera_nonactivating.py
       - name: Read-only full-run plan check
         shell: python
