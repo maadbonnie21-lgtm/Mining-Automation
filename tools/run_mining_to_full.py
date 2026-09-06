@@ -45,7 +45,6 @@ from mining_automation.mining_slice import (
     MiningAttemptDispatchReceipt,
     MiningAttemptProposal,
     PerceptionEpoch,
-    ResourceViewState,
     assemble_atomic_mining_world_state,
 )
 from mining_automation.perception.live_pose_references import (
@@ -424,16 +423,43 @@ class WindowsMiningToFullBackend:
             frame,
             f"iteration-{iteration}-passive-{passive_index}",
         )
-        resource, inventory = self.inventory_evaluator.evaluate(frame, epoch)
-        selected_available: bool | None = None
-        if resource.view is ResourceViewState.SUPPORTED:
-            selected_available = next(
-                (
-                    item.available
-                    for item in resource.resources
-                    if item.resource_id == proposal.target_id
-                ),
-                None,
+        if self.pose_detectors is None or self._evaluate_resource is None:
+            raise RuntimeError("pose-aware Resource evaluator was not opened")
+        passive_registration = dict(self.active_registration)
+        resource, _, _ = self._evaluate_resource(
+            frame,
+            epoch,
+            self.pose_detectors,
+            frozenset(),
+            passive_registration,
+        )
+        _, inventory = self.inventory_evaluator.evaluate(frame, epoch)
+        selected = next(
+            (item for item in resource.resources if item.resource_id == proposal.target_id),
+            None,
+        )
+        selected_available = None if selected is None else selected.available
+        selected_observed = selected is not None
+
+        rx, ry, rw, rh = proposal.target_region
+        client_point = (rx + rw // 2, ry + rh // 2)
+        mapping = self.api.pointer_mapping(self.expected_hwnd, *client_point)
+        screen_point = mapping.physical_screen.pair
+        cursor_proven = (
+            mapping.exact_round_trip
+            and self.api.foreground_window() == self.expected_hwnd
+            and self.api.cursor_position() == screen_point
+            and self.api.root_window_at_point(*screen_point) == self.expected_hwnd
+        )
+        interaction_proven: bool | None = None
+        if cursor_proven:
+            if self._mine_hover_signature is None:
+                raise RuntimeError("hover proof adapter was not opened")
+            interaction_proven = (
+                self._mine_hover_signature(frame.payload, frame.width).get(
+                    "proven_mine_iron_rocks"
+                )
+                is True
             )
         return PassiveMiningObservation(
             epoch=epoch,
@@ -442,6 +468,9 @@ class WindowsMiningToFullBackend:
             inventory=inventory.inventory,
             unknown_reason=inventory.unknown_reason,
             selected_target_available=selected_available,
+            selected_target_observed=selected_observed,
+            target_cursor_proven=cursor_proven,
+            target_interaction_proven=interaction_proven,
             frame_path=frame_path,
         )
 

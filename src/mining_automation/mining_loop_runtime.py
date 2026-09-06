@@ -177,6 +177,9 @@ class PassiveMiningObservation:
     inventory: InventoryState
     unknown_reason: str | None
     selected_target_available: bool | None
+    selected_target_observed: bool = False
+    target_cursor_proven: bool = False
+    target_interaction_proven: bool | None = None
     frame_path: str | None = None
 
     def __post_init__(self) -> None:
@@ -196,6 +199,12 @@ class PassiveMiningObservation:
             raise ValueError("UNKNOWN passive Inventory requires a reason")
         if self.inventory.occupied_slots is not None and self.unknown_reason is not None:
             raise ValueError("known passive Inventory cannot carry an UNKNOWN reason")
+        if type(self.selected_target_observed) is not bool:
+            raise ValueError("selected_target_observed must be bool")
+        if type(self.target_cursor_proven) is not bool:
+            raise ValueError("target_cursor_proven must be bool")
+        if self.target_interaction_proven is not None and type(self.target_interaction_proven) is not bool:
+            raise ValueError("target_interaction_proven must be bool or None")
 
 
 @final
@@ -629,6 +638,8 @@ def run_mining_until_full(
             last_epoch = proof.hover_epoch
             witness: PassiveMiningObservation | None = None
             progress_hint: str | None = None
+            target_loss_streak = 0
+            target_cycle_started = False
 
             for passive_index in range(1, config.max_passive_observations + 1):
                 passive = backend.observe_passive(
@@ -654,6 +665,9 @@ def run_mining_until_full(
                         "inventory_unknown_reason": passive.unknown_reason,
                         "inventory_delta": delta,
                         "selected_target_available": passive.selected_target_available,
+                        "selected_target_observed": passive.selected_target_observed,
+                        "target_cursor_proven": passive.target_cursor_proven,
+                        "target_interaction_proven": passive.target_interaction_proven,
                     }
                 )
                 if (
@@ -716,6 +730,30 @@ def run_mining_until_full(
                     witness = passive
                     progress_hint = "target_depleted"
                     break
+                if delta == 0:
+                    target_lost_now = (
+                        passive.selected_target_observed
+                        and passive.selected_target_available is not True
+                        and passive.target_cursor_proven
+                        and passive.target_interaction_proven is False
+                    )
+                    if target_lost_now:
+                        target_loss_streak += 1
+                        if target_loss_streak >= 2:
+                            target_cycle_started = True
+                        continue
+                    target_returned = (
+                        target_cycle_started
+                        and passive.selected_target_observed
+                        and passive.selected_target_available is True
+                        and passive.target_cursor_proven
+                        and passive.target_interaction_proven is True
+                    )
+                    if target_returned:
+                        witness = passive
+                        progress_hint = "target_cycle_without_inventory"
+                        break
+                    target_loss_streak = 0
                 if delta != 0:
                     return finish(
                         False,
@@ -806,7 +844,10 @@ def run_mining_until_full(
                     MiningOnlyStopReason.NEWER_OBSERVATION_REQUIRED,
                     "post-movement clean state was not newer than the passive witness",
                 )
-            if progress_hint == "target_depleted" and state.inventory.occupied_slots == before:
+            if progress_hint in {
+                "target_depleted",
+                "target_cycle_without_inventory",
+            } and state.inventory.occupied_slots == before:
                 if (
                     state.resource_release != proposal.resource_release
                     or state.inventory_release != proposal.inventory_release
@@ -840,7 +881,11 @@ def run_mining_until_full(
                         "target_id": proposal.target_id,
                         "inventory_before": before,
                         "inventory_after": state.inventory.occupied_slots,
-                        "progress_kind": MiningProgressKind.RESOURCE_DEPLETED.value,
+                        "progress_kind": (
+                            MiningProgressKind.RESOURCE_DEPLETED.value
+                            if progress_hint == "target_depleted"
+                            else MiningProgressKind.NONE.value
+                        ),
                         "progress_hint": progress_hint,
                         "next_phase": decision.session.phase.value,
                         "next_target_id": decision.proposal.target_id,

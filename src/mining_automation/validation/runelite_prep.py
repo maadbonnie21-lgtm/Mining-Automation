@@ -223,11 +223,15 @@ class PrepSceneObservation:
     @property
     def frozen_resource_gate_passed(self) -> bool:
         # READY is never delegated to a diagnostic score or an adapter assertion.
-        # Re-check all six retained landmark distances at the unchanged 0.12 ceiling
-        # and require the exact three macro zones used by the released Resource gate.
-        if len(self.landmark_distances) != RESOURCE_LANDMARK_COUNT:
+        # Re-check retained inlier landmark distances at the unchanged 0.12 ceiling.
+        # Registration may omit an already-rejected outlier, but never below the
+        # frozen 5-of-6 quorum or without all three required macro zones.
+        distance_count = len(self.landmark_distances)
+        if not RESOURCE_LANDMARK_QUORUM <= distance_count <= RESOURCE_LANDMARK_COUNT:
             return False
-        if len({name for name, _ in self.landmark_distances}) != RESOURCE_LANDMARK_COUNT:
+        if len({name for name, _ in self.landmark_distances}) != distance_count:
+            return False
+        if self.matched_landmarks > distance_count:
             return False
         within_threshold = sum(
             distance <= RESOURCE_LANDMARK_DISTANCE_THRESHOLD
