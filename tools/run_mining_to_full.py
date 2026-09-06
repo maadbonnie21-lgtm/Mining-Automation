@@ -272,6 +272,10 @@ class WindowsMiningToFullBackend:
     ) -> CleanMiningObservation:
         if session_id != self.session_id:
             raise RuntimeError("runtime session identity changed")
+        if iteration > 1:
+            # A mining click can move the character. Never carry the previous
+            # position's registered rock geometry into the next target choice.
+            self.active_registration = {"pose": None, "detector": None}
         _, snapshot = self._verify_window()
         self._neutralize_cursor()
         frame, frame_path = self._capture(f"iteration-{iteration:02d}-clean")

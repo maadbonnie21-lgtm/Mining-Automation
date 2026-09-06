@@ -65,3 +65,13 @@ def test_safe_entry_contains_no_prep_camera_navigation_or_banking_path() -> None
         "deposit_all",
     )
     assert not any(token in source for token in forbidden)
+
+
+def test_post_click_clean_observation_discards_stale_registered_geometry() -> None:
+    source = Path(safe_mining.mining.__file__).read_text(encoding="utf-8")
+    start = source.index("    def acquire_clean_observation(")
+    end = source.index("    def prove_hover(", start)
+    block = source[start:end]
+    reset = 'self.active_registration = {"pose": None, "detector": None}'
+    assert block.index("if iteration > 1:") < block.index(reset)
+    assert block.index(reset) < block.index("self._evaluate_resource(")
