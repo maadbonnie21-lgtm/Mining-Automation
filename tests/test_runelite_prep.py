@@ -569,6 +569,32 @@ def test_exact_five_of_six_distances_and_all_three_zones_can_pass() -> None:
     assert result.ready_for_mining is True
 
 
+def test_five_retained_inlier_distances_across_all_three_zones_can_pass() -> None:
+    observation = replace(
+        _observation(resource_supported=True, matched=5),
+        landmark_distances=tuple(
+            (f"landmark-{index}", 0.01) for index in range(5)
+        ),
+    )
+    backend = FakePrepBackend(observations=[observation])
+    result = _run(backend, mode=PrepMode.READ_ONLY, confirm=None)
+    assert result.ready_for_mining is True
+    assert result.stop_reason is PrepStopReason.NONE
+
+
+def test_four_retained_distances_cannot_satisfy_five_of_six_quorum() -> None:
+    observation = replace(
+        _observation(resource_supported=True, matched=4),
+        landmark_distances=tuple(
+            (f"landmark-{index}", 0.01) for index in range(4)
+        ),
+    )
+    backend = FakePrepBackend(observations=[observation])
+    result = _run(backend, mode=PrepMode.READ_ONLY, confirm=None)
+    assert result.ready_for_mining is False
+    assert result.stop_reason is PrepStopReason.RESOURCE_SCENE_UNSUPPORTED
+
+
 def test_default_prep_evidence_is_ignored_before_separate_miner_handoff() -> None:
     root = Path(__file__).resolve().parents[1]
     ignore = (root / ".gitignore").read_text(encoding="utf-8")
