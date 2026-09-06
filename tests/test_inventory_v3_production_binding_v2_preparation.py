@@ -28,6 +28,7 @@ PROTOCOL_V2_LOCK_SHA256 = "60ff2c511e46be3b87df4e0d9e4f705d897a4181f9152f2729ee9
 FROZEN_C4 = "74e2becd41af6b63b230ff11b07536d5da61aa80"
 CORRECTED_C5 = "7a4529e6ce34494ddd53c76882e0fbb8a76bfb4a"
 FROZEN_C7 = "861613a3830ebfa9249ef8e89f94a0188e03eadb"
+FROZEN_C8B = "519059e910bd196a9fdbeb8dcf5334c6ef74742c"
 P0_BUILD = "6c675125cdfa1cd91763f2e8df07cb2faae67796"
 PUBLICATION_FLOOR = 0.8
 
@@ -221,12 +222,11 @@ def test_c8b_preserves_frozen_inventory_repository_verifiers() -> None:
 
 
 def test_c8b_is_validation_test_only_descendant_of_frozen_c7() -> None:
-    head = _git("rev-parse", "HEAD")
     subprocess.run(
-        ("git", "-C", str(ROOT), "merge-base", "--is-ancestor", FROZEN_C7, head),
+        ("git", "-C", str(ROOT), "merge-base", "--is-ancestor", FROZEN_C7, FROZEN_C8B),
         check=True,
     )
-    changed_paths = set(_git("diff", "--name-only", FROZEN_C7, head).splitlines())
+    changed_paths = set(_git("diff", "--name-only", FROZEN_C7, FROZEN_C8B).splitlines())
     assert changed_paths == EXPECTED_CHANGED_PATHS
     assert not any(
         path.startswith(("src/", "tools/", ".github/")) for path in changed_paths
