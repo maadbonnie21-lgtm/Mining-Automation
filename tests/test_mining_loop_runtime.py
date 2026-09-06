@@ -165,6 +165,9 @@ class _FakeBackend:
         passive_resource_release: PerceptionReleaseIdentity = _RESOURCE_RELEASE,
         passive_release: PerceptionReleaseIdentity = _INVENTORY_RELEASE,
         passive_availability: list[list[bool | None]] | None = None,
+        passive_observed: list[list[bool]] | None = None,
+        passive_cursor_proven: list[list[bool]] | None = None,
+        passive_interaction: list[list[bool | None]] | None = None,
     ) -> None:
         self.clean_states = clean_states
         self.passive_counts = passive_counts
@@ -178,6 +181,15 @@ class _FakeBackend:
         self.passive_resource_release = passive_resource_release
         self.passive_release = passive_release
         self.passive_availability = passive_availability or [
+            [None] * len(row) for row in passive_counts
+        ]
+        self.passive_observed = passive_observed or [
+            [value is not None for value in row] for row in self.passive_availability
+        ]
+        self.passive_cursor_proven = passive_cursor_proven or [
+            [False] * len(row) for row in passive_counts
+        ]
+        self.passive_interaction = passive_interaction or [
             [None] * len(row) for row in passive_counts
         ]
         self.opened = False
@@ -294,6 +306,9 @@ class _FakeBackend:
             ),
             unknown_reason="tooltip_occlusion" if occupied is None else None,
             selected_target_available=self.passive_availability[iteration - 1][calls],
+            selected_target_observed=self.passive_observed[iteration - 1][calls],
+            target_cursor_proven=self.passive_cursor_proven[iteration - 1][calls],
+            target_interaction_proven=self.passive_interaction[iteration - 1][calls],
             frame_path=f"passive-{iteration}-{passive_index}.bgra",
         )
 
@@ -738,3 +753,63 @@ def test_initial_full_inventory_completes_without_input() -> None:
     assert backend.hover_calls == 0
     assert backend.dispatch_calls == 0
     assert backend.closed is True
+
+
+def test_competitor_target_cycle_without_ore_reacquires_and_continues() -> None:
+    backend = _FakeBackend(
+        [
+            _state(100, 26, available=frozenset({"northwest", "southwest"})),
+            _state(200, 26, available=frozenset({"southwest", "center"})),
+            _state(300, 27, available=frozenset({"center"})),
+            _state(400, 28, available=frozenset({"northwest"})),
+        ],
+        [[26, 26, 26, 26, 26, 26], [27], [28]],
+        passive_availability=[[None, None, None, None, None, True], [None], [None]],
+        passive_observed=[[True, True, True, True, True, True], [False], [False]],
+        passive_cursor_proven=[[True, True, True, True, True, True], [False], [False]],
+        passive_interaction=[[False, False, False, False, False, True], [None], [None]],
+    )
+    result = run_mining_until_full(backend, _config(max_passive=6))
+    assert result.success is True
+    assert result.click_count == 3
+    assert result.verified_ores == 2
+    lost = [event for event in result.events if event["kind"] == "lost_race_reacquired"]
+    assert len(lost) == 1
+    assert lost[0]["progress_hint"] == "target_cycle_without_inventory"
+    assert lost[0]["progress_kind"] == "none"
+    assert lost[0]["next_target_id"] == "varrock-east-iron-southwest"
+    passive = [
+        event for event in result.events
+        if event["kind"] == "passive_verification" and event["iteration"] == 1
+    ]
+    assert len(passive) == 6
+
+
+def test_single_target_flicker_does_not_abandon_before_inventory_plus_one() -> None:
+    backend = _FakeBackend(
+        [_state(100, 27), _state(200, 28)],
+        [[27, 27, 28]],
+        passive_availability=[[None, True, True]],
+        passive_observed=[[True, True, True]],
+        passive_cursor_proven=[[True, True, True]],
+        passive_interaction=[[False, True, True]],
+    )
+    result = run_mining_until_full(backend, _config(max_passive=3))
+    assert result.success is True
+    assert result.verified_ores == 1
+    assert not any(event["kind"] == "lost_race_reacquired" for event in result.events)
+
+
+def test_target_loss_without_return_still_stops_fail_closed() -> None:
+    backend = _FakeBackend(
+        [_state(100, 5)],
+        [[5, 5, 5]],
+        passive_availability=[[None, None, None]],
+        passive_observed=[[True, True, True]],
+        passive_cursor_proven=[[True, True, True]],
+        passive_interaction=[[False, False, False]],
+    )
+    result = run_mining_until_full(backend, _config(max_passive=3))
+    assert result.success is False
+    assert result.stop_reason is MiningLoopStopReason.PASSIVE_PROGRESS_TIMEOUT
+    assert result.click_count == 1
