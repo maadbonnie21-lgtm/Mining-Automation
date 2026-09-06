@@ -7,6 +7,7 @@ from mining_automation.validation.session_recovery import (
     DISCONNECTED_OK_CLIENT_POINT,
     DISCONNECTED_SCREEN,
     PLAY_NOW_CLIENT_POINT,
+    WELCOME_CLICK_HERE_TO_PLAY,
     WELCOME_PLAY_CLIENT_POINT,
     SessionScreenAnchor,
     SessionScreenFingerprint,
@@ -52,4 +53,15 @@ def test_disconnect_fingerprint_uses_four_capture_stable_anchors() -> None:
         (235, 240, 305, 40),
         (305, 305, 160, 50),
         (205, 198, 360, 200),
+    )
+
+
+def test_welcome_fingerprint_uses_cross_session_anchors() -> None:
+    assert len(WELCOME_CLICK_HERE_TO_PLAY) == 1
+    fingerprint = WELCOME_CLICK_HERE_TO_PLAY[0]
+    assert fingerprint.fingerprint_id == "welcome-click-here-to-play-v3"
+    assert tuple(anchor.region for anchor in fingerprint.anchors) == (
+        (366, 76, 16, 16),
+        (442, 76, 16, 16),
+        (310, 363, 12, 12),
     )

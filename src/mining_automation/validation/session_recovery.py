@@ -117,17 +117,26 @@ def is_pre_authenticated_play_now(frame: Frame) -> bool:
     return matches_preauthenticated_play_now(frame)
 
 
-# The first two post-launch frames have a distinct transitional render and are
-# intentionally NOT eligible for input.  Only the later steady render may expose
-# the reviewed stage-2 click.  Its three retained anchors were byte-identical
-# across independent steady sessions; the animated button-top strip is excluded.
+# The real recovery traces proved the steady Welcome screen only after the
+# passive Connecting/Loading transition canvases.  These small static patches
+# matched across independent login sessions and differ from disconnect, Play Now,
+# Connecting, Loading, and retained gameplay frames.
 WELCOME_CLICK_HERE_TO_PLAY: Final[tuple[SessionScreenFingerprint, ...]] = (
     SessionScreenFingerprint(
-        fingerprint_id="welcome-click-here-to-play-steady-v1",
+        fingerprint_id="welcome-click-here-to-play-v3",
         anchors=(
-            SessionScreenAnchor((330, 340, 115, 45), "3c3c7244f72e8bfb868e2b5730b637a92445557cddad19fc78064ffeb1cb4046"),
-            SessionScreenAnchor((35, 320, 215, 90), "0247e71654eb24c56cb0640ea2af7ffbd379cb03e5ddb45e7e18c1f6d8cf91f3"),
-            SessionScreenAnchor((520, 320, 220, 90), "f5af52195b47495011920e6e8720f5bceccd1cd861b2a09b00ead0aa7b0468c4"),
+            SessionScreenAnchor(
+                (366, 76, 16, 16),
+                "103873a231bbd796f481a4df16600146ad7fc41abf959a24c493808582561d47",
+            ),
+            SessionScreenAnchor(
+                (442, 76, 16, 16),
+                "7806d12cc3051366d9cb78b95e93ef34991ef903afe475929a266206aa052229",
+            ),
+            SessionScreenAnchor(
+                (310, 363, 12, 12),
+                "4e72fe6b1a7c8a224456da63ffe22c92520433cac821e1e29200fe2de53bd188",
+            ),
         ),
     ),
 )

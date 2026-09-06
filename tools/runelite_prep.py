@@ -506,6 +506,33 @@ class RealPrepBackend(PrepBackend):
             )
         frame, frame_path = self._capture("clean")
         epoch = self._epoch(frame, "clean")
+        gameplay = evaluate_client_input_readiness(frame)
+        recovery_stage = session_recovery_stage(frame)
+        if not gameplay.safe_to_attempt_camera_input:
+            # Login/disconnect/transition canvases cannot contain usable Resource or
+            # Inventory evidence. Return immediately so recovery polling stays fast
+            # and cannot invoke world-scene registration on a non-gameplay frame.
+            return PrepSceneObservation(
+                frame_id=frame.frame_id,
+                frame_sha256=hashlib.sha256(frame.payload).hexdigest(),
+                gameplay_ready=False,
+                gameplay_reason=gameplay.detail,
+                inventory_occupied=None,
+                inventory_confidence=0.0,
+                inventory_unknown_reason="gameplay_not_ready",
+                resource_supported=False,
+                resource_view=ResourceViewState.UNSUPPORTED.value,
+                accepted_pose_id=None,
+                software_registration_identity=None,
+                matched_landmarks=0,
+                matched_zones=(),
+                landmark_distances=(),
+                diagnostic_score=None,
+                frame_path=frame_path,
+                session_recovery_ready=recovery_stage is not None,
+                session_recovery_stage=recovery_stage,
+            )
+
         resource, pose, diagnoses = self.evaluate_resource(
             frame,
             epoch,
@@ -537,14 +564,38 @@ class RealPrepBackend(PrepBackend):
                     f"{registration.get('kind', 'distributed_affine_registration')}"
                 )
 
+        # Registration may consume a second capture. Re-bind session/gameplay facts
+        # to the exact final frame before Inventory publication.
         gameplay = evaluate_client_input_readiness(frame)
+        recovery_stage = session_recovery_stage(frame)
+        if not gameplay.safe_to_attempt_camera_input:
+            return PrepSceneObservation(
+                frame_id=frame.frame_id,
+                frame_sha256=hashlib.sha256(frame.payload).hexdigest(),
+                gameplay_ready=False,
+                gameplay_reason=gameplay.detail,
+                inventory_occupied=None,
+                inventory_confidence=0.0,
+                inventory_unknown_reason="gameplay_not_ready",
+                resource_supported=False,
+                resource_view=ResourceViewState.UNSUPPORTED.value,
+                accepted_pose_id=None,
+                software_registration_identity=None,
+                matched_landmarks=0,
+                matched_zones=(),
+                landmark_distances=(),
+                diagnostic_score=None,
+                frame_path=frame_path,
+                session_recovery_ready=recovery_stage is not None,
+                session_recovery_stage=recovery_stage,
+            )
+
         _, inventory = self.inventory_evaluator.evaluate(frame, epoch)
         matched, zones, distances, score = self._diagnosis_summary(
             pose,
             diagnoses,
             registration_identity=registration_identity,
         )
-        recovery_stage = session_recovery_stage(frame)
         return PrepSceneObservation(
             frame_id=frame.frame_id,
             frame_sha256=hashlib.sha256(frame.payload).hexdigest(),
