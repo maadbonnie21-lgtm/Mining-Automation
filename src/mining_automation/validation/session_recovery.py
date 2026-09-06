@@ -91,14 +91,14 @@ def is_pre_authenticated_play_now(frame: Frame) -> bool:
 
 
 # The first two post-launch frames have a distinct transitional render and are
-# intentionally NOT eligible for input.  Only the later steady render, which
-# remained stable across the prior trace, may expose the reviewed stage-2 click.
+# intentionally NOT eligible for input.  Only the later steady render may expose
+# the reviewed stage-2 click.  Its three retained anchors were byte-identical
+# across independent steady sessions; the animated button-top strip is excluded.
 WELCOME_CLICK_HERE_TO_PLAY: Final[tuple[SessionScreenFingerprint, ...]] = (
     SessionScreenFingerprint(
         fingerprint_id="welcome-click-here-to-play-steady-v1",
         anchors=(
             SessionScreenAnchor((330, 340, 115, 45), "3c3c7244f72e8bfb868e2b5730b637a92445557cddad19fc78064ffeb1cb4046"),
-            SessionScreenAnchor((275, 318, 220, 15), "1879d5951437b7d4a3ecfd3172068de26ed67f65470ce88006831481cd41ef3a"),
             SessionScreenAnchor((35, 320, 215, 90), "0247e71654eb24c56cb0640ea2af7ffbd379cb03e5ddb45e7e18c1f6d8cf91f3"),
             SessionScreenAnchor((520, 320, 220, 90), "f5af52195b47495011920e6e8720f5bceccd1cd861b2a09b00ead0aa7b0468c4"),
         ),
