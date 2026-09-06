@@ -174,10 +174,15 @@ class WindowsMiningToFullBackend:
             )
         snapshot = _window_snapshot(window, self.api.foreground_window())
         if snapshot.foreground_hwnd != self.expected_hwnd:
-            raise RuntimeError(
-                f"RuneLite is not foreground: expected {self.expected_hwnd}, "
-                f"got {snapshot.foreground_hwnd}"
-            )
+            if not self.api.focus_window(self.expected_hwnd):
+                raise RuntimeError("failed to refocus exact RuneLite HWND")
+            time.sleep(0.20)
+            snapshot = _window_snapshot(window, self.api.foreground_window())
+            if snapshot.foreground_hwnd != self.expected_hwnd:
+                raise RuntimeError(
+                    f"RuneLite did not regain foreground: expected {self.expected_hwnd}, "
+                    f"got {snapshot.foreground_hwnd}"
+                )
         return window, snapshot
 
     def _capture(self, label: str) -> tuple[Frame, str]:
@@ -221,8 +226,10 @@ class WindowsMiningToFullBackend:
         if self.api.cursor_position() != screen:
             raise RuntimeError("cursor did not remain at the neutral client point")
         time.sleep(self.neutral_settle_s)
-        if self.api.foreground_window() != self.expected_hwnd:
-            raise RuntimeError("foreground changed while waiting for tooltip clearance")
+        # Another trusted desktop app (for example the operator console) may steal
+        # focus while RuneLite remains the exact reviewed window. Reacquire that
+        # same HWND once instead of terminating an otherwise healthy mining run.
+        self._verify_window()
 
     @staticmethod
     def _registration_summary(
