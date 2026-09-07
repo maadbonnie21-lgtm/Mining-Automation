@@ -18,3 +18,8 @@ htmlcov/
 # here, but those artifacts must not dirty the exact checkout subsequently used
 # by the separately authorized mining-only runner.
 /diagnostics/runelite-prep-*/
+
+# Isolated navigation development dependencies and probe logs
+.route-deps/
+.venv-route/
+route-dependencies.log

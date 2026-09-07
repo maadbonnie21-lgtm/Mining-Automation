@@ -1,0 +1,560 @@
+{
+  "schema_version": 1,
+  "route_id": "varrock-east-mine-to-bank",
+  "status": "development_candidate_not_live_verified",
+  "source_manifest_sha256": "f8b42fccbb48bf80450bb5012a377d7d8f4a47d4a4ea9ac6998f4c3c63345b0e",
+  "source_pass": "2026-09-07 13:14:34-13:19:55 CDT",
+  "provenance": "Original operator frames; geometry derived at compilation, not at run time",
+  "assets": "terrain.npz",
+  "assets_sha256": "5e27e9aabadd4488cd70d0d96e9073ade55150f2f81a76bc75ed2160d2c9e104",
+  "minimap_offset": [
+    102.0,
+    83.0
+  ],
+  "minimap_radius": 78.0,
+  "gameplay_chrome_box_relative": [
+    -1.3390894819466248,
+    -0.49895342752485633,
+    -0.9099947671376244,
+    0.44296180010465663
+  ],
+  "healthy_display_box_relative": [
+    -1.6216640502354787,
+    -0.3001046572475147,
+    -1.3390894819466248,
+    -0.09079016221873402
+  ],
+  "healthy_display_reference": "23 HP",
+  "counter_reference_radius": 95.55000000000004,
+  "waypoints": [
+    {
+      "name": "mine_start",
+      "image_key": "map_00",
+      "tolerance": 3.0
+    },
+    {
+      "name": "wall_tree",
+      "image_key": "map_01",
+      "tolerance": 3.0
+    },
+    {
+      "name": "road_join",
+      "image_key": "map_02",
+      "tolerance": 3.0
+    },
+    {
+      "name": "north_road_progress_1",
+      "image_key": "map_03",
+      "tolerance": 3.0
+    },
+    {
+      "name": "north_road_progress_2",
+      "image_key": "map_04",
+      "tolerance": 3.0
+    },
+    {
+      "name": "pre_junction_north",
+      "image_key": "map_05",
+      "tolerance": 3.0
+    },
+    {
+      "name": "junction_approach",
+      "image_key": "map_06",
+      "tolerance": 3.0
+    },
+    {
+      "name": "top_junction_confirmed",
+      "image_key": "map_07",
+      "tolerance": 3.0
+    },
+    {
+      "name": "west_turn_verified",
+      "image_key": "map_08",
+      "tolerance": 3.0
+    },
+    {
+      "name": "westbound_road_progress_1",
+      "image_key": "map_09",
+      "tolerance": 3.0
+    },
+    {
+      "name": "tower_road",
+      "image_key": "map_10",
+      "tolerance": 3.0
+    },
+    {
+      "name": "road_intersection",
+      "image_key": "map_11",
+      "tolerance": 3.0
+    },
+    {
+      "name": "road_intersection_exit",
+      "image_key": "map_12",
+      "tolerance": 3.0
+    },
+    {
+      "name": "bank_approach",
+      "image_key": "map_13",
+      "tolerance": 3.0
+    },
+    {
+      "name": "final_west_approach",
+      "image_key": "map_14",
+      "tolerance": 3.0
+    },
+    {
+      "name": "south_bank_entrance_visible",
+      "image_key": "map_15",
+      "tolerance": 3.0
+    },
+    {
+      "name": "bank_interior_initial",
+      "image_key": "map_16",
+      "tolerance": 3.0
+    },
+    {
+      "name": "bank_interior_endpoint",
+      "image_key": "map_17",
+      "tolerance": 3.0
+    }
+  ],
+  "reference_frames": [
+    {
+      "name": "mine_start",
+      "image": "000-mine-start-before.jpg",
+      "sha256": "faab27235824f9787e7f60307aaff32f7c876d638dceab71665c2413ced32642",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007286624982953072
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION"
+    },
+    {
+      "name": "wall_tree",
+      "image": "011-wall-tree-settled-before-road-join.jpg",
+      "sha256": "dd55b81edc673ccf039d7a681b8ff42184b8bc52b76d62bdf98aa6ec38573b17",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007313413079828024
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          120.46401739697018,
+          45.57367508685602
+        ],
+        "distance": 55.81971053247276,
+        "inliers": 112,
+        "ratio": 0.7225806451612903,
+        "error": 0.12098319828510284,
+        "agreement": 0.9958590451445275,
+        "scale": 0.9991787873334222,
+        "rotation_degrees": -0.02851526796646214
+      }
+    },
+    {
+      "name": "road_join",
+      "image": "020-road-join-after.jpg",
+      "sha256": "c49cc3fe5f3e396a5a58bae6f816c9096f332ea9df70aab0505bba5cd5bf4360",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007211020682007074
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          115.48336072316754,
+          80.43590839353604
+        ],
+        "distance": 25.02521851493355,
+        "inliers": 145,
+        "ratio": 0.677570093457944,
+        "error": 0.1856418401002884,
+        "agreement": 0.8879409730228268,
+        "scale": 1.000595940533775,
+        "rotation_degrees": -0.04168191448555493
+      }
+    },
+    {
+      "name": "north_road_progress_1",
+      "image": "030-north-road-leg-1-after.jpg",
+      "sha256": "371c62868f01cd160cb237d445b3c8c1f9c07dfbbc7b0bbb0b649c2b5e20f77f",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007187176495790482
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          95.49037078271799,
+          54.21085073853522
+        ],
+        "distance": 41.28915038430002,
+        "inliers": 135,
+        "ratio": 0.6716417910447762,
+        "error": 0.1735903024673462,
+        "agreement": 0.6996382005597652,
+        "scale": 1.00119067328908,
+        "rotation_degrees": -0.004543773812680703
+      }
+    },
+    {
+      "name": "north_road_progress_2",
+      "image": "040-north-road-leg-2-after.jpg",
+      "sha256": "7925de00ad7a553ac2dd7d6711dab2623641121f07c5d18f3218fcdc25982d6b",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007179908454418182
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          95.33924342629854,
+          44.49906604780837
+        ],
+        "distance": 51.00118730649122,
+        "inliers": 109,
+        "ratio": 0.7124183006535948,
+        "error": 0.31131860613822937,
+        "agreement": 0.8324956867451804,
+        "scale": 0.9979952421082384,
+        "rotation_degrees": -0.23130236677124152
+      }
+    },
+    {
+      "name": "pre_junction_north",
+      "image": "050-north-road-leg-3-after.jpg",
+      "sha256": "9785e320dc45be9343a429504fb5aa449422ff7435d870ba262e8bdabff4c570",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007178682368248701
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          80.5092396391725,
+          47.96963927016619
+        ],
+        "distance": 49.83831946709163,
+        "inliers": 88,
+        "ratio": 0.6518518518518519,
+        "error": 0.14032083749771118,
+        "agreement": 0.8351427721594289,
+        "scale": 1.0003791615651785,
+        "rotation_degrees": -0.00039137870276033653
+      }
+    },
+    {
+      "name": "junction_approach",
+      "image": "060-pre-junction-after.jpg",
+      "sha256": "3e64ec3c7fb294356cca564da4d448c37adc5e83960e1df6085b4f051160132a",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007307483348995447
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          100.37088564832628,
+          50.72341291681701
+        ],
+        "distance": 45.04074020058885,
+        "inliers": 100,
+        "ratio": 0.7575757575757576,
+        "error": 0.4522542655467987,
+        "agreement": 0.85498320268757,
+        "scale": 0.9997435907471081,
+        "rotation_degrees": -0.2710234510330677
+      }
+    },
+    {
+      "name": "top_junction_confirmed",
+      "image": "071-top-junction-confirmed-before-west.jpg",
+      "sha256": "3a7f27304be626ba7a7d063eb1ad3316d2c277508bb688eca96cd4f54ff33793",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007168310694396496
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          95.47584384090091,
+          50.47636497519247
+        ],
+        "distance": 45.02364150495935,
+        "inliers": 78,
+        "ratio": 0.5864661654135338,
+        "error": 0.15009456872940063,
+        "agreement": 0.86310774835365,
+        "scale": 1.0008316358438323,
+        "rotation_degrees": -0.050554266439855514
+      }
+    },
+    {
+      "name": "west_turn_verified",
+      "image": "080-west-turn-after.jpg",
+      "sha256": "1e175ae37f5bb7973bcd76f82f8bc4f7d7bb7f3cfac4b17c5679c3ca85bf3e48",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007266261614859104
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          70.51843123804213,
+          90.57558457503123
+        ],
+        "distance": 25.4622985035935,
+        "inliers": 97,
+        "ratio": 0.7404580152671756,
+        "error": 0.15866953134536743,
+        "agreement": 0.7057031160170174,
+        "scale": 1.0001886130591247,
+        "rotation_degrees": -0.04570111152178959
+      }
+    },
+    {
+      "name": "westbound_road_progress_1",
+      "image": "090-westbound-road-leg-1-after.jpg",
+      "sha256": "8f8d9a931a03f6cf0d10a0d457d5b6d8e009428573c40b430d9658fae13ac690",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007152995560318232
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          70.50579608975478,
+          95.48670450718633
+        ],
+        "distance": 24.994207446467403,
+        "inliers": 169,
+        "ratio": 0.7934272300469484,
+        "error": 0.13746601343154907,
+        "agreement": 0.943759363835427,
+        "scale": 1.0000462756335613,
+        "rotation_degrees": 0.012534452794583819
+      }
+    },
+    {
+      "name": "tower_road",
+      "image": "100-westbound-road-leg-2-after.jpg",
+      "sha256": "0cad4afc1319e5cad89a7294d5454ddc22d2bd808e1cbfa67669159a6f9e6cb6",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007219705730676651
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          70.51026485891461,
+          95.54416296614839
+        ],
+        "distance": 24.989774164429278,
+        "inliers": 169,
+        "ratio": 0.8756476683937824,
+        "error": 0.15246611833572388,
+        "agreement": 0.9226392321397782,
+        "scale": 0.999808228119959,
+        "rotation_degrees": -0.02127018091400884
+      }
+    },
+    {
+      "name": "road_intersection",
+      "image": "110-westbound-tower-leg-after.jpg",
+      "sha256": "ae8d82d0a1fe08078b07578a85c8d5b8c89b5cc1a56620143dc06a9e3a1463ce",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007253435906022787
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          70.47798514956136,
+          95.50255243766765
+        ],
+        "distance": 25.022014980622757,
+        "inliers": 181,
+        "ratio": 0.8418604651162791,
+        "error": 0.12086211889982224,
+        "agreement": 0.9403750783788406,
+        "scale": 0.9999736445906938,
+        "rotation_degrees": -0.0023299993074759073
+      }
+    },
+    {
+      "name": "road_intersection_exit",
+      "image": "120-westbound-road-leg-3-after.jpg",
+      "sha256": "b91a8bd9cd68835a580c9633d58f6e91342ff96d71641a01406ce51763f882ff",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007164296694099903
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          70.52332593023863,
+          95.52386029226386
+        ],
+        "distance": 24.976685466663447,
+        "inliers": 173,
+        "ratio": 0.865,
+        "error": 0.12352621555328369,
+        "agreement": 0.9458677924932045,
+        "scale": 1.000171143945155,
+        "rotation_degrees": -0.016004774282122377
+      }
+    },
+    {
+      "name": "bank_approach",
+      "image": "130-westbound-intersection-exit-after.jpg",
+      "sha256": "a14c4d313141c1e3154e5a0e80bbef26a2ce49b0155a97ab78cd523ef30cde39",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.0072688572108745575
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          70.5371143677911,
+          95.49682944180601
+        ],
+        "distance": 24.962885833556594,
+        "inliers": 180,
+        "ratio": 0.7758620689655172,
+        "error": 0.1478976309299469,
+        "agreement": 0.936554820415879,
+        "scale": 0.9998514927503998,
+        "rotation_degrees": -0.0005462745218416991
+      }
+    },
+    {
+      "name": "final_west_approach",
+      "image": "140-westbound-bank-approach-1-after.jpg",
+      "sha256": "c9e94b267745692ca1212e4a007654b8d0d80d3e4bef59aad59a1e891c331373",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.00721182394772768
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          70.52616161533047,
+          95.4631615138292
+        ],
+        "distance": 24.973865554568373,
+        "inliers": 167,
+        "ratio": 0.8106796116504854,
+        "error": 0.1759902685880661,
+        "agreement": 0.9380467773611855,
+        "scale": 0.9998197543713743,
+        "rotation_degrees": -0.039730929738115026
+      }
+    },
+    {
+      "name": "south_bank_entrance_visible",
+      "image": "150-westbound-bank-approach-2-after.jpg",
+      "sha256": "d3949ecf5140a01886c0ee5c29a8584f2c6889793532cd3a4ad86532a05b22ec",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007162557914853096
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          75.5021663009458,
+          95.47515038579377
+        ],
+        "distance": 19.997849138303696,
+        "inliers": 187,
+        "ratio": 0.8237885462555066,
+        "error": 0.16383646428585052,
+        "agreement": 0.9654421616793212,
+        "scale": 1.0002683534854464,
+        "rotation_degrees": 0.013663054983722828
+      }
+    },
+    {
+      "name": "bank_interior_initial",
+      "image": "161-bank-interior-before-counter-step.jpg",
+      "sha256": "f2fec84085c658a2d58a02f9c68099647a77e711e0cea0ec0ac3858e06ff281a",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007167859934270382
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          100.49456040026408,
+          120.5386038051064
+        ],
+        "distance": 25.531888181271963,
+        "inliers": 142,
+        "ratio": 0.7759562841530054,
+        "error": 0.14856739342212677,
+        "agreement": 0.7842954505737753,
+        "scale": 0.9990222774392248,
+        "rotation_degrees": -0.017031983037362256
+      }
+    },
+    {
+      "name": "bank_interior_endpoint",
+      "image": "170-banker-counter-step-after.jpg",
+      "sha256": "da7175114afaeedf3383668af0167b0cec146f1acae1a393162d1e116d7d9b08",
+      "derived_geometry": {
+        "x": 858.95,
+        "y": 137.67500000000004,
+        "radius": 95.55000000000004,
+        "anchor_score": 0.007293843664228916
+      },
+      "measurement_origin": "DERIVED_AT_COMPILATION",
+      "previous_frame_registration": {
+        "target": [
+          100.47778058898817,
+          110.47388287173943
+        ],
+        "distance": 15.779590230696074,
+        "inliers": 168,
+        "ratio": 0.7962085308056872,
+        "error": 0.15091092884540558,
+        "agreement": 0.9575268817204301,
+        "scale": 1.0000083608603811,
+        "rotation_degrees": -0.00015383872856089488
+      }
+    }
+  ]
+}
