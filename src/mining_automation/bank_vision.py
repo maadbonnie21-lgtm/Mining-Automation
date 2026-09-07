@@ -30,7 +30,12 @@ class Match:
 
 
 def glyphs(image: Any) -> Any:
-    return (np.max(image[:, :, :3], axis=2) > 170).astype(np.uint8) * 255
+    b, g, r = cv2.split(image[:, :, :3])
+    white = np.minimum(np.minimum(b, g), r) > 200
+    cyan = (b > 140) & (g > 140) & (r < 120)
+    orange = (r > 180) & (g > 60) & (b < 80)
+    yellow = (r > 180) & (g > 180) & (b < 100)
+    return (white | cyan | orange | yellow).astype(np.uint8) * 255
 
 
 class BankVision:
