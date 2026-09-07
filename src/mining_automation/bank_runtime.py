@@ -84,7 +84,7 @@ class BankRunner:
             raise BankUnproven("requires_verified_28_iron_ore")
         if not self.vision.bank_controls(image):
             booth = self.vision.match(image, "booth", (0, 100, 530, image.shape[0] - 150))
-            if booth.score < 0.83:
+            if booth.score < 0.94:
                 raise BankUnproven("bank_booth_unproven:" + str(booth.score))
             self.hover(booth.centre)
             frame, image = self.observe("bank-booth-hover")
@@ -95,11 +95,12 @@ class BankRunner:
                 ),
                 key=lambda match: match.score,
             )
-            # Three visually reviewed live captures score 0.76-0.80 because
-            # native text sampling differs. This tolerance applies ONLY to
-            # opening the independently matched booth, never to depositing.
-            if proof.score < 0.72:
-                raise BankUnproven("exact_Bank_Bank_booth_hover_unproven:" + str(proof.score))
+            # Text sampling changes across captures. It is diagnostic for OPEN,
+            # not the input authority: the precise gold booth appearance is.
+            # No item action is possible until the bank title and X both verify.
+            self.record(
+                "BOOTH_TARGET_VERIFIED", appearance_score=booth.score, hover_text_score=proof.score
+            )
             self.click(frame, booth.centre, "OPEN_BANK_BOOTH")
             frame, image = self.wait_open()
         if open_only:
