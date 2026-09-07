@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "assets_sha256": "9303870d1d3c70e6ef5e6580f9c90531c33072a622d80065fc5449a1e49ddb4e",
+  "assets_sha256": "3e23fccd529a8251163c0db1928b4ad3290a58cc742a1c5c79f2ebe2d7c4a25c",
   "source": "retained user bank demonstration and current observed booth",
   "original_sha256": {
     "135": "cfb7b91319cb87314ea0775f1a3a146bb7a8b5dfd42fb2a269d1ff3e352f6444",
@@ -8,5 +8,6 @@
     "149": "b1336ae312bb975af0364852b91c4857a4296abd7bb3d259db81ff105faadec5",
     "151": "e149264555db8d18bfe2bc1ef02f057e44c530cfee2cbff872f92765755c4284",
     "159": "45942d385d408077b6e752a17a23e0f1035d7cf4b7889fe6d9a9dd1bdc237fa6"
-  }
+  },
+  "bank_hover_live_evidence_sha256": "8f572aa3ec2a236925203335db56d7310f3ffa5797998ccf53ecd239f5f1be4d"
 }
