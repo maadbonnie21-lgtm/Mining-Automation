@@ -267,8 +267,9 @@ class VisualRoute:
         self, image: np.ndarray, waypoint: Waypoint
     ) -> tuple[MinimapGeometry, Registration]:
         geometry = self.locator.locate(image)
-        if not self.verify_gameplay(image, geometry):
-            raise LocalizationError("gameplay_chrome_unproven")
+        # A valid minimap locator plus expected-route terrain registration is
+        # the gameplay gate. Login/disconnect screens fail the locator and/or
+        # terrain registration; do not bind route authority to dynamic orb text.
         registration = self.references[waypoint.image_key].register(crop_minimap(image, geometry))
         return geometry, registration
 
