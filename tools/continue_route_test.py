@@ -62,7 +62,9 @@ try:
         focus_existing=True,
         stop_file=a.output / "STOP",
     )
-    assert backend.initial == prior["end_window"], "window_changed_since_prior_run"
+    assert json.loads(json.dumps(backend.initial)) == prior["end_window"], (
+        "window_changed_since_prior_run"
+    )
     frame = backend.capture("resume-location-proof")
     geometry, registration = route.observe(frame.image, route.waypoints[0])
     assert route.verify_health(frame.image, geometry), "health_unproven"
