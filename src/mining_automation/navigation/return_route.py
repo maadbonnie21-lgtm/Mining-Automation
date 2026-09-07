@@ -6,6 +6,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+import cv2
+
 from mining_automation.bank_vision import BankVision
 
 from .runtime import RouteLimits, RouteResult, run_route
@@ -40,7 +42,15 @@ def run_bank_to_mine(
     if registration.distance > 4.0 or not route.verify_endpoint(start.image, geometry)["accepted"]:
         raise ReturnRouteError("bank_counter_start_unproven")
 
-    inventory = BankVision().inventory(start.image)
+    dpi = backend.initial["dpi_environment"]
+    logical = cv2.resize(
+        start.image,
+        None,
+        fx=1 / dpi["effective_mapping_scale_x"],
+        fy=1 / dpi["effective_mapping_scale_y"],
+        interpolation=cv2.INTER_AREA,
+    )
+    inventory = BankVision().inventory(logical)
     if inventory["empty_count"] != 28 or inventory["unknown_count"] != 0:
         raise ReturnRouteError("return_requires_verified_empty_inventory")
 

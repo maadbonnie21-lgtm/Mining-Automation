@@ -59,17 +59,28 @@ def main() -> int:
     for path in tracked:
         git("ls-files", "--error-unmatch", path.relative_to(ROOT).as_posix())
 
-    result = run_bank_to_mine(
-        hwnd=args.hwnd,
-        title=args.title,
-        output=args.output,
-        profile=profile,
-        focus_existing=args.focus_existing,
-    )
-    payload = result_payload(result)
+    try:
+        result = run_bank_to_mine(
+            hwnd=args.hwnd,
+            title=args.title,
+            output=args.output,
+            profile=profile,
+            focus_existing=args.focus_existing,
+        )
+        payload = result_payload(result)
+        payload["window_unchanged"] = result.start_window == result.end_window
+    except (Exception, KeyboardInterrupt) as exc:
+        payload = {
+            "status": "STOP",
+            "success": False,
+            "stop_reason": f"{type(exc).__name__}:{exc}",
+            "click_count": 0,
+            "direction": "bank_to_mine",
+            "evidence_origin": "standalone_program",
+            "operator_chose_walking_clicks": False,
+        }
     payload["git_sha"] = head
     payload["expected_title"] = args.title
-    payload["window_unchanged"] = result.start_window == result.end_window
     args.output.mkdir(parents=True, exist_ok=True)
     result_path = args.output / "result.json"
     result_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
