@@ -58,11 +58,32 @@ class SafeWindowsMiningToFullBackend(mining.WindowsMiningToFullBackend):
         self._hover_rejections: dict[str, int] = {}
         self._evidence_root = self.output
         self._open_count = 0
+        self._last_status: tuple[object, ...] | None = None
 
     def note_hover_rejection(self, target_id: str) -> None:
         """Deprioritize one no-click target on the next fresh observation."""
 
         self._hover_rejections[target_id] = self._hover_rejections.get(target_id, 0) + 1
+        # Reopening starts at iteration 1, so the normal post-movement reset
+        # does not run. Never reuse a registered geometry that just missed.
+        self.active_registration = {"pose": None, "detector": None}
+
+    def note_verified_progress(self) -> None:
+        """Old hover misses must not permanently penalize now-available rocks."""
+
+        self._hover_rejections.clear()
+
+    def _report_observation(self, observation: CleanMiningObservation) -> None:
+        state = observation.state
+        current = (state.inventory.occupied_slots, state.status, state.stop_reason)
+        if current == self._last_status:
+            return
+        self._last_status = current
+        occupied = state.inventory.occupied_slots
+        if occupied is None:
+            print(f"[RECOVERING] Fresh scene not ready: {state.stop_reason.value}", flush=True)
+        else:
+            print(f"[MINING] Inventory {occupied}/28; pose={observation.pose_id}", flush=True)
 
     def _deprioritize_hover_rejections(
         self,
@@ -193,6 +214,7 @@ class SafeWindowsMiningToFullBackend(mining.WindowsMiningToFullBackend):
         )
         _, final_window = self._verify_window()
         observation = replace(observation, window=final_window)
+        self._report_observation(observation)
         return self._deprioritize_hover_rejections(observation)
 
     def prove_hover(
@@ -239,9 +261,16 @@ def _run_with_hover_recovery(
     aggregate_attempt_count = 0
     first_start_inventory: int | None = None
     recovery_count = 0
+    misses_since_progress = 0
 
     while True:
         result: MiningLoopResult = original_run(backend, config)
+        # Count lack of progress, not historical misses throughout a productive
+        # run. Only verified ore gain resets the existing no-progress budget.
+        if result.verified_ores > 0:
+            misses_since_progress = 0
+            if isinstance(backend, SafeWindowsMiningToFullBackend):
+                backend.note_verified_progress()
         if first_start_inventory is None:
             first_start_inventory = result.start_inventory
         aggregate_events.extend(result.events)
@@ -271,10 +300,17 @@ def _run_with_hover_recovery(
         # exists for this rejected proposal, so a fresh reobserve is safe.
         target_id = _last_hover_target(result)
         recovery_count += 1
+        misses_since_progress += 1
+        print(
+            f"[RECOVERING] Hover not proven for {target_id}; no click. "
+            f"Reacquiring fresh geometry ({misses_since_progress} misses since last gain).",
+            flush=True,
+        )
         aggregate_events.append(
             {
                 "kind": "hover_action_reacquire",
                 "recovery_index": recovery_count,
+                "misses_since_progress": misses_since_progress,
                 "target_id": target_id,
                 "action": "zero_click_fresh_reobserve_and_deprioritize",
             }
@@ -282,9 +318,9 @@ def _run_with_hover_recovery(
         if target_id is not None and isinstance(backend, SafeWindowsMiningToFullBackend):
             backend.note_hover_rejection(target_id)
 
-        # Avoid an endless no-click hover loop only after the existing generous
-        # observation budget is exhausted. Normal misses remain recoverable.
-        if recovery_count >= config.max_passive_observations:
+        # Keep the existing bound for a persistently unrecognizable scene,
+        # but do not stop a productive run for old, already-recovered misses.
+        if misses_since_progress >= config.max_passive_observations:
             return replace(
                 result,
                 start_inventory=first_start_inventory,
@@ -295,8 +331,8 @@ def _run_with_hover_recovery(
                 dispatch_ids=tuple(aggregate_dispatch_ids),
                 events=tuple(aggregate_events),
                 detail=(
-                    f"exact hover action remained unavailable after {recovery_count} "
-                    "zero-click fresh reacquisitions"
+                    f"exact hover action remained unavailable after {misses_since_progress} "
+                    f"consecutive zero-click fresh reacquisitions; total_hover_misses={recovery_count}"
                 ),
             )
 
