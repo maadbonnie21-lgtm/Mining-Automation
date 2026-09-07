@@ -1,10 +1,9 @@
 """Conservative scale-aware fallback for frozen mining-scene landmarks.
 
-The normal exact-pose and rigid-translation paths remain authoritative. This
-module is used only after those paths fail. It keeps each landmark's original
-structural descriptor and maximum distance unchanged, still requires the
-original 5-of-6 quorum across all three frozen macro zones, and additionally
-requires all accepted matches to fit one modest non-reflected affine transform.
+Exact-pose and rigid-translation registration remain first. This fallback only
+runs after both fail. It keeps every original landmark descriptor and 0.12
+distance gate, still requires the frozen 5-of-6 quorum across all three zones,
+and searches one *global* nearby landmark scale for the whole scene.
 """
 
 from __future__ import annotations
@@ -31,15 +30,17 @@ _WORLD_BOTTOM: Final[int] = 850
 _SEARCH_RADIUS: Final[int] = 160
 _COARSE_STEP: Final[int] = 4
 _REFINE_RADIUS: Final[int] = 4
-_SUPPORTED_SIDES: Final[tuple[int, ...]] = (40, 44, 48, 52, 56)
+# Rigid 48x48 matching already ran and failed before this fallback is called.
+_SCALED_SIDES: Final[tuple[int, ...]] = (40, 44, 52, 56)
 _MAX_AFFINE_RESIDUAL: Final[float] = 12.0
 _MIN_AFFINE_SCALE: Final[float] = 0.75
 _MAX_AFFINE_SCALE: Final[float] = 1.25
+_MAX_SIDE_SPREAD: Final[int] = 8
 
 
 @dataclass(frozen=True, slots=True)
 class ScaledLandmarkMatch:
-    """One original landmark matched at a nearby location and modest scale."""
+    """One frozen landmark observed at a nearby region and scale."""
 
     landmark: SceneLandmarkProfile
     region: Region
@@ -113,7 +114,7 @@ def _descriptor_distances(
     )
 
 
-def _best_for_side(
+def _match_landmark(
     integral: FloatArray,
     landmark: SceneLandmarkProfile,
     side: int,
@@ -121,6 +122,7 @@ def _best_for_side(
     x, y, width, height = landmark.region
     if (width, height, landmark.grid) != (48, 48, 4):
         return None
+
     dx, dy = np.meshgrid(
         np.arange(-_SEARCH_RADIUS, _SEARCH_RADIUS + 1, _COARSE_STEP),
         np.arange(-_SEARCH_RADIUS, _SEARCH_RADIUS + 1, _COARSE_STEP),
@@ -132,11 +134,15 @@ def _best_for_side(
     if len(xs) == 0:
         return None
     distances = _descriptor_distances(
-        integral, xs, ys, side, landmark.reference_descriptor
+        integral,
+        xs,
+        ys,
+        side,
+        landmark.reference_descriptor,
     )
     order = np.lexsort((np.abs(xs - x) + np.abs(ys - y), distances))
-    coarse_index = int(order[0])
-    coarse_x, coarse_y = int(xs[coarse_index]), int(ys[coarse_index])
+    index = int(order[0])
+    coarse_x, coarse_y = int(xs[index]), int(ys[index])
 
     fx, fy = np.meshgrid(
         np.arange(coarse_x - _REFINE_RADIUS, coarse_x + _REFINE_RADIUS + 1),
@@ -149,7 +155,11 @@ def _best_for_side(
     if len(xs) == 0:
         return None
     distances = _descriptor_distances(
-        integral, xs, ys, side, landmark.reference_descriptor
+        integral,
+        xs,
+        ys,
+        side,
+        landmark.reference_descriptor,
     )
     order = np.lexsort((np.abs(xs - x) + np.abs(ys - y), distances))
     index = int(order[0])
@@ -160,32 +170,10 @@ def _best_for_side(
     )
 
 
-def _search_landmark(
-    integral: FloatArray,
-    landmark: SceneLandmarkProfile,
-) -> ScaledLandmarkMatch | None:
-    candidates = tuple(
-        match
-        for side in _SUPPORTED_SIDES
-        if (match := _best_for_side(integral, landmark, side)) is not None
-    )
-    if not candidates:
-        return None
-    x, y, width, _ = landmark.region
-    return min(
-        candidates,
-        key=lambda match: (
-            match.distance,
-            abs(match.region[0] - x) + abs(match.region[1] - y),
-            abs(match.region[2] - width),
-        ),
-    )
-
-
 def fit_scaled_landmarks(
     matches: tuple[ScaledLandmarkMatch, ...],
 ) -> FloatArray | None:
-    """Return one coherent affine map or ``None`` without loosening match gates."""
+    """Fit one modest coherent affine map without loosening landmark gates."""
 
     accepted = tuple(
         match
@@ -195,6 +183,9 @@ def fit_scaled_landmarks(
     if len(accepted) < 5:
         return None
     if len({match.landmark.macro_zone for match in accepted}) < 3:
+        return None
+    sides = tuple(match.region[2] for match in accepted)
+    if max(sides) - min(sides) > _MAX_SIDE_SPREAD:
         return None
 
     source = np.asarray(
@@ -221,7 +212,6 @@ def fit_scaled_landmarks(
     affine, _, rank, _ = np.linalg.lstsq(source, target, rcond=None)
     if rank != 3 or not np.isfinite(affine).all():
         return None
-
     linear = affine[:2]
     scales = np.linalg.svd(linear, compute_uv=False)
     if float(np.linalg.det(linear)) <= 0.0:
@@ -236,33 +226,20 @@ def fit_scaled_landmarks(
     return np.asarray(affine, dtype=np.float64)
 
 
-def register_scaled_scene(
+def _registration_for_side(
     frame: Frame,
     detector: ProfiledResourceDetector,
-) -> tuple[ProfiledResourceDetector, dict[str, Any]] | None:
-    """Reacquire one known pose after a modest apparent scale/position change."""
-
+    integral: FloatArray,
+    side: int,
+) -> tuple[ProfiledResourceDetector, dict[str, Any], float] | None:
     profile = detector.profile
-    if (
-        (frame.width, frame.height) != (_SUPPORTED_WIDTH, _SUPPORTED_HEIGHT)
-        or frame.pixel_format is not PixelFormat.BGRA8888
-        or len(profile.scene_landmarks) != 6
-    ):
-        return None
-
-    pixels = np.frombuffer(frame.payload, dtype=np.uint8).reshape(
-        frame.height, frame.width, 4
+    found = tuple(
+        _match_landmark(integral, landmark, side)
+        for landmark in profile.scene_landmarks
     )
-    luma = (
-        pixels[:, :, 2].astype(np.float64) * 0.299
-        + pixels[:, :, 1].astype(np.float64) * 0.587
-        + pixels[:, :, 0].astype(np.float64) * 0.114
-    )
-    integral = np.pad(luma.cumsum(0).cumsum(1), ((1, 0), (1, 0)))
-    found = tuple(_search_landmark(integral, item) for item in profile.scene_landmarks)
-    if any(item is None for item in found):
+    if any(match is None for match in found):
         return None
-    matches = tuple(item for item in found if item is not None)
+    matches = tuple(match for match in found if match is not None)
     affine = fit_scaled_landmarks(matches)
     if affine is None:
         return None
@@ -285,7 +262,8 @@ def register_scaled_scene(
     for candidate in profile.candidates:
         x, y, width, height = candidate.region
         center = np.asarray(
-            [x + width / 2.0, y + height / 2.0, 1.0], dtype=np.float64
+            [x + width / 2.0, y + height / 2.0, 1.0],
+            dtype=np.float64,
         ) @ affine
         region = (
             int(round(float(center[0]) - width / 2.0)),
@@ -302,16 +280,28 @@ def register_scaled_scene(
             return None
         candidates.append(replace(candidate, region=region))
 
-    registered_profile = replace(
-        profile,
-        profile_id=f"{profile.profile_id}-scaled",
-        scene_landmarks=landmarks,
-        candidates=tuple(candidates),
+    try:
+        registered_profile = replace(
+            profile,
+            profile_id=f"{profile.profile_id}-scaled-{side}",
+            scene_landmarks=landmarks,
+            candidates=tuple(candidates),
+        )
+    except ValueError:
+        return None
+
+    accepted_distances = tuple(
+        match.distance
+        for match in matches
+        if match.distance <= match.landmark.maximum_distance
     )
+    score = float(sum(accepted_distances) / len(accepted_distances))
     evidence = {
         "kind": "distributed_scaled_affine_registration",
+        "landmark_side": side,
         "matched": verdict.matched_count,
         "zones": sorted(zone.value for zone in verdict.matched_zones),
+        "score": round(score, 6),
         "affine": affine.tolist(),
         "landmarks": {
             match.landmark.landmark_id: {
@@ -327,4 +317,45 @@ def register_scaled_scene(
             version=detector.metadata.version,
         ),
         evidence,
+        score,
     )
+
+
+def register_scaled_scene(
+    frame: Frame,
+    detector: ProfiledResourceDetector,
+) -> tuple[ProfiledResourceDetector, dict[str, Any]] | None:
+    """Reacquire one known pose after a modest global apparent scale change."""
+
+    profile = detector.profile
+    if (
+        (frame.width, frame.height) != (_SUPPORTED_WIDTH, _SUPPORTED_HEIGHT)
+        or frame.pixel_format is not PixelFormat.BGRA8888
+        or len(profile.scene_landmarks) != 6
+    ):
+        return None
+
+    pixels = np.frombuffer(frame.payload, dtype=np.uint8).reshape(
+        frame.height,
+        frame.width,
+        4,
+    )
+    luma = (
+        pixels[:, :, 2].astype(np.float64) * 0.299
+        + pixels[:, :, 1].astype(np.float64) * 0.587
+        + pixels[:, :, 0].astype(np.float64) * 0.114
+    )
+    integral = np.pad(luma.cumsum(0).cumsum(1), ((1, 0), (1, 0)))
+    registrations = tuple(
+        result
+        for side in _SCALED_SIDES
+        if (result := _registration_for_side(frame, detector, integral, side))
+        is not None
+    )
+    if not registrations:
+        return None
+    registered_detector, evidence, _ = min(
+        registrations,
+        key=lambda result: (result[2], abs(result[1]["landmark_side"] - 48)),
+    )
+    return registered_detector, evidence
