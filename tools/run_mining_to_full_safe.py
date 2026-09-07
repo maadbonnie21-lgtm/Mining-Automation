@@ -56,6 +56,8 @@ class SafeWindowsMiningToFullBackend(mining.WindowsMiningToFullBackend):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._hover_rejections: dict[str, int] = {}
+        self._evidence_root = self.output
+        self._open_count = 0
 
     def note_hover_rejection(self, target_id: str) -> None:
         """Deprioritize one no-click target on the next fresh observation."""
@@ -99,7 +101,15 @@ class SafeWindowsMiningToFullBackend(mining.WindowsMiningToFullBackend):
         )
 
     def open(self) -> None:
+        # The first runtime pass owns the normal evidence root. A recoverable
+        # zero-click hover miss closes that pass before fresh reobservation; each
+        # subsequent pass gets a unique child folder so the original backend's
+        # create-new-directory evidence rule remains intact.
+        if self._open_count:
+            self.output = self._evidence_root / f"hover-recovery-{self._open_count:02d}"
         super().open()
+        self._open_count += 1
+
         original_evaluator = self._evaluate_resource
         if original_evaluator is None:
             raise RuntimeError("Resource proof adapter was not opened")
