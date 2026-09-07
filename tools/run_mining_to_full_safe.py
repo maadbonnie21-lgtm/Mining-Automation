@@ -70,8 +70,7 @@ class SafeWindowsMiningToFullBackend(mining.WindowsMiningToFullBackend):
         if state.selected_target is None or not state.resources or not self._hover_rejections:
             return observation
 
-        # Python's sort is stable, so original detector/source order is retained
-        # among targets carrying the same rejection count.
+        # Stable ordering preserves detector/source order among equal penalties.
         ordered = tuple(
             sorted(
                 state.resources,
@@ -258,9 +257,8 @@ def _run_with_hover_recovery(
                 detail=detail,
             )
 
-        # The runtime reached this result only after proving the hover evidence
-        # itself was fresh, same-window, cursor-bound, and tied to the current
-        # clean proposal. Crucially, dispatch has not occurred yet.
+        # HOVER_ACTION_UNPROVEN occurs before dispatch. No click or ore credit
+        # exists for this rejected proposal, so a fresh reobserve is safe.
         target_id = _last_hover_target(result)
         recovery_count += 1
         aggregate_events.append(
@@ -274,9 +272,8 @@ def _run_with_hover_recovery(
         if target_id is not None and isinstance(backend, SafeWindowsMiningToFullBackend):
             backend.note_hover_rejection(target_id)
 
-        # Prevent an endless no-click hover loop if the scene truly cannot
-        # expose any exact iron action. This uses the existing observation limit
-        # rather than inventing a new aggressive stop threshold.
+        # Avoid an endless no-click hover loop only after the existing generous
+        # observation budget is exhausted. Normal misses remain recoverable.
         if recovery_count >= config.max_passive_observations:
             return replace(
                 result,
