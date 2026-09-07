@@ -67,6 +67,12 @@ def test_safe_entry_contains_no_prep_camera_navigation_or_banking_path() -> None
     assert not any(token in source for token in forbidden)
 
 
+def test_safe_entry_does_not_use_feature_equivalence_as_input_authority() -> None:
+    source = Path(safe_mining.__file__).read_text(encoding="utf-8")
+    assert "classify_equivalent_start" not in source
+    assert "proven_start_equivalence" not in source
+
+
 def test_post_click_clean_observation_discards_stale_registered_geometry() -> None:
     source = Path(safe_mining.mining.__file__).read_text(encoding="utf-8")
     start = source.index("    def acquire_clean_observation(")

@@ -42,10 +42,6 @@ from mining_automation.mining_slice import (  # noqa: E402
     ResourcePerceptionEnvelope,
     ResourceViewState,
 )
-from mining_automation.perception.proven_start_equivalence import (  # noqa: E402
-    classify_equivalent_start,
-    load_reference,
-)
 from mining_automation.perception.resource import (  # noqa: E402
     resource_state_from_observation,
 )
@@ -138,9 +134,6 @@ class SafeWindowsMiningToFullBackend(mining.WindowsMiningToFullBackend):
         original_evaluator = self._evaluate_resource
         if original_evaluator is None:
             raise RuntimeError("Resource proof adapter was not opened")
-        self._proven_start_reference = load_reference(
-            REPOSITORY_ROOT / "diagnostics/successful-start-pose-20260906/ore-00-clean.bgra"
-        )
 
         def evaluate_with_scaled_fallback(
             frame: Any,
@@ -176,28 +169,9 @@ class SafeWindowsMiningToFullBackend(mining.WindowsMiningToFullBackend):
                 )
 
             if len(scaled) != 1:
-                if active.get("pose") is None and "at_start" in detectors:
-                    equivalent = classify_equivalent_start(
-                        current=frame,
-                        reference=self._proven_start_reference,
-                        original_start_detector=detectors["at_start"],
-                    )
-                    if equivalent is not None:
-                        states, start_evidence = equivalent
-                        return (
-                            ResourcePerceptionEnvelope(
-                                epoch=epoch,
-                                release=resource.release,
-                                view=ResourceViewState.SUPPORTED,
-                                resources=states,
-                            ),
-                            "at_start-equivalent",
-                            {
-                                **diagnoses,
-                                "proven_start_equivalence": start_evidence,
-                                "scaled_registration_candidates": scaled_diagnoses,
-                            },
-                        )
+                # Do not promote feature equivalence into live input authority.
+                # The former ORB path was dominated by stable RuneLite UI and
+                # bypassed the frozen 5/6, all-three-terrain-zone scene gate.
                 return (
                     resource,
                     pose,

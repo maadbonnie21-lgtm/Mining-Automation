@@ -76,6 +76,33 @@ START_POSE_LANDMARK_REGIONS = (
 )
 
 POSES = {
+    "returned_mine_start": {
+        "reference": Path(
+            "diagnostics/returned-mine-pose-20260907/returned-mine-neutral.bgra"
+        ),
+        "reference_sha256": (
+            "af4838541e98ad8d91162d04f5d0cf128d05e3f823b6a9785e292b52cbcadbf3"
+        ),
+        "optional_local": True,
+        # Frozen from the neutral returned-mine frame. These six patches avoid
+        # UI, the player, and all three hover-proven iron surfaces.
+        "landmark_regions": (
+            ("north-west-rock-scatter", (135, 300, 48, 48), MacroZone.NORTH_WEST),
+            ("north-west-rock-edge", (70, 375, 48, 48), MacroZone.NORTH_WEST),
+            ("north-east-silver", (590, 425, 48, 48), MacroZone.NORTH_EAST),
+            ("north-east-fence-ground", (675, 285, 48, 48), MacroZone.NORTH_EAST),
+            ("south-west-silver", (40, 675, 48, 48), MacroZone.SOUTH_WEST),
+            ("south-west-tan", (415, 648, 48, 48), MacroZone.SOUTH_WEST),
+        ),
+        # Each surface was independently hover-proven as exact
+        # "Mine Iron rocks" in this same client pose; no click was sent.
+        "regions": ((290, 385, 20, 20), (290, 455, 20, 20), (340, 380, 20, 20)),
+        "available_overrides": {
+            "varrock-east-iron-northwest": (92.4325, 62.96, 48.4175),
+            "varrock-east-iron-southwest": (82.3275, 58.465, 41.8875),
+            "varrock-east-iron-center": (87.055, 62.7825, 44.75),
+        },
+    },
     "at_start": {
         "reference": Path("diagnostics/current-start-pose-20260905/start-clean.bgra"),
         "optional_local": True,
@@ -144,9 +171,46 @@ def registered_landmark_region_preserves_zone(
     )
 
 
-def frame_from_path(path: Path, frame_id: int) -> Frame:
+def validate_hash_bound_reference_payload(
+    payload: bytes,
+    expected_sha256: str | None = None,
+    *,
+    source: str = "pose reference",
+) -> bytes:
+    if expected_sha256 is not None:
+        actual_sha256 = hashlib.sha256(payload).hexdigest()
+        if actual_sha256 != expected_sha256.lower():
+            raise ValueError(
+                f"pose reference hash mismatch for {source}: "
+                f"expected {expected_sha256.lower()}, got {actual_sha256}"
+            )
+    return payload
+
+
+def read_hash_bound_reference_payload(
+    path: Path,
+    expected_sha256: str | None = None,
+) -> bytes:
+    return validate_hash_bound_reference_payload(
+        path.read_bytes(),
+        expected_sha256,
+        source=str(path),
+    )
+
+
+def frame_from_path(
+    path: Path,
+    frame_id: int,
+    *,
+    expected_sha256: str | None = None,
+) -> Frame:
     return Frame.from_raw(
-        RawFrame(path.read_bytes(), WIDTH, HEIGHT, PixelFormat.BGRA8888),
+        RawFrame(
+            read_hash_bound_reference_payload(path, expected_sha256),
+            WIDTH,
+            HEIGHT,
+            PixelFormat.BGRA8888,
+        ),
         frame_id=frame_id,
         captured_monotonic_s=0.0,
     )
@@ -175,7 +239,11 @@ def build_pose_detectors() -> dict[str, ProfiledResourceDetector]:
         reference_path = config["reference"]
         if config.get("optional_local") and not reference_path.is_file():
             continue
-        reference = frame_from_path(reference_path, index)
+        reference = frame_from_path(
+            reference_path,
+            index,
+            expected_sha256=config.get("reference_sha256"),
+        )
         landmark_regions = config.get("landmark_regions", LANDMARK_REGIONS)
         landmarks = tuple(
             SceneLandmarkProfile(
