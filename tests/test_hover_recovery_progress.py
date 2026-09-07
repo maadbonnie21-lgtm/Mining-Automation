@@ -18,7 +18,6 @@ from mining_automation.mining_loop_runtime import (  # noqa: E402
 )
 from mining_automation.mining_slice import MiningOnlyPhase, MiningOnlyStopReason  # noqa: E402
 
-
 TARGET = "varrock-east-iron-northwest"
 
 
