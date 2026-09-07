@@ -76,7 +76,7 @@ class BankRunner:
         raise BankUnproven("bank_did_not_open")
 
     def run(self, open_only: bool = False) -> dict[str, Any]:
-        self.hover((510, 300))
+        self.hover((100, 15))
         frame, image = self.observe("banking-start")
         inventory = self.vision.inventory(image)
         self.record("INVENTORY_BEFORE", **inventory)
@@ -123,10 +123,14 @@ class BankRunner:
         ore_point = ((slot[0] + slot[2]) // 2, (slot[1] + slot[3]) // 2)
         self.hover(ore_point)
         frame, image = self.observe("iron-deposit-all-hover")
+        proof = self.vision.match(image, "deposit_text", (0, 24, 350, 65), text=True)
+        self.record("DEPOSIT_HOVER", score=proof.score, frame_id=frame.frame_id)
+        # The hover overlay covers the bank title and adjacent inventory slots.
+        # Remove the overlay, then obtain a newer clean frame for all input gates.
+        self.hover((100, 15))
+        frame, image = self.observe("pre-deposit-clean")
         if not self.vision.bank_controls(image):
             raise BankUnproven("bank_closed_before_deposit")
-        proof = self.vision.match(image, "deposit_text", (0, 24, 350, 65), text=True)
-        self.record("DEPOSIT_HOVER", score=proof.score)
         # Actual item action is proven by bank OPEN + selected Quantity-All
         # + the identified player-inventory iron slot. Text is diagnostic.
         selected = self.vision.match(image, "quantity_all_selected", all_box)
@@ -137,7 +141,7 @@ class BankRunner:
         if inventory["ore_count"] != 28 or inventory["unknown_count"]:
             raise BankUnproven("inventory_changed_before_deposit")
         self.click(frame, ore_point, "DEPOSIT_ALL_IRON_ORE_ONLY")
-        self.hover((510, 300))
+        self.hover((100, 15))
         empty_proofs = 0
         for _ in range(15):
             frame, image = self.observe("verify-deposit-empty")
