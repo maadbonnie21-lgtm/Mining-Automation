@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 navigation = ["opencv-python-headless>=4.10,<5"]
 dev = [
+    "opencv-python-headless>=4.10,<5",
   "pytest~=9.1.1",
   "pytest-cov~=7.1.0",
   "ruff~=0.16.3",
