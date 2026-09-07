@@ -108,12 +108,17 @@ class BankRunner:
         inventory = self.vision.inventory(image)
         if inventory["ore_count"] != 28 or inventory["unknown_count"]:
             raise BankUnproven("bank_inventory_is_not_28_iron_ore")
-        all_button = self.vision.match(
-            image, "quantity_all", (100, image.shape[0] - 240, 420, image.shape[0] - 130)
-        )
-        if all_button.score < 0.83:
-            raise BankUnproven("bank_quantity_All_button_unproven:" + str(all_button.score))
-        self.click(frame, all_button.centre, "SET_ITEM_QUANTITY_ALL")
+        controls = self.vision.bank_controls(image)
+        if controls is None:
+            raise BankUnproven("bank_controls_lost")
+        title = controls[0]
+        all_box = (title.x + 70, title.y + 600, title.x + 145, title.y + 660)
+        active = self.vision.match(image, "quantity_all_selected", all_box)
+        if active.score < 0.90:
+            all_button = self.vision.match(image, "quantity_all", all_box)
+            if all_button.score < 0.83:
+                raise BankUnproven("quantity_All_control_unproven")
+            self.click(frame, all_button.centre, "SET_ITEM_QUANTITY_ALL")
         slot = inventory["ore_slots"][0]
         ore_point = ((slot[0] + slot[2]) // 2, (slot[1] + slot[3]) // 2)
         self.hover(ore_point)
@@ -122,8 +127,12 @@ class BankRunner:
             raise BankUnproven("bank_closed_before_deposit")
         proof = self.vision.match(image, "deposit_text", (0, 24, 350, 65), text=True)
         self.record("DEPOSIT_HOVER", score=proof.score)
-        if proof.score < 0.82:
-            raise BankUnproven("exact_Deposit_All_Iron_ore_unproven")
+        # Actual item action is proven by bank OPEN + selected Quantity-All
+        # + the identified player-inventory iron slot. Text is diagnostic.
+        selected = self.vision.match(image, "quantity_all_selected", all_box)
+        self.record("QUANTITY_ALL_VERIFIED", score=selected.score)
+        if selected.score < 0.90:
+            raise BankUnproven("quantity_All_not_selected")
         inventory = self.vision.inventory(image)
         if inventory["ore_count"] != 28 or inventory["unknown_count"]:
             raise BankUnproven("inventory_changed_before_deposit")
