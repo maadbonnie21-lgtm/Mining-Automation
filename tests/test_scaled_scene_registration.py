@@ -76,6 +76,34 @@ def test_fit_scaled_landmarks_accepts_one_modest_coherent_transform() -> None:
     assert 0.75 <= float(scales.min()) <= float(scales.max()) <= 1.25
 
 
+def test_retained_three_ore_failure_scaled_matches_are_coherent() -> None:
+    landmarks = _landmarks()
+    regions_and_distances = (
+        ((113, 244, 40, 40), 0.003529),
+        ((310, 334, 40, 40), 0.027560),
+        ((507, 334, 40, 40), 0.038947),
+        ((651, 374, 40, 40), 0.073330),
+        ((213, 598, 44, 44), 0.040260),
+        ((214, 668, 40, 40), 0.045563),
+    )
+    matches = tuple(
+        ScaledLandmarkMatch(
+            landmark=landmark,
+            region=region,
+            distance=distance,
+        )
+        for landmark, (region, distance) in zip(
+            landmarks,
+            regions_and_distances,
+            strict=True,
+        )
+    )
+    affine = fit_scaled_landmarks(matches)
+    assert affine is not None
+    scales = np.linalg.svd(affine[:2], compute_uv=False)
+    assert 0.75 <= float(scales.min()) <= float(scales.max()) <= 1.25
+
+
 def test_fit_scaled_landmarks_keeps_original_distance_gate() -> None:
     matches = list(_coherent_matches())
     matches[0] = replace(matches[0], distance=0.13)
@@ -121,7 +149,9 @@ def test_fit_scaled_landmarks_rejects_reflection() -> None:
             distance=0.04,
         )
         for landmark, (center_x, center_y) in zip(
-            landmarks, source_centers, strict=True
+            landmarks,
+            source_centers,
+            strict=True,
         )
     )
     assert fit_scaled_landmarks(matches) is None
