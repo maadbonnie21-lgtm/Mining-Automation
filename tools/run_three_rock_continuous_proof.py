@@ -76,6 +76,34 @@ START_POSE_LANDMARK_REGIONS = (
 )
 
 POSES = {
+    "post_third_returned": {
+        "reference": Path(
+            "diagnostics/post-third-pose-20260907/post-third-neutral.bgra"
+        ),
+        "reference_sha256": (
+            "1b5ce3847f76e7e9a6a9fed50d6cbe10b6afcf6030e389277566e6cfdf4f17c6"
+        ),
+        "optional_local": True,
+        # Reproduced across the terminal run frame and a fresh same-position
+        # reconnect. Every patch is terrain-only and disjoint from the player,
+        # client UI, and the three iron interaction surfaces.
+        "landmark_regions": (
+            ("north-west-grass", (144, 306, 48, 48), MacroZone.NORTH_WEST),
+            ("north-west-ground", (192, 386, 48, 48), MacroZone.NORTH_WEST),
+            ("north-east-ground-a", (608, 338, 48, 48), MacroZone.NORTH_EAST),
+            ("north-east-ground-b", (608, 386, 48, 48), MacroZone.NORTH_EAST),
+            ("south-west-bank", (16, 658, 48, 48), MacroZone.SOUTH_WEST),
+            ("south-west-ground", (208, 690, 48, 48), MacroZone.SOUTH_WEST),
+        ),
+        # Fresh cursor-only evidence proved all three points as exact
+        # "Mine Iron rocks" after the first live run stopped at inventory 3.
+        "regions": ((430, 420, 20, 20), (490, 430, 20, 20), (420, 490, 20, 20)),
+        "available_overrides": {
+            "varrock-east-iron-northwest": (93.86, 75.5275, 47.77),
+            "varrock-east-iron-southwest": (93.195, 75.1575, 48.21),
+            "varrock-east-iron-center": (92.37, 80.3175, 39.92),
+        },
+    },
     "returned_mine_start": {
         "reference": Path(
             "diagnostics/returned-mine-pose-20260907/returned-mine-neutral.bgra"
