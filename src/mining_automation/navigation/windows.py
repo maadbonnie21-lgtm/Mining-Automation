@@ -167,7 +167,11 @@ class NativeRouteBackend:
         # These pixels are already physical; do NOT apply the logical-client 1.25 mapping again.
         ox, oy = before["client_origin"]
         screen = (ox + x, oy + y)
-        if self.api.physical_screen_to_physical_client(self.hwnd, *screen) != (x, y):
+        reverse = self.api.physical_screen_to_physical_client(self.hwnd, *screen)
+        # Windows rounds this unaware-AWT boundary by about one physical pixel.
+        # The capture and click share the same measured physical origin; permit
+        # only that measured +/-2 px conversion noise, never a scale mismatch.
+        if abs(reverse[0] - x) > 2 or abs(reverse[1] - y) > 2:
             raise RuntimeError("physical_coordinate_round_trip_failed")
         if self.api.root_window_at_point(*screen) != self.hwnd or self.api.left_button_is_down():
             raise RuntimeError("target_occluded_or_human_mouse_down")

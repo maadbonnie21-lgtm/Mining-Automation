@@ -123,3 +123,16 @@ def test_delivered_click_receipt_survives_post_input_window_failure(tmp_path):
     assert b.delivered_click_count == 1
     assert records[-1]["down"] == records[-1]["up"] == 1
     assert records[-1]["button_released"]
+
+
+def test_physical_reverse_round_trip_allows_only_two_pixel_awt_rounding(tmp_path):
+    b = backend(tmp_path)
+    b.api.physical_screen_to_physical_client = lambda h, x, y: (x - 10 - 2, y - 20 - 1)
+    frame = RouteFrame(1, 1.0, None, b.initial, "before.png")
+    b.click(frame, (800, 140), SimpleNamespace(contains=lambda p: True))
+    b = backend(tmp_path / "bad")
+    b.output.mkdir()
+    b.api.physical_screen_to_physical_client = lambda h, x, y: (x - 10 - 4, y - 20)
+    frame = RouteFrame(1, 1.0, None, b.initial, "before.png")
+    with pytest.raises(RuntimeError, match="round_trip"):
+        b.click(frame, (800, 140), SimpleNamespace(contains=lambda p: True))
