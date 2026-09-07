@@ -24,6 +24,7 @@ dev = [
 ]
 
 [project.scripts]
+mining-automation-bank = "mining_automation.bank_runtime:main"
 mining-automation-route = "mining_automation.navigation.cli:main"
 mining-automation = "mining_automation.app:main"
 
@@ -31,6 +32,7 @@ mining-automation = "mining_automation.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
+"mining_automation" = ["bank_profiles/*.json", "bank_profiles/*.npz"]
 "mining_automation.navigation" = ["profiles/*/*.json", "profiles/*/*.npz"]
 "mining_automation.perception" = ["profiles/*.json"]
 
