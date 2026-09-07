@@ -149,6 +149,8 @@ def run_route(
                     backend.wait(limits.observation_interval_s)
                     continue
                 misses = 0
+                if not route.verify_health(frame.image, geometry):
+                    raise RuntimeError("healthy_display_unproven")
                 if not math.isfinite(registration.distance):
                     raise RuntimeError("nonfinite_localization")
                 current_geometry = (geometry.x, geometry.y, geometry.radius)

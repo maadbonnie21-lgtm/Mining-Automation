@@ -315,7 +315,23 @@ class VisualRoute:
         }
 
     def verify_health(self, image: np.ndarray, geometry: MinimapGeometry) -> bool:
-        """This first profile admits only its recorded healthy 23-HP display.
+        """Recognize the reviewed 23-HP display with small UI-location tolerance."""
+        box = self.config["healthy_display_box_relative"]
+        x1, y1, x2, y2 = [
+            round((geometry.x if i % 2 == 0 else geometry.y) + v * geometry.radius)
+            for i, v in enumerate(box)
+        ]
+        pad = 8
+        x1p, y1p = max(0, x1 - pad), max(0, y1 - pad)
+        x2p, y2p = min(image.shape[1], x2 + pad), min(image.shape[0], y2 + pad)
+        roi = image[y1p:y2p, x1p:x2p, :3]
+        expected = self.images["healthy_display"]
+        if roi.shape[0] < expected.shape[0] or roi.shape[1] < expected.shape[1]:
+            return False
+        scores = cv2.matchTemplate(roi, expected, cv2.TM_CCOEFF_NORMED)
+        scores[~np.isfinite(scores)] = -1
+        return float(cv2.minMaxLoc(scores)[1]) >= 0.68
+
 
         Unrecognized health does not silently become 'safe'. This is a narrow
         development support envelope, not a general OCR/health detector.
