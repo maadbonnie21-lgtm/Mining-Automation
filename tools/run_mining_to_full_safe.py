@@ -3,9 +3,10 @@
 
 This command deliberately does not PREP RuneLite. It delegates to the existing
 fail-closed mining-to-full CLI, so live use still requires the exact checkout SHA,
-exact HWND, explicit mining confirmation, and a clean checkout. The only adapter
-change is to bind clean and hover evidence to fresh window/ownership facts after
-their final captures, while dispatch still rechecks immediately before SendInput.
+exact HWND, explicit mining confirmation, and a clean checkout. The adapter also
+adds one conservative Resource fallback after exact-pose and rigid-translation
+reacquisition both fail: the original frozen landmark descriptors may be matched
+at a modest nearby scale, without changing their distance/quorum/zone gates.
 """
 
 from __future__ import annotations
@@ -28,10 +29,93 @@ from mining_automation.mining_loop_runtime import (  # noqa: E402
     CleanMiningObservation,
     MiningHoverProof,
 )
+from mining_automation.mining_slice import (  # noqa: E402
+    ResourcePerceptionEnvelope,
+    ResourceViewState,
+)
+from mining_automation.perception.resource import (  # noqa: E402
+    resource_state_from_observation,
+)
+from mining_automation.perception.scaled_scene_registration import (  # noqa: E402
+    register_scaled_scene,
+)
 
 
 class SafeWindowsMiningToFullBackend(mining.WindowsMiningToFullBackend):
-    """Rebind clean/hover evidence to fresh post-capture window facts."""
+    """Rebind evidence to fresh window facts and recover modest scene scale drift."""
+
+    def open(self) -> None:
+        super().open()
+        original_evaluator = self._evaluate_resource
+        if original_evaluator is None:
+            raise RuntimeError("Resource proof adapter was not opened")
+
+        def evaluate_with_scaled_fallback(
+            frame: Any,
+            epoch: Any,
+            detectors: Any,
+            excluded: Any,
+            active: Any,
+        ) -> Any:
+            resource, pose, diagnoses = original_evaluator(
+                frame,
+                epoch,
+                detectors,
+                excluded,
+                active,
+            )
+            if resource.view is not ResourceViewState.UNSUPPORTED:
+                return resource, pose, diagnoses
+
+            scaled = []
+            scaled_diagnoses = []
+            for pose_name, detector in detectors.items():
+                registration = register_scaled_scene(frame, detector)
+                if registration is None:
+                    continue
+                registered_detector, evidence = registration
+                scaled.append((pose_name, registered_detector, evidence))
+                scaled_diagnoses.append(
+                    {
+                        "pose": pose_name,
+                        "matched": evidence["matched"],
+                        "zones": evidence["zones"],
+                    }
+                )
+
+            if len(scaled) != 1:
+                return (
+                    resource,
+                    pose,
+                    {
+                        **diagnoses,
+                        "scaled_registration_candidates": scaled_diagnoses,
+                    },
+                )
+
+            pose_name, detector, registration_evidence = scaled[0]
+            active["pose"] = pose_name
+            active["detector"] = detector
+            resources = tuple(
+                resource_state_from_observation(observation)
+                for observation in detector.detect(frame)
+                if observation.evidence["resource_id"] not in excluded
+            )
+            return (
+                ResourcePerceptionEnvelope(
+                    epoch=epoch,
+                    release=resource.release,
+                    view=ResourceViewState.SUPPORTED,
+                    resources=resources,
+                ),
+                pose_name,
+                {
+                    **diagnoses,
+                    "software_registration": registration_evidence,
+                },
+            )
+
+        self._evaluate_resource = evaluate_with_scaled_fallback
 
     def acquire_clean_observation(
         self,
