@@ -34,6 +34,7 @@ def main() -> int:
     parser.add_argument("--authorize-execution-sha", required=True)
     parser.add_argument("--confirm", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--prior-return-result", type=Path)
     args = parser.parse_args()
 
     head = git("rev-parse", "HEAD")
@@ -44,6 +45,18 @@ def main() -> int:
         parser.error("Exact clean committed checkout SHA required")
     if args.output.exists():
         parser.error("Output directory must be new")
+    if args.prior_return_result is not None:
+        if not args.prior_return_result.is_file():
+            parser.error("--prior-return-result must be an existing result.json")
+        prior = json.loads(args.prior_return_result.read_text(encoding="utf-8"))
+        prior_sha = prior.get("git_sha")
+        if not isinstance(prior_sha, str) or not prior_sha:
+            parser.error("Prior return result is not SHA-bound")
+        ancestry = subprocess.run(
+            ["git", "-C", str(ROOT), "merge-base", "--is-ancestor", prior_sha, head]
+        )
+        if ancestry.returncode != 0:
+            parser.error("Prior return result is not an ancestor of this exact build")
 
     tracked = [
         "tools/run_full_cycle.py",
@@ -61,6 +74,7 @@ def main() -> int:
             title=args.title,
             sha=head,
             output=args.output,
+            prior_return=args.prior_return_result,
         )
     except (FullCycleError, KeyboardInterrupt) as exc:
         args.output.mkdir(parents=True, exist_ok=True)

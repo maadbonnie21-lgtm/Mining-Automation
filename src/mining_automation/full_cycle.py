@@ -91,6 +91,7 @@ def run_full_cycle(
     title: str,
     sha: str,
     output: Path,
+    prior_return: Path | None = None,
 ) -> dict[str, Any]:
     """Run bank->mine->28->bank->deposit->mine->28 as one fail-closed sequence."""
     if output.exists():
@@ -101,32 +102,39 @@ def run_full_cycle(
     def phase_dir(index: int, name: str) -> Path:
         return output / f"{index:02d}-{name}"
 
-    return1 = phase_dir(0, "return-to-mine")
-    phases.append(
-        _run_phase(
-            name="return-to-mine",
-            root=root,
-            result_path=return1 / "result.json",
-            command=[
-                str(python),
-                "-I",
-                str(root / "tools/run_bank_to_mine.py"),
-                "--live",
-                "--hwnd",
-                str(hwnd),
-                "--title",
-                title,
-                "--authorize-execution-sha",
-                sha,
-                "--confirm",
-                "RUN_BANK_TO_MINE_NO_RESIZE",
-                "--focus-existing",
-                "--output",
-                str(return1),
-            ],
+    if prior_return is not None:
+        prior_payload = _load_result(prior_return)
+        _require_return(prior_payload)
+        if prior_payload.get("operator_chose_walking_clicks") is not False:
+            raise FullCycleError("prior_return_was_not_program_owned")
+        phases.append(PhaseResult("return-to-mine", prior_return, prior_payload))
+    else:
+        return1 = phase_dir(0, "return-to-mine")
+        phases.append(
+            _run_phase(
+                name="return-to-mine",
+                root=root,
+                result_path=return1 / "result.json",
+                command=[
+                    str(python),
+                    "-I",
+                    str(root / "tools/run_bank_to_mine.py"),
+                    "--live",
+                    "--hwnd",
+                    str(hwnd),
+                    "--title",
+                    title,
+                    "--authorize-execution-sha",
+                    sha,
+                    "--confirm",
+                    "RUN_BANK_TO_MINE_NO_RESIZE",
+                    "--focus-existing",
+                    "--output",
+                    str(return1),
+                ],
+            )
         )
-    )
-    _require_return(phases[-1].payload)
+        _require_return(phases[-1].payload)
 
     mine1 = phase_dir(1, "mine-first-28")
     phases.append(
