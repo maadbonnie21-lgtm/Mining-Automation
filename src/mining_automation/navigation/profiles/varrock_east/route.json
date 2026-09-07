@@ -45,7 +45,7 @@
     {
       "name": "north_road_progress_1",
       "image_key": "map_03",
-      "tolerance": 3.0
+      "tolerance": 4.0
     },
     {
       "name": "north_road_progress_2",
@@ -555,6 +555,15 @@
         "scale": 1.0000083608603811,
         "rotation_degrees": -0.00015383872856089488
       }
+    }
+  ],
+  "live_corrections": [
+    {
+      "checkpoint": "north_road_progress_1",
+      "arrival_tolerance": 4.0,
+      "evidence": "outputs/full-mine-to-bank-20260907-145203/result.json",
+      "observed_stationary_distance": 3.6232104337995668,
+      "reason": "Strong same-checkpoint terrain match and stable position; repeated sub-tile correction made no movement. Other checkpoint/corridor/health/input gates unchanged."
     }
   ]
 }
