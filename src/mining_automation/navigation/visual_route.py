@@ -331,22 +331,3 @@ class VisualRoute:
         scores = cv2.matchTemplate(roi, expected, cv2.TM_CCOEFF_NORMED)
         scores[~np.isfinite(scores)] = -1
         return float(cv2.minMaxLoc(scores)[1]) >= 0.68
-
-
-        Unrecognized health does not silently become 'safe'. This is a narrow
-        development support envelope, not a general OCR/health detector.
-        """
-        box = self.config["healthy_display_box_relative"]
-        x1, y1, x2, y2 = [
-            round((geometry.x if i % 2 == 0 else geometry.y) + v * geometry.radius)
-            for i, v in enumerate(box)
-        ]
-        if min(x1, y1) < 0 or x2 > image.shape[1] or y2 > image.shape[0] or x2 <= x1 or y2 <= y1:
-            return False
-        actual = cv2.resize(
-            image[y1:y2, x1:x2, :3],
-            (self.images["healthy_display"].shape[1], self.images["healthy_display"].shape[0]),
-        )
-        expected = self.images["healthy_display"]
-        score = float(cv2.matchTemplate(actual, expected, cv2.TM_CCOEFF_NORMED)[0, 0])
-        return math.isfinite(score) and score >= 0.86
