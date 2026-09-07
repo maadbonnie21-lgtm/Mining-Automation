@@ -39,8 +39,8 @@ def run_bank_to_mine(
 
     start = backend.capture("bank-return-start")
     geometry, registration = route.observe(start.image, route.waypoints[-1])
-    if registration.distance > 4.0 or not route.verify_endpoint(start.image, geometry)["accepted"]:
-        raise ReturnRouteError("bank_counter_start_unproven")
+    if registration.distance > 4.0:
+        raise ReturnRouteError("bank_endpoint_minimap_unproven")
 
     dpi = backend.initial["dpi_environment"]
     logical = cv2.resize(
@@ -50,9 +50,12 @@ def run_bank_to_mine(
         fy=1 / dpi["effective_mapping_scale_y"],
         interpolation=cv2.INTER_AREA,
     )
-    inventory = BankVision().inventory(logical)
+    vision = BankVision()
+    inventory = vision.inventory(logical)
     if inventory["empty_count"] != 28 or inventory["unknown_count"] != 0:
         raise ReturnRouteError("return_requires_verified_empty_inventory")
+    if vision.bank_controls(logical) is not None:
+        raise ReturnRouteError("return_requires_verified_closed_bank_interface")
 
     mine = route.waypoints[0]
 
