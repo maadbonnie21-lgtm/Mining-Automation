@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run five complete mine->bank->deposit->mine cycles from a verified mine start."""
+"""Run three to five complete mine->bank->deposit->mine cycles from a verified mine start."""
 
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ def main() -> int:
     parser.add_argument("--authorize-execution-sha", required=True)
     parser.add_argument("--confirm", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--cycles", type=int, choices=(3, 4, 5), default=5)
     args = parser.parse_args()
 
     head = git("rev-parse", "HEAD")
@@ -51,7 +52,7 @@ def main() -> int:
             title=args.title,
             sha=head,
             output=args.output,
-            cycles=5,
+            cycles=args.cycles,
         )
     except (FullCycleError, KeyboardInterrupt) as exc:
         args.output.mkdir(parents=True, exist_ok=True)
@@ -64,7 +65,7 @@ def main() -> int:
             "success": False,
             "stop_reason": f"{type(exc).__name__}:{exc}",
             "git_sha": head,
-            "cycles_requested": 5,
+            "cycles_requested": args.cycles,
             "cycles_completed": len(completed),
             "completed_cycles": completed,
             "operator_chose_gameplay_clicks": False,

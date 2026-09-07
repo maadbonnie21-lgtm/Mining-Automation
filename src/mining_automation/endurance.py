@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -30,14 +33,53 @@ def run_endurance(
     output: Path,
     cycles: int = 5,
 ) -> dict[str, Any]:
+    if type(cycles) is not int or not 3 <= cycles <= 5:
+        raise FullCycleError("cycles_must_be_between_three_and_five")
+    root, output = root.resolve(), output.resolve()
     if output.exists():
         raise FullCycleError("endurance_output_must_be_new")
     output.mkdir(parents=True, exist_ok=False)
     completed: list[dict[str, Any]] = []
+    phase_receipts: list[dict[str, Any]] = []
+
+    def progress(status: str, phase: str, error: str | None = None) -> None:
+        payload = {
+            "status": status,
+            "current_phase": phase,
+            "git_sha": sha,
+            "cycles_requested": cycles,
+            "cycles_completed": len(completed),
+            "completed_cycles": completed,
+            "phase_receipts": phase_receipts,
+            "updated_at_unix": time.time(),
+            "error": error,
+        }
+        tmp = output / "progress.json.tmp"
+        tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, output / "progress.json")
+
+    def run_phase(**kwargs: Any) -> Any:
+        progress("RUNNING", kwargs["name"])
+        try:
+            result = _run_phase(**kwargs)
+            if result.payload.get("git_sha") != sha:
+                raise FullCycleError("phase_build_does_not_match_frozen_run")
+            phase_receipts.append(
+                {
+                    "name": result.name,
+                    "result_path": str(result.result_path.resolve()),
+                    "sha256": hashlib.sha256(result.result_path.read_bytes()).hexdigest(),
+                }
+            )
+            return result
+        except BaseException as exc:
+            progress("STOP", kwargs["name"], f"{type(exc).__name__}:{exc}")
+            raise
+
     for cycle in range(1, cycles + 1):
         print(f"[ENDURANCE] CYCLE {cycle}/{cycles} START", flush=True)
         mining = _phase(output, cycle, 1, "mine-28")
-        mine_result = _run_phase(
+        mine_result = run_phase(
             name=f"cycle-{cycle}-mine-28",
             root=root,
             result_path=mining / "result.json",
@@ -61,7 +103,7 @@ def run_endurance(
         _require_mining(mine_result.payload, label=f"cycle_{cycle}_mining")
 
         outbound = _phase(output, cycle, 2, "mine-to-bank")
-        route_result = _run_phase(
+        route_result = run_phase(
             name=f"cycle-{cycle}-mine-to-bank",
             root=root,
             result_path=outbound / "result.json",
@@ -86,7 +128,7 @@ def run_endurance(
         _require_route_to_bank(route_result.payload)
 
         banking = _phase(output, cycle, 3, "bank-deposit-close")
-        bank_result = _run_phase(
+        bank_result = run_phase(
             name=f"cycle-{cycle}-bank",
             root=root,
             result_path=banking / "result.json",
@@ -110,7 +152,7 @@ def run_endurance(
         _require_banking(bank_result.payload)
 
         returning = _phase(output, cycle, 4, "bank-to-mine")
-        return_result = _run_phase(
+        return_result = run_phase(
             name=f"cycle-{cycle}-bank-to-mine",
             root=root,
             result_path=returning / "result.json",
@@ -147,15 +189,12 @@ def run_endurance(
             }
         )
         print(f"[ENDURANCE] CYCLE {cycle}/{cycles} PASS", flush=True)
-        (output / "progress.json").write_text(
-            json.dumps({"completed_cycles": completed}, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        progress("RUNNING", f"cycle-{cycle}-complete")
 
     payload = {
         "status": "PASS",
         "success": True,
-        "stop_reason": "five_cycles_complete",
+        "stop_reason": f"{cycles}_consecutive_cycles_complete",
         "git_sha": sha,
         "cycles_requested": cycles,
         "cycles_completed": len(completed),
@@ -165,6 +204,8 @@ def run_endurance(
         "final_location": "mine_start",
         "operator_chose_gameplay_clicks": False,
         "cycles": completed,
+        "phase_receipts": phase_receipts,
     }
     (output / "result.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    progress("PASS", "all_requested_cycles_complete")
     return payload
