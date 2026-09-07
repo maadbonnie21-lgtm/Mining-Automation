@@ -87,7 +87,13 @@ class BankRunner:
                 raise BankUnproven("bank_booth_unproven:" + str(booth.score))
             self.hover(booth.centre)
             frame, image = self.observe("bank-booth-hover")
-            proof = self.vision.match(image, "bank_hover", (0, 24, 330, 60), text=True)
+            proof = max(
+                (
+                    self.vision.match(image, key, (0, 24, 330, 60), text=True)
+                    for key in ("bank_hover", "bank_hover_original", "bank_hover_live2")
+                ),
+                key=lambda match: match.score,
+            )
             if proof.score < 0.82:
                 raise BankUnproven("exact_Bank_Bank_booth_hover_unproven:" + str(proof.score))
             self.click(frame, booth.centre, "OPEN_BANK_BOOTH")
