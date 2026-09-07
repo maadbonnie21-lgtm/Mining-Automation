@@ -425,6 +425,16 @@ def evaluate_resource(frame: Frame, epoch: PerceptionEpoch, detectors, excluded,
             if registration is not None:
                 registered_detector, registration_evidence = registration
                 translated.append((pose_name, registered_detector, registration_evidence))
+        if not translated:
+            from mining_automation.perception.scaled_scene_registration import register_scaled_scene
+
+            # Preserve exact and rigid-registration success unchanged. Only
+            # reacquire scale from the original descriptors after both fail.
+            for pose_name, detector in detectors.items():
+                registration = register_scaled_scene(frame, detector)
+                if registration is not None:
+                    registered_detector, registration_evidence = registration
+                    translated.append((pose_name, registered_detector, registration_evidence))
         if len(translated) == 1:
             pose_name, detector, registration_evidence = translated[0]
             passed.append((pose_name, detector))
