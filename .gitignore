@@ -22,4 +22,5 @@ htmlcov/
 # Isolated navigation development dependencies and probe logs
 .route-deps/
 .venv-route/
+.venv-beta/
 route-dependencies.log
