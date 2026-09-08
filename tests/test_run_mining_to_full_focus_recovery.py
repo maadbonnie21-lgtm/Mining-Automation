@@ -32,6 +32,8 @@ class _Device:
 
 
 def test_verify_window_refocuses_exact_runelite(monkeypatch) -> None:
+    api = _Api()
+    monkeypatch.setattr(mining, "RealWindowsCameraApi", lambda: api)
     monkeypatch.setattr(mining, "RealWin32MiningInputDevice", lambda: _Device())
     monkeypatch.setattr(mining.time, "sleep", lambda _: None)
     backend = mining.WindowsMiningToFullBackend(
@@ -43,8 +45,6 @@ def test_verify_window_refocuses_exact_runelite(monkeypatch) -> None:
         hover_settle_s=0.0,
         passive_interval_s=0.0,
     )
-    api = _Api()
-    backend.api = api
     _, snapshot = backend._verify_window()
     assert api.focus_calls == [42]
     assert snapshot.foreground_hwnd == 42
