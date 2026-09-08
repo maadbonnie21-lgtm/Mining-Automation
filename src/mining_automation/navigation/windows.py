@@ -55,6 +55,12 @@ class NativeRouteBackend:
             raise RuntimeError("Native route execution requires Windows")
         if isinstance(hwnd, bool) or hwnd <= 0:
             raise ValueError("A positive exact RuneLite HWND is required")
+        from ..beta_input import current_policy
+
+        policy = current_policy()
+        if policy is not None:
+            policy.check()
+            focus_existing = False
         from ..capture.windows.win32_api import RealWin32Api
         from ..validation.windows_camera import RealWindowsCameraApi
 
@@ -93,6 +99,7 @@ class NativeRouteBackend:
         if focus_existing and self.api.foreground_window() != self.hwnd:
             # This only requests focus; it does not restore an iconic window
             # or normalize its geometry. No focus hacks or repeated attempts.
+            self.check_cancelled()
             self.user32.SetForegroundWindow(self.hwnd)
             self.wait(0.15)
             self.guard()
@@ -105,6 +112,11 @@ class NativeRouteBackend:
         return time.monotonic()
 
     def check_cancelled(self) -> None:
+        from ..beta_input import current_policy
+
+        policy = current_policy()
+        if policy is not None:
+            policy.check()
         if self.api.key_is_down(0x1B) or (self.stop_file and self.stop_file.exists()):
             raise RuntimeError("owner_stop")
 
@@ -398,7 +410,12 @@ class NativeRouteBackend:
             raise RuntimeError("physical_coordinate_round_trip_failed")
         if self.api.root_window_at_point(*screen) != self.hwnd or self.api.left_button_is_down():
             raise RuntimeError("target_occluded_or_human_mouse_down")
-        if not self.api.move_cursor(*screen) or self.api.cursor_position() != screen:
+        from ..beta_input import current_policy
+
+        policy = current_policy()
+        if policy is not None:
+            policy.move(screen, deadline=frame.captured_monotonic_s + self.max_frame_age_s)
+        elif not self.api.move_cursor(*screen) or self.api.cursor_position() != screen:
             raise RuntimeError("cursor_delivery_failed")
         self.guard()
         if self.api.root_window_at_point(*screen) != self.hwnd:
@@ -415,6 +432,13 @@ class NativeRouteBackend:
         }
         with (self.output / "clicks.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(receipt) + "\n")
+        if policy is not None:
+            from ..beta_interaction import require_fresh
+
+            policy.check()
+            require_fresh(frame.captured_monotonic_s + self.max_frame_age_s, self.now())
+            if self.api.cursor_position() != screen or self.api.left_button_is_down():
+                raise RuntimeError("beta_pre_down_pointer_changed")
         try:
             down = self.api.send_mouse_button(button_up=False)
             if down != 1:
