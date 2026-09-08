@@ -46,7 +46,9 @@ class SessionSettings:
             raise ValueError("Unknown session mode")
         if type(self.cycles) is not int or self.cycles < 1:
             raise ValueError("Cycle limit must be a positive integer")
-        if not self.routine or not all(isinstance(row, RunBreakRow) for row in self.routine):
+        if (self.mode == "routine" and not self.routine) or not all(
+            isinstance(row, RunBreakRow) for row in self.routine
+        ):
             raise ValueError("At least one valid run/break row is required")
         if any(
             type(value) is not bool
@@ -146,6 +148,10 @@ class BetaSession:
         self.logout_proof: dict[str, Any] | None = None
         self.receipts: list[dict[str, Any]] = []
         self.interrupted = False
+        self.cleanup_unconfirmed = False
+        binder = getattr(self.backend, "bind_status_sink", None)
+        if binder is not None:
+            binder(self.publish)
 
     def snapshot(self) -> dict[str, Any]:
         now = self.clock()
@@ -156,7 +162,10 @@ class BetaSession:
             "git_sha": self.sha,
             "settings": asdict(self.settings),
             "cycles_completed": self.completed,
-            "ore_deposited": self.deposited,
+            "ore_deposited": max(self.deposited, getattr(self.backend, "ore_deposited", 0)),
+            "child_pid": getattr(getattr(self.backend, "child", None), "pid", None),
+            "hwnd": getattr(self.backend, "hwnd", None),
+            "cleanup_unconfirmed": self.cleanup_unconfirmed,
             "elapsed_s": max(0, now - self.started),
             "routine_row": self.row,
             "active_remaining_s": (
@@ -171,7 +180,10 @@ class BetaSession:
             "break_started_monotonic": self.break_started,
             "normal_stop_requested": self.controls.stop.is_set(),
             "emergency_stop_requested": self.controls.emergency.is_set(),
-            "login_permitted": not self.controls.stop.is_set(),
+            "login_permitted": (
+                not self.controls.stop.is_set()
+                and self.state not in ("IDLE", "STOPPED", "ERROR", "PAUSED", "EMERGENCY_STOPPED")
+            ),
             "home_proof": self.home,
             "logout_proof": self.logout_proof,
             "phase_receipts": self.receipts,
@@ -198,6 +210,7 @@ class BetaSession:
 
     def _home(self, *, rocks: bool = False) -> None:
         self.controls.check()
+        self.phase = "verify_mine_start"
         proof = self.backend.verify_home(fresh_rocks=rocks)
         require_home(proof)
         if rocks and proof.get("fresh_rocks_verified") is not True:
@@ -216,6 +229,7 @@ class BetaSession:
 
     def _break(self) -> bool:
         self.controls.check(authentication=True)
+        self.phase = "logout"
         self.publish("LOGGING_OUT", "At verified mine start; verifying ordinary logout")
         proof = self.backend.logout()
         self.controls.check()
@@ -226,6 +240,7 @@ class BetaSession:
         self.break_started = self.clock()
         self.break_deadline = self.break_started + self.settings.routine[self.row].break_s
         self.active_deadline = None
+        self.phase = "logged_out_break"
         self.publish("BREAK", "Logged out; no game input during break")
         while self.clock() < self.break_deadline:
             self.controls.check()
@@ -238,6 +253,7 @@ class BetaSession:
         last_row = self.row == len(self.settings.routine) - 1
         if last_row and not self.settings.repeat:
             return False  # Routine finishes logged out at the verified mine start.
+        self.phase = "login"
         self.publish(
             "RECONNECTING", "Ordinary existing-account login; fresh reacquisition required"
         )
@@ -251,6 +267,13 @@ class BetaSession:
         self.interrupted = True  # Deliberate break cannot count as an uninterrupted streak.
         self._active()
         return True
+
+    def _cancel_safely(self) -> None:
+        try:
+            self.backend.cancel()
+        except Exception as exc:
+            self.cleanup_unconfirmed = True
+            self.publish("ERROR", self.reason + f"; cancellation_unconfirmed:{exc}")
 
     def run(self) -> dict[str, Any]:
         self.output.mkdir(parents=True, exist_ok=False)
@@ -282,7 +305,10 @@ class BetaSession:
                     raise SessionUnproven("full_cycle_receipt_unproven")
                 self.deposited += receipt["deposited_ore"]
                 self._home()
+                with (self.output / "completed-cycles.jsonl").open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(receipt, allow_nan=False) + "\n")
                 self.receipts.append(receipt)
+                self.receipts = self.receipts[-10:]  # Unbounded cycle count, bounded UI payload.
                 self.completed += 1
                 self.publish(reason="Cycle complete; empty inventory and exact mine start verified")
             if self.logout_proof is None:
@@ -294,14 +320,14 @@ class BetaSession:
             )
         except SessionStopped as exc:
             self.interrupted = True
-            self.backend.cancel()
             self.publish(
                 "EMERGENCY_STOPPED" if self.controls.emergency.is_set() else "PAUSED", str(exc)
             )
+            self._cancel_safely()
         except Exception as exc:
             self.interrupted = True
-            self.backend.cancel()
             self.publish("ERROR", f"{type(exc).__name__}:{exc}; return_not_completed")
+            self._cancel_safely()
         finally:
             result = self.snapshot()
             result["success"] = self.state == "STOPPED"
