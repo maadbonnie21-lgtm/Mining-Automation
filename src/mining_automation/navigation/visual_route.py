@@ -55,6 +55,22 @@ class Registration:
     rotation_degrees: float
 
 
+@dataclass(frozen=True)
+class StartConnector:
+    """One evidence-bound outbound pose that must return to canonical start."""
+
+    connector_id: str
+    canonical_waypoint: str
+    canonical_offset: tuple[float, float]
+    offset_tolerance: float
+    maximum_reach: float
+    arrival_tolerance: float
+    source_pose_id: str
+    mining_terminal_frame_sha256: str
+    route_observation_frame_sha256: str
+    pose_reference_sha256: str
+
+
 class MinimapLocator:
     """Locate recorded compass chrome in current pixels, including UI scale.
 
@@ -257,11 +273,115 @@ class VisualRoute:
             raise ValueError("Waypoint arrival tolerance outside reviewed range")
         if not self.waypoints or len({w.name for w in self.waypoints}) != len(self.waypoints):
             raise ValueError("Empty route or duplicate waypoint identifiers")
+        self.outbound_start_name = self.waypoints[0].name
+        self.start_connectors: list[StartConnector] = []
+        for item in self.config.get("start_connectors", []):
+            raw_offset = item.get("canonical_offset")
+            if (
+                not isinstance(raw_offset, list)
+                or len(raw_offset) != 2
+                or any(
+                    isinstance(value, bool) or not isinstance(value, (int, float))
+                    for value in raw_offset
+                )
+            ):
+                raise ValueError("Start connector offset must contain two numbers")
+            connector = StartConnector(
+                connector_id=item["connector_id"],
+                canonical_waypoint=item["canonical_waypoint"],
+                canonical_offset=(float(raw_offset[0]), float(raw_offset[1])),
+                offset_tolerance=float(item["offset_tolerance"]),
+                maximum_reach=float(item["maximum_reach"]),
+                arrival_tolerance=float(item["arrival_tolerance"]),
+                source_pose_id=item["source_pose_id"],
+                mining_terminal_frame_sha256=item["mining_terminal_frame_sha256"],
+                route_observation_frame_sha256=item["route_observation_frame_sha256"],
+                pose_reference_sha256=item["pose_reference_sha256"],
+            )
+            hashes = (
+                connector.mining_terminal_frame_sha256,
+                connector.route_observation_frame_sha256,
+                connector.pose_reference_sha256,
+            )
+            if (
+                not connector.connector_id
+                or connector.canonical_waypoint != self.outbound_start_name
+                or not connector.source_pose_id
+                or any(not math.isfinite(value) for value in connector.canonical_offset)
+                or not 0 < connector.offset_tolerance <= 1.0
+                or not 0 < connector.maximum_reach <= 12.0
+                or not 0 < connector.arrival_tolerance <= self.waypoints[0].tolerance
+                or math.hypot(*connector.canonical_offset) <= self.waypoints[0].tolerance
+                or math.hypot(*connector.canonical_offset) > connector.maximum_reach
+                or any(
+                    len(value) != 64
+                    or value.lower() != value
+                    or any(character not in "0123456789abcdef" for character in value)
+                    for value in hashes
+                )
+            ):
+                raise ValueError("Start connector is outside the reviewed safety envelope")
+            self.start_connectors.append(connector)
+        if len({connector.connector_id for connector in self.start_connectors}) != len(
+            self.start_connectors
+        ):
+            raise ValueError("Duplicate start connector identifiers")
         self.references = {
             key: TerrainReference(value)
             for key, value in self.images.items()
             if key.startswith("map_")
         }
+
+    def match_start_connector(
+        self, waypoint: Waypoint, registration: Registration
+    ) -> dict[str, Any] | None:
+        """Match only a tightly bound outbound departure vector.
+
+        The stored vector is canonical terrain geometry, not a historical
+        screen click. Apply the freshly measured registration scale/rotation
+        before comparing it with the live target vector.
+        """
+
+        if waypoint.name != self.outbound_start_name:
+            return None
+        observed = (
+            registration.target[0] - MAP_CENTRE,
+            registration.target[1] - MAP_CENTRE,
+        )
+        angle = math.radians(registration.rotation_degrees)
+        cosine, sine = math.cos(angle), math.sin(angle)
+        matches: list[dict[str, Any]] = []
+        for connector in self.start_connectors:
+            dx, dy = connector.canonical_offset
+            expected = (
+                registration.scale * (cosine * dx - sine * dy),
+                registration.scale * (sine * dx + cosine * dy),
+            )
+            residual = math.dist(observed, expected)
+            if (
+                registration.distance <= connector.maximum_reach
+                and residual <= connector.offset_tolerance
+            ):
+                matches.append(
+                    {
+                        "connector_id": connector.connector_id,
+                        "canonical_waypoint": connector.canonical_waypoint,
+                        "source_pose_id": connector.source_pose_id,
+                        "canonical_offset": list(connector.canonical_offset),
+                        "expected_live_offset": list(expected),
+                        "observed_live_offset": list(observed),
+                        "offset_residual": residual,
+                        "offset_tolerance": connector.offset_tolerance,
+                        "maximum_reach": connector.maximum_reach,
+                        "arrival_tolerance": connector.arrival_tolerance,
+                        "mining_terminal_frame_sha256": connector.mining_terminal_frame_sha256,
+                        "route_observation_frame_sha256": connector.route_observation_frame_sha256,
+                        "pose_reference_sha256": connector.pose_reference_sha256,
+                    }
+                )
+        if len(matches) > 1:
+            raise LocalizationError("start_connector_ambiguous")
+        return matches[0] if matches else None
 
     def observe(
         self, image: np.ndarray, waypoint: Waypoint
@@ -271,6 +391,27 @@ class VisualRoute:
         # the gameplay gate. Login/disconnect screens fail the locator and/or
         # terrain registration; do not bind route authority to dynamic orb text.
         registration = self.references[waypoint.image_key].register(crop_minimap(image, geometry))
+        return geometry, registration
+
+    def observe_at_geometry(
+        self,
+        image: np.ndarray,
+        waypoint: Waypoint,
+        geometry: MinimapGeometry,
+    ) -> tuple[MinimapGeometry, Registration]:
+        """Re-register fresh terrain at an immediately prior, window-bound map geometry.
+
+        This narrow path is used only after the outbound connector's native
+        Resource+Inventory authority capture. No movement occurred between the
+        two frames, and the runtime still requires identical window geometry,
+        fresh terrain consensus, the same connector, and a current health proof.
+        """
+
+        if not self.verify_gameplay(image, geometry):
+            raise LocalizationError("gameplay_chrome_unproven")
+        registration = self.references[waypoint.image_key].register(
+            crop_minimap(image, geometry)
+        )
         return geometry, registration
 
     localization_error = LocalizationError

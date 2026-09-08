@@ -8,6 +8,7 @@ maximize, reposition, camera, inventory or keyboard-input operations exist.
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import math
 import sys
@@ -51,10 +52,14 @@ class NativeRouteBackend:
         self.api = RealWindowsCameraApi()
         self.api.declare_dpi_awareness()
         self.hwnd, self.output, self.stop_file = hwnd, output, stop_file
+        self.expected_title = expected_title
         self.max_frame_age_s = max_frame_age_s
         self.frame_id = 0
         self.delivered_click_count = 0
         self.last_dispatch_receipt: dict[str, Any] | None = None
+        self._start_connector_pose_detectors: dict[str, Any] | None = None
+        self._start_connector_resource_evaluator: Any = None
+        self._start_connector_inventory_evaluator: Any = None
         self.user32 = ctypes.WinDLL("user32", use_last_error=True)
         for name, result, arguments in [
             ("IsIconic", wintypes.BOOL, [wintypes.HWND]),
@@ -162,6 +167,184 @@ class NativeRouteBackend:
         if not cv2.imwrite(str(path), image):
             raise OSError("capture_evidence_write_failed")
         return RouteFrame(self.frame_id, timestamp, image, before, str(path))
+
+    def prepare_start_connector_authority(
+        self,
+        *,
+        pose_detectors: dict[str, Any],
+        resource_evaluator: Any,
+        inventory_evaluator: Any,
+    ) -> None:
+        """Prepare preserved mining evaluators before any authority frame exists."""
+
+        if not pose_detectors or not callable(resource_evaluator):
+            raise RuntimeError("start_connector_mining_evaluators_unavailable")
+        if not callable(getattr(inventory_evaluator, "evaluate", None)):
+            raise RuntimeError("start_connector_inventory_evaluator_unavailable")
+        self._start_connector_pose_detectors = pose_detectors
+        self._start_connector_resource_evaluator = resource_evaluator
+        self._start_connector_inventory_evaluator = inventory_evaluator
+
+    def verify_start_connector_authority(
+        self,
+        frame: RouteFrame,
+        connector: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Require one native BGRA Resource+Inventory epoch before route input."""
+
+        from ..mining_slice import (
+            INVENTORY_CAPACITY,
+            PerceptionEpoch,
+            ResourceViewState,
+            WorldStatePublicationStatus,
+            assemble_atomic_mining_world_state,
+        )
+        from ..perception.live_pose_references import POSE_FRAME_HEIGHT, POSE_FRAME_WIDTH
+
+        before = self.guard()
+        if frame.window != before or frame.frame_id != self.frame_id:
+            raise RuntimeError("stale_start_connector_authority_frame")
+        expected_pose = connector.get("source_pose_id")
+        detectors = self._start_connector_pose_detectors
+        resource_evaluator = self._start_connector_resource_evaluator
+        inventory_evaluator = self._start_connector_inventory_evaluator
+        if (
+            type(expected_pose) is not str
+            or detectors is None
+            or expected_pose not in detectors
+            or not callable(resource_evaluator)
+            or not callable(getattr(inventory_evaluator, "evaluate", None))
+        ):
+            return {
+                "accepted": False,
+                "reason": "source_pose_evaluator_unavailable",
+                "route_source_frame_id": frame.frame_id,
+                "route_source_captured_monotonic_s": frame.captured_monotonic_s,
+                "window": before,
+                "expected_pose_id": expected_pose,
+            }
+        if before.get("client_size") != [POSE_FRAME_WIDTH, POSE_FRAME_HEIGHT]:
+            return {
+                "accepted": False,
+                "reason": "current_frame_geometry_unproven",
+                "route_source_frame_id": frame.frame_id,
+                "route_source_captured_monotonic_s": frame.captured_monotonic_s,
+                "window": before,
+                "expected_pose_id": expected_pose,
+            }
+        mining_frame, native_window, native_dpi, native_path = (
+            self._capture_start_connector_native_frame()
+        )
+        if (
+            native_window.get("hwnd") != self.hwnd
+            or native_window.get("title") != self.expected_title
+            or native_window.get("class_name") != before["identity"]["class_name"]
+            or native_window.get("is_visible") is not True
+            or native_window.get("is_minimized") is not False
+            or native_window.get("client_width") != POSE_FRAME_WIDTH
+            or native_window.get("client_height") != POSE_FRAME_HEIGHT
+            or native_dpi != before["dpi"]
+            or mining_frame.width != POSE_FRAME_WIDTH
+            or mining_frame.height != POSE_FRAME_HEIGHT
+        ):
+            raise RuntimeError("native_authority_window_or_geometry_mismatch")
+        payload_sha256 = hashlib.sha256(mining_frame.payload).hexdigest()
+        epoch = PerceptionEpoch(
+            capture_source_id="windows-runelite-native",
+            capture_session_id=f"route-start-connector:{self.hwnd}",
+            cycle_id=f"route-start-connector:{self.hwnd}:{mining_frame.frame_id}",
+            cycle_sequence=mining_frame.frame_id,
+            frame_id=mining_frame.frame_id,
+            captured_monotonic_s=mining_frame.captured_monotonic_s,
+            frame_width=mining_frame.width,
+            frame_height=mining_frame.height,
+            frame_payload_sha256=payload_sha256,
+            pixel_format="bgra8888",
+        )
+        resource, pose, _ = resource_evaluator(
+            mining_frame,
+            epoch,
+            detectors,
+            frozenset(),
+            {"pose": None, "detector": None},
+        )
+        _, inventory = inventory_evaluator.evaluate(mining_frame, epoch)
+        evaluated = self.now()
+        state = assemble_atomic_mining_world_state(
+            resource=resource,
+            inventory=inventory,
+            evaluated_monotonic_s=evaluated,
+        )
+        after = self.guard()
+        if after != before or frame.frame_id != self.frame_id:
+            raise RuntimeError("window_changed_during_start_connector_authority")
+        inventory_state = inventory.inventory
+        accepted = (
+            pose == expected_pose
+            and resource.view is ResourceViewState.SUPPORTED
+            and inventory.unknown_reason is None
+            and inventory_state.occupied_slots == INVENTORY_CAPACITY
+            and state.status is WorldStatePublicationStatus.FULL
+        )
+        if pose != expected_pose:
+            reason = "expected_mining_pose_not_supported"
+        elif resource.view is not ResourceViewState.SUPPORTED:
+            reason = "resource_view_not_supported"
+        elif inventory.unknown_reason is not None:
+            reason = "inventory_unknown"
+        elif inventory_state.occupied_slots != INVENTORY_CAPACITY:
+            reason = "inventory_not_full"
+        elif state.status is not WorldStatePublicationStatus.FULL:
+            reason = state.stop_reason.value
+        else:
+            reason = "accepted"
+        return {
+            "accepted": accepted,
+            "reason": reason,
+            "route_source_frame_id": frame.frame_id,
+            "route_source_captured_monotonic_s": frame.captured_monotonic_s,
+            "native_frame_id": mining_frame.frame_id,
+            "native_captured_monotonic_s": mining_frame.captured_monotonic_s,
+            "native_frame_payload_sha256": payload_sha256,
+            "native_frame_path": native_path,
+            "native_window": native_window,
+            "native_dpi": native_dpi,
+            "window": before,
+            "expected_pose_id": expected_pose,
+            "pose_id": pose,
+            "resource_view": resource.view.value,
+            "inventory_occupied_slots": inventory_state.occupied_slots,
+            "inventory_capacity": inventory_state.capacity,
+            "inventory_confidence": inventory_state.confidence,
+            "inventory_unknown_reason": inventory.unknown_reason,
+            "world_state": state.status.value,
+            "world_state_stop_reason": state.stop_reason.value,
+            "perception_age_s": evaluated - mining_frame.captured_monotonic_s,
+        }
+
+    def _capture_start_connector_native_frame(
+        self,
+    ) -> tuple[Any, dict[str, Any], int | None, str]:
+        """Capture unscaled BGRA pixels through the existing client backend."""
+
+        from ..capture import CaptureSource
+        from ..capture.windows import WindowsCaptureBackend
+
+        backend = WindowsCaptureBackend(title_substring=self.expected_title)
+        source = CaptureSource(backend, max_consecutive_failures=1)
+        source.open()
+        try:
+            native_frame = source.capture()
+            selected = backend.selected_window
+            native_dpi = backend.current_dpi
+            if selected is None:
+                raise RuntimeError("native_authority_window_not_selected")
+            native_window = asdict(selected)
+        finally:
+            source.close()
+        path = self.output / (f"{self.frame_id:05d}-start-connector-native-authority.bgra")
+        path.write_bytes(native_frame.payload)
+        return native_frame, native_window, native_dpi, str(path)
 
     def click(self, frame: RouteFrame, point: tuple[int, int], geometry: Any) -> None:
         before = self.guard()
