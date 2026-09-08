@@ -139,6 +139,7 @@ class BetaSession:
         self.reason = "Press Start"
         self.completed = 0
         self.deposited = 0
+        self.gems_deposited = 0
         self.row = 0
         self.started = clock()
         self.active_deadline: float | None = None
@@ -163,6 +164,7 @@ class BetaSession:
             "settings": asdict(self.settings),
             "cycles_completed": self.completed,
             "ore_deposited": max(self.deposited, getattr(self.backend, "ore_deposited", 0)),
+            "gems_deposited": max(self.gems_deposited, getattr(self.backend, "gems_deposited", 0)),
             "child_pid": getattr(getattr(self.backend, "child", None), "pid", None),
             "hwnd": getattr(self.backend, "hwnd", None),
             "cleanup_unconfirmed": self.cleanup_unconfirmed,
@@ -301,9 +303,23 @@ class BetaSession:
                 self.home = None  # No stale home claim while a new cycle owns the character.
                 receipt = self.backend.cycle(self.completed + 1, self.heartbeat)
                 self.controls.check()
-                if receipt.get("success") is not True or receipt.get("deposited_ore") != 28:
+                ore = receipt.get("deposited_ore")
+                gems = receipt.get("deposited_gems", 0)
+                gem_ids = receipt.get("deposited_gem_item_ids", [])
+                if (
+                    receipt.get("success") is not True
+                    or type(ore) is not int
+                    or type(gems) is not int
+                    or ore < 0
+                    or gems < 0
+                    or ore + gems != 28
+                    or type(gem_ids) is not list
+                    or len(gem_ids) != gems
+                    or any(item != "uncut_ruby" for item in gem_ids)
+                ):
                     raise SessionUnproven("full_cycle_receipt_unproven")
-                self.deposited += receipt["deposited_ore"]
+                self.deposited += ore
+                self.gems_deposited += gems
                 self._home()
                 with (self.output / "completed-cycles.jsonl").open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps(receipt, allow_nan=False) + "\n")

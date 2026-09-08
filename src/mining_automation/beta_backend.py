@@ -47,6 +47,7 @@ class PhaseBackend:
         self.job: ChildJob | None = None
         self.sequence = 0
         self.ore_deposited = 0
+        self.gems_deposited = 0
         self.status_sink: Callable[[], None] | None = None
         self.control_hwnd = 0
         self.initial_window: dict[str, Any] | None = None
@@ -221,6 +222,8 @@ class PhaseBackend:
 
     def cycle(self, number: int, heartbeat: Callable[[str], None]) -> dict[str, Any]:
         receipts = []
+        mining_payload: dict[str, Any] = {}
+        bank_payload: dict[str, Any] = {}
         for index, (kind, _tool, _confirm, _sha_arg) in enumerate(PHASES, 1):
             heartbeat(kind)
             result = self._run(
@@ -228,17 +231,27 @@ class PhaseBackend:
             )
             if kind == "mine":
                 _require_mining(result, label=f"cycle_{number}_mining")
+                mining_payload = result
             elif kind == "outbound":
                 _require_route_to_bank(result)
             elif kind == "bank":
-                _require_banking(result)
-                self.ore_deposited += 28
+                _require_banking(result, mining_payload=mining_payload)
+                bank_payload = result
+                self.ore_deposited += result["deposited_ore_count"]
+                self.gems_deposited += result["deposited_gem_count"]
             else:
                 _require_return(result)
             receipts.append(
                 dict(phase=kind, path=result["receipt_path"], sha256=result["receipt_sha256"])
             )
-        return dict(success=True, cycle=number, deposited_ore=28, phase_receipts=receipts)
+        return dict(
+            success=True,
+            cycle=number,
+            deposited_ore=bank_payload["deposited_ore_count"],
+            deposited_gems=bank_payload["deposited_gem_count"],
+            deposited_gem_item_ids=bank_payload["deposited_gem_item_ids"],
+            phase_receipts=receipts,
+        )
 
     def verify_home(self, *, fresh_rocks: bool) -> dict[str, Any]:
         result = self._run(

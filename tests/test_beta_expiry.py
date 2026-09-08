@@ -22,6 +22,13 @@ def result(start=0, end=0, *, expired=True, success=False):
         else MiningOnlyStopReason.PUBLICATION_BLOCKED,
         start_inventory=start,
         end_inventory=end,
+        start_iron=start,
+        end_iron=end,
+        start_gems=0,
+        end_gems=0,
+        start_gem_item_ids=(),
+        end_gem_item_ids=(),
+        verified_gems=0,
         verified_ores=end - start,
         click_count=end - start,
         attempt_count=end - start + int(expired),
@@ -114,3 +121,45 @@ def test_verified_progress_resets_only_the_expiry_retry_budget():
     complete = run_with_fresh_expiry(backend, None, existing)
     assert complete.success and complete.verified_ores == 28
     assert len(complete.events) == 3
+
+
+def test_smooth_cursor_expiry_keeps_original_starts_and_all_gem_gains():
+    from dataclasses import replace
+
+    backend = SimpleNamespace(_zero_click_expired=False)
+    first = replace(
+        result(0, 8),
+        start_iron=0,
+        start_gems=0,
+        end_iron=7,
+        end_gems=1,
+        end_gem_item_ids=("uncut_ruby",),
+        verified_ores=7,
+        verified_gems=1,
+    )
+    last = replace(
+        result(8, 28, expired=False, success=True),
+        start_iron=7,
+        start_gems=1,
+        start_gem_item_ids=("uncut_ruby",),
+        end_iron=27,
+        end_gems=1,
+        end_gem_item_ids=("uncut_ruby",),
+        verified_ores=20,
+        verified_gems=0,
+    )
+    values = iter([first, last])
+
+    def existing(b, c):
+        item = next(values)
+        b._zero_click_expired = not item.success
+        return item
+
+    actual = run_with_fresh_expiry(backend, None, existing)
+    assert actual.success and actual.start_inventory == 0
+    assert actual.start_iron == actual.start_gems == 0
+    assert actual.start_gem_item_ids == ()
+    assert actual.verified_ores == actual.end_iron == 27
+    assert actual.verified_gems == actual.end_gems == 1
+    assert actual.end_inventory == 28
+    assert actual.end_gem_item_ids == ("uncut_ruby",)

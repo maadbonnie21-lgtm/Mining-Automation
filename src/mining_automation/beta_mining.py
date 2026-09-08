@@ -47,7 +47,7 @@ def run_with_fresh_expiry(backend: Any, config: Any, run_existing_safe_loop: Any
         result = run_existing_safe_loop(backend, config)
         results.append(result)
         ordered_events.extend(result.events)
-        if result.verified_ores > 0:
+        if result.verified_ores > 0 or result.verified_gems > 0:
             misses = 0
         expired = (
             getattr(backend, "_zero_click_expired", False)
@@ -58,7 +58,11 @@ def run_with_fresh_expiry(backend: Any, config: Any, run_existing_safe_loop: Any
             return replace(
                 result,
                 start_inventory=results[0].start_inventory,
+                start_iron=results[0].start_iron,
+                start_gems=results[0].start_gems,
+                start_gem_item_ids=results[0].start_gem_item_ids,
                 verified_ores=sum(item.verified_ores for item in results),
+                verified_gems=sum(item.verified_gems for item in results),
                 click_count=sum(item.click_count for item in results),
                 attempt_count=sum(item.attempt_count for item in results),
                 target_sequence=tuple(t for item in results for t in item.target_sequence),

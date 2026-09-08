@@ -22,14 +22,36 @@ def make(tmp_path):
         tmp_path, tmp_path / "run", 42, "RuneLite - test", "a" * 40, SessionSettings(), control
     )
     payloads = {
-        "mine": dict(start_inventory=0, end_inventory=28, stop_reason="inventory_full"),
+        "mine": dict(
+            start_inventory=0,
+            end_inventory=28,
+            stop_reason="inventory_full",
+            start_iron=0,
+            start_gems=0,
+            end_iron=28,
+            end_gems=0,
+            end_gem_item_ids=[],
+            verified_ores=28,
+            verified_gems=0,
+        ),
         "outbound": dict(
             completed_checkpoints=["bank_interior_endpoint"],
             item_actions=0,
             bank_interface_opened=False,
         ),
         "bank": dict(
-            before_ore_count=28, after_ore_count=0, deposit_verified=True, bank_closed_verified=True
+            before_ore_count=28,
+            after_ore_count=0,
+            deposit_verified=True,
+            bank_closed_verified=True,
+            before_occupied_count=28,
+            before_gem_count=0,
+            before_gem_item_ids=[],
+            deposited_ore_count=28,
+            deposited_gem_count=0,
+            deposited_gem_item_ids=[],
+            after_occupied_count=0,
+            after_gem_count=0,
         ),
         "return": dict(completed_checkpoints=["mine_start"], window_unchanged=True),
     }
@@ -162,3 +184,53 @@ def test_cancellation_failure_stays_error_and_preserves_receipt(tmp_path):
     assert result["state"] == "ERROR" and not result["success"]
     assert "cancellation_unconfirmed" in result["reason"]
     assert json.loads((backend.output / "result.json").read_text())["cleanup_unconfirmed"]
+
+
+def mixed_payloads(payloads, gems=1):
+    ids = ["uncut_ruby"] * gems
+    payloads["mine"].update(
+        end_iron=28 - gems,
+        end_gems=gems,
+        end_gem_item_ids=ids,
+        verified_ores=28 - gems,
+        verified_gems=gems,
+    )
+    payloads["bank"].update(
+        before_ore_count=28 - gems,
+        before_gem_count=gems,
+        before_gem_item_ids=ids,
+        deposited_ore_count=28 - gems,
+        deposited_gem_count=gems,
+        deposited_gem_item_ids=ids,
+    )
+
+
+@pytest.mark.parametrize("gems", [0, 1, 2])
+def test_composed_beta_banks_actual_iron_and_gems(tmp_path, gems):
+    backend, controls, payloads, calls = make(tmp_path)
+    mixed_payloads(payloads, gems)
+    result = backend.cycle(1, lambda phase: None)
+    assert calls == ["mine", "outbound", "bank", "return"]
+    assert backend.ore_deposited == result["deposited_ore"] == 28 - gems
+    assert backend.gems_deposited == result["deposited_gems"] == gems
+    assert result["deposited_gem_item_ids"] == ["uncut_ruby"] * gems
+
+
+def test_bank_composition_must_match_this_cycles_mining(tmp_path):
+    backend, controls, payloads, calls = make(tmp_path)
+    mixed_payloads(payloads)
+    payloads["bank"]["deposited_gem_count"] = 0
+    with pytest.raises(FullCycleError):
+        backend.cycle(1, lambda phase: None)
+    assert calls[-1] == "bank"
+    assert backend.ore_deposited == backend.gems_deposited == 0
+
+
+def test_mixed_bank_totals_survive_later_return_failure(tmp_path):
+    backend, controls, payloads, calls = make(tmp_path)
+    mixed_payloads(payloads)
+    payloads["return"]["window_unchanged"] = False
+    with pytest.raises(FullCycleError):
+        backend.cycle(1, lambda phase: None)
+    assert backend.ore_deposited == 27
+    assert backend.gems_deposited == 1

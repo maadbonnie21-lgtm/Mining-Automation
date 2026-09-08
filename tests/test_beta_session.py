@@ -228,3 +228,33 @@ def test_stop_before_start_does_not_mine(tmp_path):
     result = session.run()
     assert result["success"]
     assert backend.cycles == 0
+
+
+def test_three_mixed_cycles_report_gems_separately_and_finish_home(tmp_path):
+    session, controls, backend, clock = make(tmp_path, SessionSettings(mode="finite", cycles=3))
+    original = backend.cycle
+
+    def mixed(number, heartbeat):
+        receipt = original(number, heartbeat)
+        receipt.update(deposited_ore=27, deposited_gems=1, deposited_gem_item_ids=["uncut_ruby"])
+        return receipt
+
+    backend.cycle = mixed
+    actual = session.run()
+    assert actual["success"] and actual["cycles_completed"] == 3
+    assert actual["ore_deposited"] == 81 and actual["gems_deposited"] == 3
+    assert actual["home_proof"]["mine_arrival_verified"]
+
+
+@pytest.mark.parametrize(
+    "ore,gems,ids",
+    [(28, 1, ["uncut_ruby"]), (27, 0, []), (27, 1, []), (27, 1, ["unidentified_item"])],
+)
+def test_bad_mixed_cycle_accounting_cannot_publish_a_completed_cycle(tmp_path, ore, gems, ids):
+    session, controls, backend, clock = make(tmp_path)
+    backend.cycle = lambda *args: dict(
+        success=True, deposited_ore=ore, deposited_gems=gems, deposited_gem_item_ids=ids
+    )
+    actual = session.run()
+    assert not actual["success"] and actual["cycles_completed"] == 0
+    assert actual["state"] == "ERROR"
