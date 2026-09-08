@@ -57,7 +57,12 @@ class BankRunner:
         state = self.backend.guard()
         x, y = self.physical(point)
         ox, oy = state["client_origin"]
-        if not self.backend.api.move_cursor(ox + x, oy + y):
+        from .beta_input import current_policy
+
+        policy = current_policy()
+        if policy is not None:
+            policy.move((ox + x, oy + y))
+        elif not self.backend.api.move_cursor(ox + x, oy + y):
             raise BankUnproven("hover_failed")
         self.backend.wait(0.20)
 
