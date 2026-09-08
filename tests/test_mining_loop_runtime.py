@@ -102,6 +102,9 @@ def _state(
     available: frozenset[str] | None = None,
     inventory_confidence: float = 1.0,
     resource_view: ResourceViewState = ResourceViewState.SUPPORTED,
+    iron_count: int | None = None,
+    gem_count: int | None = None,
+    gem_item_ids: tuple[str, ...] = (),
 ) -> AtomicMiningWorldState:
     epoch = _epoch(sequence)
     resources = (
@@ -123,6 +126,9 @@ def _state(
                 occupied_slots=occupied,
                 capacity=INVENTORY_CAPACITY,
                 confidence=inventory_confidence,
+                iron_count=iron_count,
+                gem_count=gem_count,
+                gem_item_ids=gem_item_ids,
             ),
             unknown_reason="tooltip_occlusion" if occupied is None else None,
         ),
@@ -155,7 +161,7 @@ class _FakeBackend:
     def __init__(
         self,
         clean_states: list[AtomicMiningWorldState],
-        passive_counts: list[list[int | None]],
+        passive_counts: list[list[int | None | InventoryState]],
         *,
         clean_windows: list[MiningWindowSnapshot] | None = None,
         hover_actions: list[str | None] | None = None,
@@ -281,17 +287,23 @@ class _FakeBackend:
         del receipt
         calls = self.passive_call_by_attempt.get(iteration, 0)
         self.passive_call_by_attempt[iteration] = calls + 1
-        occupied = self.passive_counts[iteration - 1][calls]
+        value = self.passive_counts[iteration - 1][calls]
+        inventory = (
+            value
+            if isinstance(value, InventoryState)
+            else InventoryState(
+                occupied_slots=value,
+                capacity=INVENTORY_CAPACITY,
+                confidence=self.passive_confidence if value is not None else 0.0,
+            )
+        )
+        occupied = inventory.occupied_slots
         sequence = proposal.source_epoch.cycle_sequence + 1 + passive_index
         return PassiveMiningObservation(
             epoch=_epoch(sequence, label=f"passive-{iteration}-{passive_index}"),
             resource_release=self.passive_resource_release,
             inventory_release=self.passive_release,
-            inventory=InventoryState(
-                occupied_slots=occupied,
-                capacity=INVENTORY_CAPACITY,
-                confidence=self.passive_confidence if occupied is not None else 0.0,
-            ),
+            inventory=inventory,
             unknown_reason="tooltip_occlusion" if occupied is None else None,
             selected_target_available=self.passive_availability[iteration - 1][calls],
             frame_path=f"passive-{iteration}-{passive_index}.bgra",
@@ -658,6 +670,35 @@ def test_inventory_27_to_28_completes_with_no_29th_click() -> None:
     assert backend.hover_calls == 1
     assert backend.dispatch_calls == 1
     assert result.phase is MiningOnlyPhase.COMPLETE
+
+
+def test_one_click_iron_plus_source_verified_ruby_is_not_counted_as_two_iron() -> None:
+    before = _state(100, 26, iron_count=26, gem_count=0)
+    after = _state(
+        200,
+        28,
+        iron_count=27,
+        gem_count=1,
+        gem_item_ids=("uncut_ruby",),
+    )
+    passive = InventoryState(
+        28,
+        INVENTORY_CAPACITY,
+        1.0,
+        iron_count=27,
+        gem_count=1,
+        gem_item_ids=("uncut_ruby",),
+    )
+    result = run_mining_until_full(_FakeBackend([before, after], [[passive]]), _config())
+    assert result.success is True
+    assert result.start_inventory == 26 and result.end_inventory == 28
+    assert result.start_iron == 26 and result.end_iron == 27
+    assert result.start_gems == 0 and result.end_gems == 1
+    assert result.verified_ores == 1
+    assert result.verified_gems == 1
+    assert result.click_count == 1
+    progress = next(event for event in result.events if event["kind"] == "verified_progress")
+    assert progress["iron_gained"] == progress["gems_gained"] == 1
 
 
 def test_passive_inventory_unknown_waits_for_readable_plus_one_frame() -> None:

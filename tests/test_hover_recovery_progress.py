@@ -21,8 +21,20 @@ from mining_automation.mining_slice import MiningOnlyPhase, MiningOnlyStopReason
 TARGET = "varrock-east-iron-northwest"
 
 
-def _segment(start: int, end: int, *, reason: MiningLoopStopReason) -> MiningLoopResult:
-    gain = end - start
+def _segment(
+    start: int,
+    end: int,
+    *,
+    reason: MiningLoopStopReason,
+    start_iron: int | None = None,
+    end_iron: int | None = None,
+    start_gems: int = 0,
+    end_gems: int = 0,
+) -> MiningLoopResult:
+    start_iron = start if start_iron is None else start_iron
+    end_iron = end if end_iron is None else end_iron
+    iron_gain = end_iron - start_iron
+    gem_gain = end_gems - start_gems
     success = reason is MiningLoopStopReason.INVENTORY_FULL
     return MiningLoopResult(
         success=success,
@@ -34,15 +46,62 @@ def _segment(start: int, end: int, *, reason: MiningLoopStopReason) -> MiningLoo
         ),
         start_inventory=start,
         end_inventory=end,
-        verified_ores=gain,
-        click_count=gain,
-        attempt_count=gain,
-        target_sequence=(TARGET,) * gain,
-        dispatch_ids=tuple(f"dispatch-{ore}" for ore in range(start, end)),
+        start_iron=start_iron,
+        end_iron=end_iron,
+        start_gems=start_gems,
+        end_gems=end_gems,
+        start_gem_item_ids=("uncut_ruby",) * start_gems,
+        end_gem_item_ids=("uncut_ruby",) * end_gems,
+        verified_ores=iron_gain,
+        verified_gems=gem_gain,
+        click_count=iron_gain,
+        attempt_count=iron_gain,
+        target_sequence=(TARGET,) * iron_gain,
+        dispatch_ids=tuple(f"dispatch-{ore}" for ore in range(start_iron, end_iron)),
         events=({"kind": "hover_proof", "target_id": TARGET},) if not success else (),
         final_state=None,
         detail="synthetic segment",
     )
+
+
+def test_hover_recovery_preserves_first_composition_and_aggregates_gems() -> None:
+    segments = iter(
+        (
+            _segment(
+                0,
+                8,
+                reason=MiningLoopStopReason.HOVER_ACTION_UNPROVEN,
+                start_iron=0,
+                end_iron=7,
+                start_gems=0,
+                end_gems=1,
+            ),
+            _segment(
+                8,
+                28,
+                reason=MiningLoopStopReason.INVENTORY_FULL,
+                start_iron=7,
+                end_iron=27,
+                start_gems=1,
+                end_gems=1,
+            ),
+        )
+    )
+    result = safe._run_with_hover_recovery(
+        _backend(),
+        MiningLoopConfig(session_id="mixed-recovery", expected_hwnd=42),
+        lambda *_: next(segments),
+    )
+    assert result.success
+    assert (result.start_inventory, result.end_inventory) == (0, 28)
+    assert (result.start_iron, result.start_gems, result.start_gem_item_ids) == (0, 0, ())
+    assert (result.end_iron, result.end_gems, result.end_gem_item_ids) == (
+        27,
+        1,
+        ("uncut_ruby",),
+    )
+    assert (result.verified_ores, result.verified_gems) == (27, 1)
+    assert (result.click_count, result.attempt_count) == (27, 27)
 
 
 def _backend() -> safe.SafeWindowsMiningToFullBackend:

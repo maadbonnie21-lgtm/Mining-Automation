@@ -20,9 +20,18 @@ from mining_automation.perception.inventory.positive_v3_prototypes import (
     SUPPORTED_REGION,
     SUPPORTED_ROW_STRIDE,
 )
-from mining_automation.perception.inventory.retained_iron import _BACKGROUND_MASK
+from mining_automation.perception.inventory.retained_iron import (
+    _BACKGROUND_MASK,
+    retained_mining_inventory,
+    source_verified_uncut_ruby_slot_rgb,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "retained_iron_inventory_regions.json"
+_SOURCE_VERIFIED_UNCUT_RUBY_RGB = source_verified_uncut_ruby_slot_rgb()
+assert len(_SOURCE_VERIFIED_UNCUT_RUBY_RGB) == 32 * 32 * 3
+assert hashlib.sha256(_SOURCE_VERIFIED_UNCUT_RUBY_RGB).hexdigest() == (
+    "0eec274326e6c66de634780bd2f4e3ec2e222a72e616588d6f3c40a8e4106754"
+)
 
 
 def _region(name: str) -> bytes:
@@ -80,6 +89,41 @@ def _composed_prefix(count: int) -> bytes:
                 src = (y * w + x) * 3
                 dest = ((dy + y) * w + dx + x) * 3
                 data[dest:dest + 3] = source[src:src + 3]
+    return bytes(data)
+
+
+def _current_ruby_inventory(
+    *,
+    slot_index: int = 22,
+    occupied: int = 24,
+    mutate_ruby: bool = False,
+) -> bytes:
+    assert 0 <= slot_index < occupied <= 28
+    data = bytearray(_composed_prefix(occupied))
+    width = SUPPORTED_REGION[2]
+    ruby = bytearray(_SOURCE_VERIFIED_UNCUT_RUBY_RGB)
+    row_index, column_index = divmod(slot_index, 4)
+    offset_x = column_index * SUPPORTED_COLUMN_STRIDE
+    offset_y = row_index * SUPPORTED_ROW_STRIDE
+    empty = _region("empty")
+    for row in range(32):
+        source = ((offset_y + row) * width + offset_x) * 3
+        data[source : source + 32 * 3] = empty[source : source + 32 * 3]
+    ruby_pixels = []
+    for y in range(32):
+        for x in range(32):
+            source = (y * 32 + x) * 3
+            red, green, blue = ruby[source : source + 3]
+            if red > 60 and red - green > 30 and red - blue > 35:
+                ruby_pixels.append((x, y, source))
+    assert ruby_pixels
+    for x, y, source in ruby_pixels:
+        target = ((offset_y + y) * width + offset_x + x) * 3
+        data[target : target + 3] = ruby[source : source + 3]
+    if mutate_ruby:
+        x, y, _ = ruby_pixels[len(ruby_pixels) // 2]
+        target = ((offset_y + y) * width + offset_x + x) * 3
+        data[target : target + 3] = b"\xff\x00\xff"
     return bytes(data)
 
 
@@ -229,3 +273,67 @@ def test_real_twenty_eight_iron_is_full_and_corruption_is_unknown() -> None:
     )
     assert state.occupied_slots is None
     assert reason is not None
+
+
+def test_source_verified_uncut_ruby_keeps_occupied_iron_and_gems_separate() -> None:
+    frame = _frame(_current_ruby_inventory())
+    evaluator = ProductionMiningPerceptionEvaluator()
+    state, reason = evaluator._evaluate_packaged_inventory(frame)
+    composition = evaluator.last_inventory_composition
+    assert state.occupied_slots == 24
+    assert state.iron_count == 23
+    assert state.gem_count == 1
+    assert state.gem_item_ids == ("uncut_ruby",)
+    assert reason is None
+    assert composition is not None
+    assert composition.occupied_slots == 24
+    assert composition.iron_count == 23
+    assert len(composition.byproducts) == 1
+    ruby = composition.byproducts[0]
+    assert ruby.item_id == "uncut_ruby"
+    assert ruby.display_name == "Uncut ruby"
+    assert ruby.slot_index == 22
+    assert ruby.hover_label == "Use Uncut ruby / 2 more options"
+
+
+@pytest.mark.parametrize("slot_index", [0, 5, 17, 22, 27])
+def test_source_verified_uncut_ruby_is_slot_independent(slot_index: int) -> None:
+    frame = _frame(_current_ruby_inventory(slot_index=slot_index, occupied=28))
+    state, reason = ProductionMiningPerceptionEvaluator()._evaluate_packaged_inventory(frame)
+    assert state.occupied_slots == 28
+    assert state.iron_count == 27
+    assert state.gem_count == 1
+    assert state.gem_item_ids == ("uncut_ruby",)
+    assert reason is None
+
+
+def test_source_verified_uncut_ruby_can_be_explicitly_disabled() -> None:
+    frame = _frame(_current_ruby_inventory())
+    evaluator = ProductionMiningPerceptionEvaluator(allowed_mining_byproducts=frozenset())
+    state, reason = evaluator._evaluate_packaged_inventory(frame)
+    assert state.occupied_slots is None
+    assert reason is not None
+    assert evaluator.last_inventory_composition is None
+
+
+def test_unfamiliar_variant_stays_unknown_with_ruby_opt_in() -> None:
+    frame = _frame(_current_ruby_inventory(mutate_ruby=True))
+    evaluator = ProductionMiningPerceptionEvaluator(
+        allowed_mining_byproducts=frozenset({"uncut_ruby"})
+    )
+    state, reason = evaluator._evaluate_packaged_inventory(frame)
+    assert state.occupied_slots is None
+    assert reason is not None
+    assert evaluator.last_inventory_composition is None
+
+
+def test_composition_api_reports_pure_iron_without_byproducts() -> None:
+    frame = _frame(_composed_prefix(23))
+    evaluator = ProductionMiningPerceptionEvaluator()
+    evaluator._evaluate_packaged_inventory(frame)
+    guarded = evaluator._inventory_analyzer.analyze(frame)
+    composition = retained_mining_inventory(frame, guarded)
+    assert composition is not None
+    assert composition.occupied_slots == 23
+    assert composition.iron_count == 23
+    assert composition.byproducts == ()

@@ -56,6 +56,26 @@ def _require_mining(payload: dict[str, Any], *, label: str) -> None:
         raise FullCycleError(f"{label}_inventory_transition_unproven")
     if payload.get("stop_reason") != "inventory_full":
         raise FullCycleError(f"{label}_did_not_stop_at_full_inventory")
+    start_iron = payload.get("start_iron")
+    start_gems = payload.get("start_gems")
+    end_iron = payload.get("end_iron")
+    end_gems = payload.get("end_gems")
+    gem_ids = payload.get("end_gem_item_ids")
+    if (
+        start_iron != 0
+        or start_gems != 0
+        or type(end_iron) is not int
+        or type(end_gems) is not int
+        or end_iron < 0
+        or end_gems < 0
+        or end_iron + end_gems != 28
+        or type(gem_ids) is not list
+        or len(gem_ids) != end_gems
+        or any(item_id != "uncut_ruby" for item_id in gem_ids)
+        or payload.get("verified_ores") != end_iron
+        or payload.get("verified_gems") != end_gems
+    ):
+        raise FullCycleError(f"{label}_item_composition_unproven")
 
 
 def _require_route_to_bank(payload: dict[str, Any]) -> None:
@@ -66,9 +86,27 @@ def _require_route_to_bank(payload: dict[str, Any]) -> None:
         raise FullCycleError("navigation_crossed_banking_boundary")
 
 
-def _require_banking(payload: dict[str, Any]) -> None:
-    if payload.get("before_ore_count") != 28 or payload.get("after_ore_count") != 0:
-        raise FullCycleError("banking_28_to_0_unproven")
+def _require_banking(
+    payload: dict[str, Any],
+    *,
+    mining_payload: dict[str, Any],
+) -> None:
+    expected_iron = mining_payload.get("end_iron")
+    expected_gems = mining_payload.get("end_gems")
+    expected_gem_ids = mining_payload.get("end_gem_item_ids")
+    if (
+        payload.get("before_occupied_count") != 28
+        or payload.get("before_ore_count") != expected_iron
+        or payload.get("before_gem_count") != expected_gems
+        or payload.get("before_gem_item_ids") != expected_gem_ids
+        or payload.get("deposited_ore_count") != expected_iron
+        or payload.get("deposited_gem_count") != expected_gems
+        or payload.get("deposited_gem_item_ids") != expected_gem_ids
+        or payload.get("after_occupied_count") != 0
+        or payload.get("after_ore_count") != 0
+        or payload.get("after_gem_count") != 0
+    ):
+        raise FullCycleError("banking_full_mining_load_to_empty_unproven")
     if payload.get("deposit_verified") is not True:
         raise FullCycleError("deposit_not_verified")
     if payload.get("bank_closed_verified") is not True:
@@ -161,6 +199,7 @@ def run_full_cycle(
         )
     )
     _require_mining(phases[-1].payload, label="first_mining")
+    first_mining_payload = phases[-1].payload
 
     outbound = phase_dir(2, "mine-to-bank")
     phases.append(
@@ -213,7 +252,8 @@ def run_full_cycle(
             ],
         )
     )
-    _require_banking(phases[-1].payload)
+    _require_banking(phases[-1].payload, mining_payload=first_mining_payload)
+    banking_payload = phases[-1].payload
     return2 = phase_dir(4, "return-to-mine-second")
     phases.append(
         _run_phase(
@@ -266,6 +306,7 @@ def run_full_cycle(
         )
     )
     _require_mining(phases[-1].payload, label="second_mining")
+    second_mining_payload = phases[-1].payload
     payload = {
         "status": "PASS",
         "success": True,
@@ -285,6 +326,14 @@ def run_full_cycle(
             for phase in phases
         ],
         "final_inventory": 28,
+        "final_iron": second_mining_payload["end_iron"],
+        "final_gems": second_mining_payload["end_gems"],
+        "final_gem_item_ids": second_mining_payload["end_gem_item_ids"],
+        "first_load_iron_mined": first_mining_payload["end_iron"],
+        "first_load_gems_mined": first_mining_payload["end_gems"],
+        "first_load_gem_item_ids": first_mining_payload["end_gem_item_ids"],
+        "first_load_iron_deposited": banking_payload["deposited_ore_count"],
+        "first_load_gems_deposited": banking_payload["deposited_gem_count"],
         "operator_chose_gameplay_clicks": False,
         "evidence_origin": "standalone_full_cycle_program",
     }

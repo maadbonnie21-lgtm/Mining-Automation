@@ -235,7 +235,14 @@ class MiningLoopResult:
     state_stop_reason: MiningOnlyStopReason
     start_inventory: int | None
     end_inventory: int | None
+    start_iron: int | None
+    end_iron: int | None
+    start_gems: int | None
+    end_gems: int | None
+    start_gem_item_ids: tuple[str, ...]
+    end_gem_item_ids: tuple[str, ...]
     verified_ores: int
+    verified_gems: int
     click_count: int
     attempt_count: int
     target_sequence: tuple[str, ...]
@@ -303,6 +310,9 @@ def _clean_event(kind: str, iteration: int, clean: CleanMiningObservation) -> di
         "frame_sha256": None if epoch is None else epoch.frame_payload_sha256,
         "cycle_id": None if epoch is None else epoch.cycle_id,
         "inventory_occupied": state.inventory.occupied_slots,
+        "inventory_iron": state.inventory.iron_count,
+        "inventory_gems": state.inventory.gem_count,
+        "inventory_gem_item_ids": list(state.inventory.gem_item_ids),
         "inventory_confidence": state.inventory.confidence,
         "publication_status": state.status.value,
         "state_stop_reason": state.stop_reason.value,
@@ -318,6 +328,32 @@ def _clean_event(kind: str, iteration: int, clean: CleanMiningObservation) -> di
         "matched_landmarks": clean.matched_landmarks,
         "matched_zones": list(clean.matched_zones),
     }
+
+
+def _composition_or_legacy(inventory: InventoryState) -> tuple[int | None, int | None]:
+    """Return exact item counts, retaining old pure-iron test backends."""
+
+    if inventory.occupied_slots is None:
+        return None, None
+    if inventory.iron_count is None or inventory.gem_count is None:
+        return inventory.occupied_slots, 0
+    return inventory.iron_count, inventory.gem_count
+
+
+def _source_verified_double_item_gain(
+    before: InventoryState,
+    after: InventoryState,
+) -> bool:
+    return (
+        before.iron_count is not None
+        and before.gem_count is not None
+        and after.iron_count is not None
+        and after.gem_count is not None
+        and after.iron_count - before.iron_count == 1
+        and after.gem_count - before.gem_count == 1
+        and len(after.gem_item_ids) - len(before.gem_item_ids) == 1
+        and all(item_id == "uncut_ruby" for item_id in after.gem_item_ids)
+    )
 
 
 def _balance_available_target(
@@ -361,8 +397,12 @@ def run_mining_until_full(
     targets: list[str] = []
     dispatch_ids: list[str] = []
     start_inventory: int | None = None
+    start_iron: int | None = None
+    start_gems: int | None = None
+    start_gem_item_ids: tuple[str, ...] = ()
     state: AtomicMiningWorldState | None = None
     verified_ores = 0
+    verified_gems = 0
     click_count = 0
     attempt_count = 0
     target_attempt_counts: dict[str, int] = {}
@@ -382,7 +422,14 @@ def run_mining_until_full(
             state_stop_reason=state_reason,
             start_inventory=start_inventory,
             end_inventory=None if state is None else state.inventory.occupied_slots,
+            start_iron=start_iron,
+            end_iron=None if state is None else _composition_or_legacy(state.inventory)[0],
+            start_gems=start_gems,
+            end_gems=None if state is None else _composition_or_legacy(state.inventory)[1],
+            start_gem_item_ids=start_gem_item_ids,
+            end_gem_item_ids=() if state is None else state.inventory.gem_item_ids,
             verified_ores=verified_ores,
+            verified_gems=verified_gems,
             click_count=click_count,
             attempt_count=attempt_count,
             target_sequence=tuple(targets),
@@ -466,6 +513,8 @@ def run_mining_until_full(
                 f"initial atomic state blocked after settle: {state.stop_reason.value}",
             )
         start_inventory = state.inventory.occupied_slots
+        start_iron, start_gems = _composition_or_legacy(state.inventory)
+        start_gem_item_ids = state.inventory.gem_item_ids
         if state.status is WorldStatePublicationStatus.FULL:
             return finish(
                 True,
@@ -627,6 +676,7 @@ def run_mining_until_full(
             targets.append(proposal.target_id)
             dispatch_ids.append(dispatched.receipt.dispatch_id)
             before = proposal.inventory_occupied_before
+            before_inventory = decision.session.current_state.inventory
             last_epoch = proof.hover_epoch
             witness: PassiveMiningObservation | None = None
             progress_hint: str | None = None
@@ -658,6 +708,9 @@ def run_mining_until_full(
                         "cycle_id": passive.epoch.cycle_id,
                         "captured_monotonic_s": passive.epoch.captured_monotonic_s,
                         "inventory_occupied": occupied,
+                        "inventory_iron": passive.inventory.iron_count,
+                        "inventory_gems": passive.inventory.gem_count,
+                        "inventory_gem_item_ids": list(passive.inventory.gem_item_ids),
                         "inventory_confidence": passive.inventory.confidence,
                         "inventory_unknown_reason": passive.unknown_reason,
                         "inventory_delta": delta,
@@ -714,9 +767,19 @@ def run_mining_until_full(
                         "passive Inventory did not satisfy capacity/floor contract",
                     )
                 assert delta is not None
-                if delta == 1:
+                if delta == 1 or (
+                    delta == 2
+                    and _source_verified_double_item_gain(
+                        before_inventory,
+                        passive.inventory,
+                    )
+                ):
                     witness = passive
-                    progress_hint = "inventory_incremented"
+                    progress_hint = (
+                        "iron_and_gem_incremented"
+                        if delta == 2
+                        else "inventory_incremented"
+                    )
                     break
                 if delta == 0 and passive.selected_target_available is False:
                     witness = passive
@@ -728,7 +791,7 @@ def run_mining_until_full(
                         MiningOnlyPhase.STOPPED,
                         MiningLoopStopReason.PASSIVE_INVENTORY_DELTA_AMBIGUOUS,
                         MiningOnlyStopReason.AMBIGUOUS_PROGRESS,
-                        f"passive Inventory delta was {delta}, expected only 0 or exact +1",
+                        f"passive Inventory delta was {delta}, without exact item composition",
                     )
 
             if witness is None:
@@ -895,7 +958,30 @@ def run_mining_until_full(
                 MiningProgressKind.RESOURCE_DEPLETED_AND_INVENTORY_INCREMENTED,
             }
             if ore_gained:
-                verified_ores += 1
+                before_iron, before_gems = _composition_or_legacy(before_inventory)
+                after_iron, after_gems = _composition_or_legacy(state.inventory)
+                assert before_iron is not None and before_gems is not None
+                assert after_iron is not None and after_gems is not None
+                iron_gained = after_iron - before_iron
+                gems_gained = after_gems - before_gems
+                if (
+                    iron_gained not in {0, 1}
+                    or gems_gained not in {0, 1}
+                    or iron_gained + gems_gained
+                    != state.inventory.occupied_slots - before
+                ):
+                    return finish(
+                        False,
+                        MiningOnlyPhase.STOPPED,
+                        MiningLoopStopReason.STATE_MACHINE_STOPPED,
+                        MiningOnlyStopReason.AMBIGUOUS_PROGRESS,
+                        "fresh item-specific mining accounting was inconsistent",
+                    )
+                verified_ores += iron_gained
+                verified_gems += gems_gained
+            else:
+                iron_gained = 0
+                gems_gained = 0
             events.append(
                 {
                     "kind": "verified_progress" if ore_gained else "lost_race_reacquired",
@@ -905,6 +991,9 @@ def run_mining_until_full(
                     "target_id": proposal.target_id,
                     "inventory_before": before,
                     "inventory_after": state.inventory.occupied_slots,
+                    "iron_gained": iron_gained,
+                    "gems_gained": gems_gained,
+                    "gem_item_ids_after": list(state.inventory.gem_item_ids),
                     "progress_kind": decision.progress.value,
                     "progress_hint": progress_hint,
                     "next_phase": decision.session.phase.value,
@@ -915,10 +1004,17 @@ def run_mining_until_full(
             )
             if decision.session.phase is MiningOnlyPhase.COMPLETE:
                 end = state.inventory.occupied_slots
+                end_iron, end_gems = _composition_or_legacy(state.inventory)
+                assert end_iron is not None and end_gems is not None
                 if (
                     end != INVENTORY_CAPACITY
                     or verified_ores > click_count
-                    or verified_ores != end - start_inventory
+                    or verified_gems > click_count
+                    or start_iron is None
+                    or start_gems is None
+                    or verified_ores != end_iron - start_iron
+                    or verified_gems != end_gems - start_gems
+                    or verified_ores + verified_gems != end - start_inventory
                     or decision.proposal is not None
                 ):
                     return finish(

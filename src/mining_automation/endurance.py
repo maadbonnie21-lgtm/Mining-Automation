@@ -149,7 +149,7 @@ def run_endurance(
                 str(banking),
             ],
         )
-        _require_banking(bank_result.payload)
+        _require_banking(bank_result.payload, mining_payload=mine_result.payload)
 
         returning = _phase(output, cycle, 4, "bank-to-mine")
         return_result = run_phase(
@@ -183,8 +183,14 @@ def run_endurance(
                 "route_result": str(route_result.result_path),
                 "bank_result": str(bank_result.result_path),
                 "return_result": str(return_result.result_path),
-                "mined_ore": 28,
-                "deposited_ore": 28,
+                "mined_ore": mine_result.payload["end_iron"],
+                "mined_gems": mine_result.payload["end_gems"],
+                "mined_gem_item_ids": mine_result.payload["end_gem_item_ids"],
+                "deposited_ore": bank_result.payload["deposited_ore_count"],
+                "deposited_gems": bank_result.payload["deposited_gem_count"],
+                "deposited_gem_item_ids": bank_result.payload[
+                    "deposited_gem_item_ids"
+                ],
                 "returned_empty": True,
             }
         )
@@ -198,8 +204,10 @@ def run_endurance(
         "git_sha": sha,
         "cycles_requested": cycles,
         "cycles_completed": len(completed),
-        "total_ore_mined": 28 * len(completed),
-        "total_ore_deposited": 28 * len(completed),
+        "total_ore_mined": sum(item["mined_ore"] for item in completed),
+        "total_gems_mined": sum(item["mined_gems"] for item in completed),
+        "total_ore_deposited": sum(item["deposited_ore"] for item in completed),
+        "total_gems_deposited": sum(item["deposited_gems"] for item in completed),
         "final_inventory": 0,
         "final_location": "mine_start",
         "operator_chose_gameplay_clicks": False,

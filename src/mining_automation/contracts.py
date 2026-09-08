@@ -122,6 +122,9 @@ class InventoryState:
     occupied_slots: int | None
     capacity: int = 28
     confidence: float = 0.0
+    iron_count: int | None = None
+    gem_count: int | None = None
+    gem_item_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not _is_integer(self.capacity) or self.capacity <= 0:
@@ -130,6 +133,26 @@ class InventoryState:
             raise ValueError("occupied_slots must be an integer or None")
         if self.occupied_slots is not None and not 0 <= self.occupied_slots <= self.capacity:
             raise ValueError("occupied_slots must be between 0 and capacity inclusive")
+        if (self.iron_count is None) != (self.gem_count is None):
+            raise ValueError("iron_count and gem_count must be known or unknown together")
+        if self.iron_count is not None:
+            if self.occupied_slots is None:
+                raise ValueError("known item composition requires known occupied_slots")
+            if not _is_integer(self.iron_count) or self.iron_count < 0:
+                raise ValueError("iron_count must be a non-negative integer or None")
+            if not _is_integer(self.gem_count) or self.gem_count < 0:
+                raise ValueError("gem_count must be a non-negative integer or None")
+            if self.iron_count + self.gem_count != self.occupied_slots:
+                raise ValueError("iron_count plus gem_count must equal occupied_slots")
+        if not isinstance(self.gem_item_ids, tuple) or any(
+            not isinstance(item_id, str) or not item_id for item_id in self.gem_item_ids
+        ):
+            raise ValueError("gem_item_ids must be an exact tuple of non-empty strings")
+        if self.gem_count is None:
+            if self.gem_item_ids:
+                raise ValueError("unknown composition cannot carry gem_item_ids")
+        elif len(self.gem_item_ids) != self.gem_count:
+            raise ValueError("gem_item_ids must identify every occupied gem slot")
         _validate_confidence(self.confidence)
 
     @property

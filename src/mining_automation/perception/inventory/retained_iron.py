@@ -16,8 +16,10 @@ production release, or proof of live 0->28. Unseen sprite variants remain UNKNOW
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import zlib
+from dataclasses import dataclass
 from typing import Final
 
 from ...capture import Frame, PixelFormat
@@ -59,6 +61,118 @@ _BACKGROUND_MASK: Final[bytes] = bytes.fromhex(
     "000000e0000000e0000000e0000000c0000008e0810118f0e30138feff01f0ffff01f8ffff01f8ff"
     "ff03fcffff07feff"
 )
+
+SOURCE_VERIFIED_MINING_BYPRODUCT_IDS: Final[frozenset[str]] = frozenset(
+    {"uncut_ruby"}
+)
+UNCUT_RUBY_FULL_SLOT_RGB_SHA256: Final[str] = (
+    "0eec274326e6c66de634780bd2f4e3ec2e222a72e616588d6f3c40a8e4106754"
+)
+UNCUT_RUBY_SPRITE_SIGNATURE_SHA256: Final[str] = (
+    "5f6ec9545f98cbc365ed4b8dd88f2e34cc65d54bbc9817cf9d129d206357953d"
+)
+_UNCUT_RUBY_FULL_SLOT_RGB_ZLIB_BASE64: Final[str] = (
+    "eNrVlklv2kAYhlUgZbENY3sAG7yQ2kqLHXqgkEsS2mNbKaceqmwtCYguiKSFJLdIoCr/"
+    "u589eLBZErMcWvQI+WA977cwxo16ubGAgzcv96s7AFw0Ft+2GlRO2WDKrBw4rL369+XAr"
+    "Bz4LyYzt3i/XETc3mtzzQgQChkulUwQGB8fMJdjkuR65SAo8mtROJHTnyVuio6CjrLMe5"
+    "wCMDPJDZ9F5EMjOzJyQyPf0/gfKvLTUTLHMmSxH90UmhUyIpmI/9bxHzMLPJj5kZEfunQ"
+    "V/lsRES4LmQuXY6cpFkjHohXbOqxby/gx+B9MCbjTheG22C3ynQICWh4XXlAmFrVt+6Bu"
+    "L+UnLYB/oPE3Gj/yIlpBzmUuvaIfU/8vFdEIEMKIqPxEYitshAu35Sk/aYH4aUTT83eVsb"
+    "+WjsQjz8KsYMaPqf++JPQ1J+J+W4AtgxyCTiUW/J9yKS4aCTMi8F/rApWTFsAP8tELca"
+    "A5XcD3tYq+F9GZ5BRPCLkC188H/fhWF291fFfCA13su7QK/LlPDhzhlMiknlzBfL9jntA"
+    "u8HCQYQWnwQhoYdcuP76CJ/1EDge5XZiOCDOiesVQ2OSgFFjByBhHUDnxt4IRa62gFJBTv"
+    "z9iHT+00FUDz7q27wiTiJD+2RHd6Hxf469U1FPRz3l+ErHUU4i2AHL4tV959DyaMvoiTd"
+    "ASz3dMs1qthvGTFtrFDJTtl1Mu4ckjBSDF79d2Q/7RQITMJPBWDGjK6blymDlBiW+FL94"
+    "fYVtly7LyTIoEEfjYGBSLEog8fPGT15W6s6+aF7Tos5p8NugRNv4CvBHe7tnvXFY2/AU"
+    "o8Edm"
+)
+_UNCUT_RUBY_SOURCE_FRAME_SHA256: Final[str] = (
+    "5ef4691f7ce027203cba804ec95362725b6a430659906c6799bdcb122c469964"
+)
+_UNCUT_RUBY_HOVER_FRAME_SHA256: Final[str] = (
+    "1c01876845ec53d03e1039a23ea8708f0ba96db659e2a023139d3e56861539d7"
+)
+_UNCUT_RUBY_HOVER_LABEL: Final[str] = "Use Uncut ruby / 2 more options"
+
+
+@dataclass(frozen=True, slots=True)
+class RetainedMiningByproduct:
+    """One exact source-verified non-iron item; never item-action authority."""
+
+    item_id: str
+    display_name: str
+    slot_index: int
+    full_slot_rgb_sha256: str
+    source_frame_sha256: str
+    hover_frame_sha256: str
+    hover_label: str
+
+
+@dataclass(frozen=True, slots=True)
+class RetainedMiningInventory:
+    """Known composition with physical occupancy separate from iron count."""
+
+    occupied_slots: int
+    iron_count: int
+    byproducts: tuple[RetainedMiningByproduct, ...]
+
+
+def source_verified_uncut_ruby_slot_rgb() -> bytes:
+    """Return the immutable 32x32 RGB evidence template used by both views."""
+
+    payload = zlib.decompress(base64.b64decode(_UNCUT_RUBY_FULL_SLOT_RGB_ZLIB_BASE64))
+    if (
+        len(payload) != 32 * 32 * 3
+        or hashlib.sha256(payload).hexdigest() != UNCUT_RUBY_FULL_SLOT_RGB_SHA256
+    ):
+        raise RuntimeError("source-verified uncut ruby template digest mismatch")
+    return payload
+
+
+def source_verified_mining_byproduct(
+    *,
+    full_slot_rgb: bytes,
+    slot_index: int,
+    allowed_byproducts: frozenset[str],
+) -> RetainedMiningByproduct | None:
+    """Classify one guarded slot without assuming its historical position.
+
+    The signature retains the exact red sprite pixels and their coordinates,
+    independent of the slot's ordinary background. A caller must separately
+    prove guarded inventory geometry/background; provenance does not grant
+    hover or item-action authority.
+    """
+
+    if type(allowed_byproducts) is not frozenset:
+        raise TypeError("allowed_byproducts must be an exact frozenset")
+    unsupported = allowed_byproducts - SOURCE_VERIFIED_MINING_BYPRODUCT_IDS
+    if unsupported:
+        raise ValueError(f"unsupported mining byproduct IDs: {sorted(unsupported)}")
+    if type(slot_index) is not int or not 0 <= slot_index < 28:
+        raise ValueError("slot_index must be an exact inventory slot index")
+    if type(full_slot_rgb) is not bytes or len(full_slot_rgb) != 32 * 32 * 3:
+        raise ValueError("full_slot_rgb must be one exact 32x32 RGB slot")
+    signature = bytearray()
+    for y in range(32):
+        for x in range(32):
+            offset = (y * 32 + x) * 3
+            red, green, blue = full_slot_rgb[offset : offset + 3]
+            if red > 60 and red - green > 30 and red - blue > 35:
+                signature.extend((x, y, red, green, blue))
+    if "uncut_ruby" not in allowed_byproducts or (
+        hashlib.sha256(signature).hexdigest() != UNCUT_RUBY_SPRITE_SIGNATURE_SHA256
+    ):
+        return None
+    full_slot_rgb_sha256 = hashlib.sha256(full_slot_rgb).hexdigest()
+    return RetainedMiningByproduct(
+        item_id="uncut_ruby",
+        display_name="Uncut ruby",
+        slot_index=slot_index,
+        full_slot_rgb_sha256=full_slot_rgb_sha256,
+        source_frame_sha256=_UNCUT_RUBY_SOURCE_FRAME_SHA256,
+        hover_frame_sha256=_UNCUT_RUBY_HOVER_FRAME_SHA256,
+        hover_label=_UNCUT_RUBY_HOVER_LABEL,
+    )
 
 # Additional source-proven row variants: mining-to-full-20260905-234057-2cfcfe4b,
 # frame 00102-iteration-13-passive-03.bgra, SHA256
@@ -407,18 +521,36 @@ def _positive_iron_slot(frame: Frame, slot: Region) -> bool:
     return False
 
 
-def retained_iron_count(
+def _full_slot_rgb(frame: Frame, slot: Region) -> bytes:
+    payload = bytearray()
+    for y in range(32):
+        for x in range(32):
+            offset = ((slot.y + y) * frame.width + slot.x + x) * 4
+            blue, green, red = frame.payload[offset : offset + 3]
+            payload.extend((red, green, blue))
+    return bytes(payload)
+
+
+def retained_mining_inventory(
     frame: Frame,
     guarded: InventoryPositiveV3DevelopmentResult,
-) -> int | None:
-    """Recognize a nonempty prefix only with fresh guard and positive slot proof.
+    *,
+    allowed_byproducts: frozenset[str] = frozenset(),
+) -> RetainedMiningInventory | None:
+    """Recognize a nonempty prefix with explicit iron/byproduct composition.
 
     ``guarded`` must be the existing analyzer result for this same ``frame``.
     Geometry and external/gutter guards must already have passed; they yield
     zero slots on failure. Unchanged raw empty decisions retain the 0.8 floor.
-    Every occupied slot requires a complete positive template match. Returning
-    None supplies no alternative evidence and grants no downstream authority.
+    Every occupied slot requires a complete positive template match. The only
+    optional byproduct is the exact clean slot independently identified by a
+    fresh no-click hover. Its historical source hashes grant no item action.
     """
+    if type(allowed_byproducts) is not frozenset:
+        raise TypeError("allowed_byproducts must be an exact frozenset")
+    unsupported = allowed_byproducts - SOURCE_VERIFIED_MINING_BYPRODUCT_IDS
+    if unsupported:
+        raise ValueError(f"unsupported mining byproduct IDs: {sorted(unsupported)}")
     if (
         (frame.width, frame.height) != (SUPPORTED_FRAME_WIDTH, SUPPORTED_FRAME_HEIGHT)
         or frame.pixel_format is not PixelFormat.BGRA8888
@@ -429,19 +561,48 @@ def retained_iron_count(
         SUPPORTED_PROFILE_ID, SUPPORTED_COLUMN_STRIDE, SUPPORTED_ROW_STRIDE,
     )
     slots = layout.all_slot_regions(Region(*SUPPORTED_REGION))
-    count = 0
+    occupied_slots = 0
+    iron_count = 0
+    byproducts: list[RetainedMiningByproduct] = []
     saw_empty = False
     for index, (decision, slot) in enumerate(zip(guarded.slots, slots, strict=True)):
         if decision.index != index:
             return None
         if decision.raw_v1_state is SlotOccupancy.EMPTY and decision.raw_v1_confidence >= 0.8:
             saw_empty = True
-        elif (
-            decision.raw_v1_state is SlotOccupancy.OCCUPIED
-            and not saw_empty
-            and _positive_iron_slot(frame, slot)
-        ):
-            count += 1
-        else:
+            continue
+        if decision.raw_v1_state is not SlotOccupancy.OCCUPIED or saw_empty:
             return None
-    return count if count else None
+        if _positive_iron_slot(frame, slot):
+            iron_count += 1
+            occupied_slots += 1
+            continue
+        byproduct = source_verified_mining_byproduct(
+            full_slot_rgb=_full_slot_rgb(frame, slot),
+            slot_index=index,
+            allowed_byproducts=allowed_byproducts,
+        )
+        if byproduct is not None:
+            byproducts.append(byproduct)
+            occupied_slots += 1
+            continue
+        return None
+    if occupied_slots == 0:
+        return None
+    return RetainedMiningInventory(
+        occupied_slots=occupied_slots,
+        iron_count=iron_count,
+        byproducts=tuple(byproducts),
+    )
+
+
+def retained_iron_count(
+    frame: Frame,
+    guarded: InventoryPositiveV3DevelopmentResult,
+) -> int | None:
+    """Preserve the original pure-iron result and reject every byproduct."""
+
+    composition = retained_mining_inventory(frame, guarded)
+    if composition is None or composition.byproducts:
+        return None
+    return composition.iron_count

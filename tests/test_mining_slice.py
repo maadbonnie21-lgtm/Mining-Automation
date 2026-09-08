@@ -106,6 +106,9 @@ def _envelopes(
     inventory_epoch: PerceptionEpoch | None = None,
     resource_release: PerceptionReleaseIdentity = RESOURCE_RELEASE,
     inventory_release: PerceptionReleaseIdentity = INVENTORY_RELEASE,
+    iron_count: int | None = None,
+    gem_count: int | None = None,
+    gem_item_ids: tuple[str, ...] = (),
 ) -> tuple[ResourcePerceptionEnvelope, InventoryPerceptionEnvelope]:
     owned = epoch or _epoch()
     return (
@@ -118,7 +121,14 @@ def _envelopes(
         InventoryPerceptionEnvelope(
             epoch=inventory_epoch or owned,
             release=inventory_release,
-            inventory=InventoryState(occupied, capacity=INVENTORY_CAPACITY, confidence=confidence),
+            inventory=InventoryState(
+                occupied,
+                capacity=INVENTORY_CAPACITY,
+                confidence=confidence,
+                iron_count=iron_count,
+                gem_count=gem_count,
+                gem_item_ids=gem_item_ids,
+            ),
             unknown_reason="detector-unknown" if occupied is None else None,
         ),
     )
@@ -135,6 +145,9 @@ def _state(
     inventory_epoch: PerceptionEpoch | None = None,
     resource_release: PerceptionReleaseIdentity = RESOURCE_RELEASE,
     inventory_release: PerceptionReleaseIdentity = INVENTORY_RELEASE,
+    iron_count: int | None = None,
+    gem_count: int | None = None,
+    gem_item_ids: tuple[str, ...] = (),
 ) -> AtomicMiningWorldState:
     owned = epoch or _epoch()
     resource, inventory = _envelopes(
@@ -146,6 +159,9 @@ def _state(
         inventory_epoch=inventory_epoch,
         resource_release=resource_release,
         inventory_release=inventory_release,
+        iron_count=iron_count,
+        gem_count=gem_count,
+        gem_item_ids=gem_item_ids,
     )
     return assemble_atomic_mining_world_state(
         resource=resource,
@@ -392,6 +408,45 @@ def test_strictly_newer_depletion_and_inventory_plus_one_continue_with_next_atte
     assert decision.proposal.target_id == "iron-center"
     assert decision.session.spent_attempt_ids == (proposal.attempt_id,)
     assert decision.session.spent_dispatch_ids == ("dispatch-1",)
+
+
+def test_exact_iron_plus_ruby_double_gain_is_distinct_from_ambiguous_plus_two() -> None:
+    initial = _state(occupied=22, iron_count=22, gem_count=0)
+    started = begin_mining_only_session(
+        session_id="mixed-gain-session",
+        state=initial,
+        now_monotonic_s=1.25,
+    )
+    assert started.proposal is not None
+    attempted = record_mining_attempt_dispatch(
+        started.session,
+        started.proposal,
+        _receipt(started.proposal),
+    ).session
+    mixed = _state(
+        _epoch(2, captured=1.5),
+        occupied=24,
+        iron_count=23,
+        gem_count=1,
+        gem_item_ids=("uncut_ruby",),
+        resources=_resources(target_available=False, second_available=True),
+        now=1.6,
+    )
+    decision = reobserve_mining_attempt(attempted, mixed, now_monotonic_s=1.6)
+    assert decision.session.phase is MiningOnlyPhase.READY
+    assert decision.progress is MiningProgressKind.RESOURCE_DEPLETED_AND_INVENTORY_INCREMENTED
+
+    ambiguous = _state(
+        _epoch(3, captured=2.0),
+        occupied=24,
+        iron_count=24,
+        gem_count=0,
+        resources=_resources(target_available=False, second_available=True),
+        now=2.1,
+    )
+    stopped = reobserve_mining_attempt(attempted, ambiguous, now_monotonic_s=2.1)
+    assert stopped.session.phase is MiningOnlyPhase.STOPPED
+    assert stopped.stop_reason is MiningOnlyStopReason.AMBIGUOUS_PROGRESS
 
 
 @pytest.mark.parametrize(

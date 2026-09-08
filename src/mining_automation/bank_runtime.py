@@ -1,4 +1,4 @@
-"""Live iron-only deposit followed by an explicitly verified bank-X click."""
+"""Live item-specific mining-load deposit followed by verified bank-X close."""
 
 from __future__ import annotations
 
@@ -75,13 +75,161 @@ class BankRunner:
             self.backend.wait(0.25)
         raise BankUnproven("bank_did_not_open")
 
+    @staticmethod
+    def _gem_ids(inventory: dict[str, Any]) -> list[str]:
+        return [str(item["item_id"]) for item in inventory["gems"]]
+
+    @staticmethod
+    def _item_slots(inventory: dict[str, Any], item_id: str) -> list[tuple[int, int, int, int]]:
+        if item_id == "iron_ore":
+            return [tuple(slot) for slot in inventory["ore_slots"]]
+        if item_id == "uncut_ruby":
+            return [
+                tuple(item["slot"])
+                for item in inventory["gems"]
+                if item["item_id"] == "uncut_ruby"
+            ]
+        raise BankUnproven("unsupported_deposit_item:" + item_id)
+
+    @classmethod
+    def _known_composition(
+        cls,
+        inventory: dict[str, Any],
+        *,
+        ore_count: int,
+        gem_ids: list[str],
+        empty_count: int,
+    ) -> bool:
+        return (
+            inventory["ore_count"] == ore_count
+            and cls._gem_ids(inventory) == gem_ids
+            and inventory["gem_count"] == len(gem_ids)
+            and inventory["empty_count"] == empty_count
+            and inventory["unknown_count"] == 0
+            and inventory["occupied_count"] == ore_count + len(gem_ids)
+        )
+
+    def _wait_composition(
+        self,
+        *,
+        label: str,
+        ore_count: int,
+        gem_ids: list[str],
+        empty_count: int,
+    ) -> tuple[Any, Any, dict[str, Any]]:
+        proofs = 0
+        last: tuple[Any, Any, dict[str, Any]] | None = None
+        for _ in range(15):
+            frame, image = self.observe(label)
+            if not self.vision.bank_controls(image):
+                raise BankUnproven("bank_not_open_during_deposit_verification")
+            inventory = self.vision.inventory(image)
+            last = (frame, image, inventory)
+            if self._known_composition(
+                inventory,
+                ore_count=ore_count,
+                gem_ids=gem_ids,
+                empty_count=empty_count,
+            ):
+                proofs += 1
+                if proofs >= 2:
+                    return last
+            else:
+                proofs = 0
+            self.backend.wait(0.25)
+        raise BankUnproven("item_specific_deposit_not_verified")
+
+    def _deposit_all_item(
+        self,
+        *,
+        frame: Any,
+        image: Any,
+        inventory: dict[str, Any],
+        item_id: str,
+        expected_ore_before: int,
+        expected_gems_before: list[str],
+        expected_ore_after: int,
+        expected_gems_after: list[str],
+    ) -> tuple[Any, Any, dict[str, Any]]:
+        slots = self._item_slots(inventory, item_id)
+        if not slots:
+            raise BankUnproven("approved_deposit_item_missing:" + item_id)
+        point = ((slots[0][0] + slots[0][2]) // 2, (slots[0][1] + slots[0][3]) // 2)
+        self.hover(point)
+        frame, image = self.observe(f"{item_id}-deposit-all-hover")
+        hovered = self.vision.inventory(image)
+        hover_slots = self._item_slots(hovered, item_id)
+        prefix_score = self.vision.deposit_all_prefix_score(image)
+        self.record(
+            "ITEM_SPECIFIC_DEPOSIT_HOVER",
+            item_id=item_id,
+            prefix_score=prefix_score,
+            frame_id=frame.frame_id,
+            source_prefix_sha256=self.vision.deposit_all_prefix_source_sha256,
+        )
+        if point not in [
+            ((slot[0] + slot[2]) // 2, (slot[1] + slot[3]) // 2)
+            for slot in hover_slots
+        ]:
+            raise BankUnproven("hovered_item_identity_changed:" + item_id)
+        if prefix_score < 0.85:
+            raise BankUnproven("deposit_all_hover_unproven:" + item_id)
+
+        # Clear the top action overlay and recapture. The historical hover point
+        # is never clicked: the item is found again in this newer clean frame.
+        self.hover((100, 15))
+        frame, image = self.observe(f"pre-{item_id}-deposit-clean")
+        controls = self.vision.bank_controls(image)
+        if controls is None:
+            raise BankUnproven("bank_closed_before_deposit")
+        title = controls[0]
+        all_box = (title.x + 70, title.y + 600, title.x + 145, title.y + 660)
+        selected = self.vision.match(image, "quantity_all_selected", all_box)
+        self.record("QUANTITY_ALL_VERIFIED", item_id=item_id, score=selected.score)
+        if selected.score < 0.90:
+            raise BankUnproven("quantity_All_not_selected")
+        inventory = self.vision.inventory(image)
+        if not self._known_composition(
+            inventory,
+            ore_count=expected_ore_before,
+            gem_ids=expected_gems_before,
+            empty_count=28 - expected_ore_before - len(expected_gems_before),
+        ):
+            raise BankUnproven("inventory_changed_before_deposit:" + item_id)
+        fresh_slots = self._item_slots(inventory, item_id)
+        if not fresh_slots:
+            raise BankUnproven("fresh_deposit_item_missing:" + item_id)
+        fresh_point = (
+            (fresh_slots[0][0] + fresh_slots[0][2]) // 2,
+            (fresh_slots[0][1] + fresh_slots[0][3]) // 2,
+        )
+        action = (
+            "DEPOSIT_ALL_IRON_ORE_ONLY"
+            if item_id == "iron_ore"
+            else "DEPOSIT_ALL_UNCUT_RUBY_ONLY"
+        )
+        self.click(frame, fresh_point, action)
+        self.hover((100, 15))
+        return self._wait_composition(
+            label=f"verify-{item_id}-deposit",
+            ore_count=expected_ore_after,
+            gem_ids=expected_gems_after,
+            empty_count=28 - expected_ore_after - len(expected_gems_after),
+        )
+
     def run(self, open_only: bool = False) -> dict[str, Any]:
         self.hover((100, 15))
         frame, image = self.observe("banking-start")
         inventory = self.vision.inventory(image)
         self.record("INVENTORY_BEFORE", **inventory)
-        if inventory["ore_count"] != 28 or inventory["unknown_count"]:
-            raise BankUnproven("requires_verified_28_iron_ore")
+        before_ore_count = inventory["ore_count"]
+        before_gem_ids = self._gem_ids(inventory)
+        if (
+            inventory["occupied_count"] != 28
+            or inventory["unknown_count"]
+            or before_ore_count + len(before_gem_ids) != 28
+        ):
+            raise BankUnproven("requires_verified_full_mining_load")
         if not self.vision.bank_controls(image):
             booth = self.vision.match(image, "booth", (0, 100, 530, image.shape[0] - 150))
             if booth.score < 0.94:
@@ -106,8 +254,13 @@ class BankRunner:
         if open_only:
             return {"status": "OPEN_STAGE_PASS", "success": False, "deposit_verified": False}
         inventory = self.vision.inventory(image)
-        if inventory["ore_count"] != 28 or inventory["unknown_count"]:
-            raise BankUnproven("bank_inventory_is_not_28_iron_ore")
+        if not self._known_composition(
+            inventory,
+            ore_count=before_ore_count,
+            gem_ids=before_gem_ids,
+            empty_count=0,
+        ):
+            raise BankUnproven("bank_inventory_is_not_same_full_mining_load")
         controls = self.vision.bank_controls(image)
         if controls is None:
             raise BankUnproven("bank_controls_lost")
@@ -119,48 +272,47 @@ class BankRunner:
             if all_button.score < 0.83:
                 raise BankUnproven("quantity_All_control_unproven")
             self.click(frame, all_button.centre, "SET_ITEM_QUANTITY_ALL")
-        slot = inventory["ore_slots"][0]
-        ore_point = ((slot[0] + slot[2]) // 2, (slot[1] + slot[3]) // 2)
-        self.hover(ore_point)
-        frame, image = self.observe("iron-deposit-all-hover")
-        proof = self.vision.match(image, "deposit_text", (0, 24, 350, 65), text=True)
-        self.record("DEPOSIT_HOVER", score=proof.score, frame_id=frame.frame_id)
-        # The hover overlay covers the bank title and adjacent inventory slots.
-        # Remove the overlay, then obtain a newer clean frame for all input gates.
-        self.hover((100, 15))
-        frame, image = self.observe("pre-deposit-clean")
-        if not self.vision.bank_controls(image):
-            raise BankUnproven("bank_closed_before_deposit")
-        # Actual item action is proven by bank OPEN + selected Quantity-All
-        # + the identified player-inventory iron slot. Text is diagnostic.
-        selected = self.vision.match(image, "quantity_all_selected", all_box)
-        self.record("QUANTITY_ALL_VERIFIED", score=selected.score)
-        if selected.score < 0.90:
-            raise BankUnproven("quantity_All_not_selected")
-        inventory = self.vision.inventory(image)
-        if inventory["ore_count"] != 28 or inventory["unknown_count"]:
-            raise BankUnproven("inventory_changed_before_deposit")
-        self.click(frame, ore_point, "DEPOSIT_ALL_IRON_ORE_ONLY")
-        self.hover((100, 15))
-        empty_proofs = 0
-        for _ in range(15):
-            frame, image = self.observe("verify-deposit-empty")
-            if not self.vision.bank_controls(image):
-                raise BankUnproven("bank_not_open_during_deposit_verification")
-            after = self.vision.inventory(image)
-            empty_proofs = empty_proofs + 1 if after["empty_count"] == 28 else 0
-            if empty_proofs >= 2:
-                self.record(
-                    "DEPOSIT_VERIFIED",
-                    before_ore_count=28,
-                    after_ore_count=0,
-                    empty_slots=28,
-                    frame_id=frame.frame_id,
-                )
-                break
-            self.backend.wait(0.25)
-        else:
+        if before_ore_count:
+            frame, image, inventory = self._deposit_all_item(
+                frame=frame,
+                image=image,
+                inventory=inventory,
+                item_id="iron_ore",
+                expected_ore_before=before_ore_count,
+                expected_gems_before=before_gem_ids,
+                expected_ore_after=0,
+                expected_gems_after=before_gem_ids,
+            )
+        if before_gem_ids:
+            frame, image, inventory = self._deposit_all_item(
+                frame=frame,
+                image=image,
+                inventory=inventory,
+                item_id="uncut_ruby",
+                expected_ore_before=0,
+                expected_gems_before=before_gem_ids,
+                expected_ore_after=0,
+                expected_gems_after=[],
+            )
+        if not self._known_composition(
+            inventory,
+            ore_count=0,
+            gem_ids=[],
+            empty_count=28,
+        ):
             raise BankUnproven("deposit_did_not_prove_empty_inventory")
+        self.record(
+            "DEPOSIT_VERIFIED",
+            before_occupied_count=28,
+            before_ore_count=before_ore_count,
+            before_gem_count=len(before_gem_ids),
+            before_gem_item_ids=before_gem_ids,
+            after_occupied_count=0,
+            after_ore_count=0,
+            after_gem_count=0,
+            empty_slots=28,
+            frame_id=frame.frame_id,
+        )
         controls = self.vision.bank_controls(image)
         if controls is None:
             raise BankUnproven("bank_X_not_verified")
@@ -183,8 +335,16 @@ class BankRunner:
                     "success": True,
                     "deposit_verified": True,
                     "bank_closed_verified": True,
-                    "before_ore_count": 28,
+                    "before_occupied_count": 28,
+                    "before_ore_count": before_ore_count,
+                    "before_gem_count": len(before_gem_ids),
+                    "before_gem_item_ids": before_gem_ids,
+                    "deposited_ore_count": before_ore_count,
+                    "deposited_gem_count": len(before_gem_ids),
+                    "deposited_gem_item_ids": before_gem_ids,
+                    "after_occupied_count": 0,
                     "after_ore_count": 0,
+                    "after_gem_count": 0,
                     "manual_operator_clicks": False,
                     "last_image": frame.evidence_path,
                 }
@@ -218,6 +378,7 @@ def main() -> int:
         "src/mining_automation/bank_vision.py",
         "src/mining_automation/bank_profiles/iron_bank.npz",
         "src/mining_automation/bank_profiles/iron_bank.json",
+        "src/mining_automation/perception/inventory/retained_iron.py",
     ):
         git("ls-files", "--error-unmatch", rel)
     backend = None
