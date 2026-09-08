@@ -407,6 +407,8 @@ class VisualRoute:
         fresh terrain consensus, the same connector, and a current health proof.
         """
 
+        if not self.verify_gameplay(image, geometry):
+            raise LocalizationError("gameplay_chrome_unproven")
         registration = self.references[waypoint.image_key].register(
             crop_minimap(image, geometry)
         )

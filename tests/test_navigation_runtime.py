@@ -359,6 +359,17 @@ def test_observed_post_third_departure_connects_to_canonical_start_then_route():
     assert backend.wait_count_before_connector_click == backend.wait_count_after_authority
 
 
+def test_connector_fast_reregistration_rejects_missing_gameplay_chrome():
+    route = VisualRoute.__new__(VisualRoute)
+    route.verify_gameplay = lambda _image, _geometry: False
+    with pytest.raises(LocalizationError, match="gameplay_chrome_unproven"):
+        route.observe_at_geometry(
+            object(),
+            SimpleNamespace(image_key="map_mine_start"),
+            ConnectorGeometry(),
+        )
+
+
 def test_same_radius_wrong_bearing_is_not_an_authorized_departure():
     backend = ConnectorBackend(position=(10.00010335957663, -5.00036695352385))
     result = run_route(backend, ConnectorRoute(backend))
