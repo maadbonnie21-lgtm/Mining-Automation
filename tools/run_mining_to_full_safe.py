@@ -284,9 +284,13 @@ def _run_with_hover_recovery(
     aggregate_targets: list[str] = []
     aggregate_dispatch_ids: list[str] = []
     aggregate_verified_ores = 0
+    aggregate_verified_gems = 0
     aggregate_click_count = 0
     aggregate_attempt_count = 0
     first_start_inventory: int | None = None
+    first_start_iron: int | None = None
+    first_start_gems: int | None = None
+    first_start_gem_item_ids: tuple[str, ...] | None = None
     recovery_count = 0
     misses_since_progress = 0
 
@@ -294,16 +298,20 @@ def _run_with_hover_recovery(
         result: MiningLoopResult = original_run(backend, config)
         # Count lack of progress, not historical misses throughout a productive
         # run. Only verified ore gain resets the existing no-progress budget.
-        if result.verified_ores > 0:
+        if result.verified_ores > 0 or result.verified_gems > 0:
             misses_since_progress = 0
             if isinstance(backend, SafeWindowsMiningToFullBackend):
                 backend.note_verified_progress()
         if first_start_inventory is None:
             first_start_inventory = result.start_inventory
+            first_start_iron = result.start_iron
+            first_start_gems = result.start_gems
+            first_start_gem_item_ids = result.start_gem_item_ids
         aggregate_events.extend(result.events)
         aggregate_targets.extend(result.target_sequence)
         aggregate_dispatch_ids.extend(result.dispatch_ids)
         aggregate_verified_ores += result.verified_ores
+        aggregate_verified_gems += result.verified_gems
         aggregate_click_count += result.click_count
         aggregate_attempt_count += result.attempt_count
 
@@ -314,7 +322,11 @@ def _run_with_hover_recovery(
             return replace(
                 result,
                 start_inventory=first_start_inventory,
+                start_iron=first_start_iron,
+                start_gems=first_start_gems,
+                start_gem_item_ids=first_start_gem_item_ids or (),
                 verified_ores=aggregate_verified_ores,
+                verified_gems=aggregate_verified_gems,
                 click_count=aggregate_click_count,
                 attempt_count=aggregate_attempt_count,
                 target_sequence=tuple(aggregate_targets),
@@ -351,7 +363,11 @@ def _run_with_hover_recovery(
             return replace(
                 result,
                 start_inventory=first_start_inventory,
+                start_iron=first_start_iron,
+                start_gems=first_start_gems,
+                start_gem_item_ids=first_start_gem_item_ids or (),
                 verified_ores=aggregate_verified_ores,
+                verified_gems=aggregate_verified_gems,
                 click_count=aggregate_click_count,
                 attempt_count=aggregate_attempt_count,
                 target_sequence=tuple(aggregate_targets),

@@ -482,11 +482,22 @@ class ProductionMiningPerceptionEvaluator:
         inventory_release: PerceptionReleaseIdentity = CANONICAL_INVENTORY_RELEASE,
         inventory_detector: Any = None,
         inventory_state_override: InventoryState | None = None,
+        allowed_mining_byproducts: frozenset[str] | None = None,
     ) -> None:
+        from .perception.inventory.retained_iron import (
+            SOURCE_VERIFIED_MINING_BYPRODUCT_IDS,
+        )
+
+        if allowed_mining_byproducts is None:
+            allowed_mining_byproducts = SOURCE_VERIFIED_MINING_BYPRODUCT_IDS
+        if type(allowed_mining_byproducts) is not frozenset:
+            raise TypeError("allowed_mining_byproducts must be an exact frozenset")
         self.resource_release = resource_release
         self.inventory_release = inventory_release
         self.inventory_detector = inventory_detector
         self.inventory_state_override = inventory_state_override
+        self.allowed_mining_byproducts = allowed_mining_byproducts
+        self.last_inventory_composition: Any = None
         self._inventory_analyzer: Any = None
         self._inventory_profile: Any = None
         self._session_inventory_detector: Any = None
@@ -515,6 +526,7 @@ class ProductionMiningPerceptionEvaluator:
         frame: Frame,
     ) -> tuple[InventoryState, str | None]:
         """Run the frozen exact-profile inventory analyzer, failing closed."""
+        self.last_inventory_composition = None
         from .capture import RawFrame
         from .perception.inventory.geometry import InventoryGridLayout, Region
         from .perception.inventory.localization import InventoryFrameProfile
@@ -617,16 +629,40 @@ class ProductionMiningPerceptionEvaluator:
                     occupied_slots,
                     INVENTORY_CAPACITY,
                     1.0,
+                    iron_count=0,
+                    gem_count=0,
                 ), None
 
         result = self._inventory_analyzer.analyze(frame)
         # The retained experiment has a known iron sprite absent from frozen V3.
         # Require full positive evidence; never restore the empty-hash complement.
-        from .perception.inventory.retained_iron import retained_iron_count
+        from .perception.inventory.retained_iron import retained_mining_inventory
 
-        iron_count = retained_iron_count(frame, result)
-        if iron_count is not None:
-            return InventoryState(iron_count, INVENTORY_CAPACITY, 1.0), None
+        composition = retained_mining_inventory(
+            frame,
+            result,
+            allowed_byproducts=self.allowed_mining_byproducts,
+        )
+        self.last_inventory_composition = composition
+        if composition is not None:
+            gem_item_ids = tuple(item.item_id for item in composition.byproducts)
+            return InventoryState(
+                composition.occupied_slots,
+                INVENTORY_CAPACITY,
+                1.0,
+                iron_count=composition.iron_count,
+                gem_count=len(gem_item_ids),
+                gem_item_ids=gem_item_ids,
+            ), None
+        if self.allowed_mining_byproducts and any(
+            slot.raw_v1_state.value != "empty" for slot in result.slots
+        ):
+            # Once item-aware operation is enabled, generic occupancy cannot
+            # turn an unfamiliar sprite into iron or an approved gem.
+            return (
+                InventoryState(None, INVENTORY_CAPACITY, 0.0),
+                "inventory_item_composition_unknown",
+            )
         if self._session_inventory_detector is not None:
             from .perception.inventory.adapter import inventory_state_from_observation
 
@@ -661,7 +697,13 @@ class ProductionMiningPerceptionEvaluator:
                     frame,
                 )
             )
-            return InventoryState(0, INVENTORY_CAPACITY, result.confidence), None
+            return InventoryState(
+                0,
+                INVENTORY_CAPACITY,
+                result.confidence,
+                iron_count=0,
+                gem_count=0,
+            ), None
 
         raw_empty = bool(result.slots) and all(
             slot.raw_v1_state.value == "empty"
@@ -679,7 +721,13 @@ class ProductionMiningPerceptionEvaluator:
                     frame,
                 )
             )
-            return InventoryState(0, INVENTORY_CAPACITY, 1.0), None
+            return InventoryState(
+                0,
+                INVENTORY_CAPACITY,
+                1.0,
+                iron_count=0,
+                gem_count=0,
+            ), None
 
         if (
             result.occupied_slots is None

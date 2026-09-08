@@ -892,6 +892,24 @@ def _resource_by_id(state: AtomicMiningWorldState, resource_id: str) -> Resource
     return next((item for item in state.resources if item.resource_id == resource_id), None)
 
 
+def _source_verified_double_item_gain(
+    before: InventoryState,
+    after: InventoryState,
+) -> bool:
+    """Permit one iron plus one recognized gem from one mining attempt."""
+
+    return (
+        before.iron_count is not None
+        and before.gem_count is not None
+        and after.iron_count is not None
+        and after.gem_count is not None
+        and after.iron_count - before.iron_count == 1
+        and after.gem_count - before.gem_count == 1
+        and len(after.gem_item_ids) - len(before.gem_item_ids) == 1
+        and all(item_id == "uncut_ruby" for item_id in after.gem_item_ids)
+    )
+
+
 def reobserve_mining_attempt(
     session: MiningOnlySession,
     newer_state: object,
@@ -953,9 +971,13 @@ def reobserve_mining_attempt(
     occupied_after = newer_state.inventory.occupied_slots
     assert occupied_after is not None
     inventory_delta = occupied_after - proposal.inventory_occupied_before
-    if inventory_delta not in {0, 1}:
+    double_item_gain = inventory_delta == 2 and _source_verified_double_item_gain(
+        session.current_state.inventory,
+        newer_state.inventory,
+    )
+    if inventory_delta not in {0, 1} and not double_item_gain:
         return _stop_session(session, MiningOnlyStopReason.AMBIGUOUS_PROGRESS, state=newer_state)
-    incremented = inventory_delta == 1
+    incremented = inventory_delta in {1, 2}
     if depleted and incremented:
         progress = MiningProgressKind.RESOURCE_DEPLETED_AND_INVENTORY_INCREMENTED
     elif depleted:
