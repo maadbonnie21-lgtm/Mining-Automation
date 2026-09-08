@@ -140,9 +140,10 @@ class InventoryState:
                 raise ValueError("known item composition requires known occupied_slots")
             if not _is_integer(self.iron_count) or self.iron_count < 0:
                 raise ValueError("iron_count must be a non-negative integer or None")
-            if not _is_integer(self.gem_count) or self.gem_count < 0:
+            gem_count = self.gem_count
+            if gem_count is None or not _is_integer(gem_count) or gem_count < 0:
                 raise ValueError("gem_count must be a non-negative integer or None")
-            if self.iron_count + self.gem_count != self.occupied_slots:
+            if self.iron_count + gem_count != self.occupied_slots:
                 raise ValueError("iron_count plus gem_count must equal occupied_slots")
         if not isinstance(self.gem_item_ids, tuple) or any(
             not isinstance(item_id, str) or not item_id for item_id in self.gem_item_ids
