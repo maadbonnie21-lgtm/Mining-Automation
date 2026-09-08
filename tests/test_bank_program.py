@@ -39,7 +39,7 @@ def item_inventory_image(ore_indices, ruby_indices):
     ruby_mask = (red > 60) & (red - green > 30) & (red - blue > 35)
     for index in ruby_indices:
         row, col = divmod(index, 4)
-        x = 565 + 42 * col
+        x = 567 + 42 * col
         y = 569 + 36 * row
         slot = image[y : y + 32, x : x + 32]
         slot[ruby_mask] = ruby[ruby_mask]
@@ -205,3 +205,16 @@ def test_bank_target_region_is_bounded():
     region = BankRegion(10, 20, 30, 40)
     assert region.contains((20, 30))
     assert not region.contains((30, 40))
+
+
+def test_ruby_bank_crop_matches_original_native_slot_22_alignment():
+    # The source-identified ruby occupies native C slot (651, 749), not (649, 749).
+    vision, image = item_inventory_image(set(range(24)) - {22}, set())
+    ruby = np.frombuffer(source_verified_uncut_ruby_slot_rgb(), dtype=np.uint8).reshape(32, 32, 3)
+    image[749:781, 651:683] = ruby[:, :, ::-1]
+    result = vision.inventory(image, (550, 564))
+    assert result["ore_count"] == 23
+    assert result["gem_count"] == 1
+    assert result["gems"][0]["slot_index"] == 22
+    assert result["empty_count"] == 4
+    assert result["unknown_count"] == 0

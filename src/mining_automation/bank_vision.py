@@ -124,9 +124,11 @@ class BankVision:
                     3 + row * 36 : 37 + row * 36,
                     13 + col * 42 : 53 + col * 42,
                 ]
-                full_slot_rgb = patch[2:34, 2:34, :3][:, :, ::-1].tobytes()
-                slot_pixels = patch[2:34, 2:34, :3]
-                expected_slot_pixels = expected_empty[2:34, 2:34, :3]
+                # The 40px search patch includes four left-margin pixels;
+                # align the shared 32px native item signature, not the patch centre.
+                full_slot_rgb = patch[2:34, 4:36, :3][:, :, ::-1].tobytes()
+                slot_pixels = patch[2:34, 4:36, :3]
+                expected_slot_pixels = expected_empty[2:34, 4:36, :3]
                 perimeter = np.ones((32, 32), dtype=bool)
                 perimeter[3:29, 3:29] = False
                 background_delta = np.max(
