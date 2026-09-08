@@ -42,6 +42,7 @@ class Backend:
         self.stale = False
         self.miss_click = False
         self.cancel = False
+        self.wait_calls = []
 
     def now(self):
         return self.t
@@ -51,6 +52,7 @@ class Backend:
             raise RuntimeError("owner_stop")
 
     def wait(self, seconds):
+        self.wait_calls.append(seconds)
         self.t += seconds
 
     def capture(self, label):
@@ -230,6 +232,8 @@ class ConnectorBackend(Backend):
         self.connector_authority_overrides = {}
         self.position_after_authority = None
         self.post_authority_delay = 0.0
+        self.wait_count_after_authority = None
+        self.wait_count_before_connector_click = None
 
     def verify_start_connector_authority(self, frame, connector):
         self.t += 0.05
@@ -255,9 +259,12 @@ class ConnectorBackend(Backend):
         if self.position_after_authority is not None:
             self.position = self.position_after_authority
         self.t += self.post_authority_delay
+        self.wait_count_after_authority = len(self.wait_calls)
         return authority
 
     def click(self, frame, point, geometry):
+        if not self.clicks:
+            self.wait_count_before_connector_click = len(self.wait_calls)
         self.clicks.append(point)
         if len(self.clicks) == 1 and self.connector_outcome == "miss":
             return
@@ -309,8 +316,9 @@ class ConnectorRoute:
         )
         self.policy = VisualRoute(profile)
         self.health = True
+        self.connector_reregistrations = 0
 
-    def observe(self, image, waypoint):
+    def _registration(self, image, waypoint):
         goals = ((0.0, 0.0), (30.0, 0.0), (50.0, 0.0))
         goal = goals[int(waypoint.image_key)]
         target = (
@@ -318,7 +326,14 @@ class ConnectorRoute:
             MAP_CENTRE + goal[1] - image[1],
         )
         distance = ((target[0] - MAP_CENTRE) ** 2 + (target[1] - MAP_CENTRE) ** 2) ** 0.5
-        return ConnectorGeometry(), Registration(target, distance, 244, 0.89, 0.1, 0.99, 1.0, 0.0)
+        return Registration(target, distance, 244, 0.89, 0.1, 0.99, 1.0, 0.0)
+
+    def observe(self, image, waypoint):
+        return ConnectorGeometry(), self._registration(image, waypoint)
+
+    def observe_at_geometry(self, image, waypoint, geometry):
+        self.connector_reregistrations += 1
+        return geometry, self._registration(image, waypoint)
 
     def match_start_connector(self, waypoint, registration):
         return self.policy.match_start_connector(waypoint, registration)
@@ -332,13 +347,16 @@ class ConnectorRoute:
 
 def test_observed_post_third_departure_connects_to_canonical_start_then_route():
     backend = ConnectorBackend()
-    result = run_route(backend, ConnectorRoute(backend))
+    route = ConnectorRoute(backend)
+    result = run_route(backend, route)
     assert result.success
     assert result.completed_checkpoints == ["mine_start", "road_join", "bank_counter"]
     assert result.click_count == len(backend.clicks) == 3
     assert backend.clicks[0] == (106, 101)
     assert [event["kind"] for event in result.events].count("start_connector_dispatched") == 1
     assert [event["kind"] for event in result.events].count("start_connector_arrival_verified") == 1
+    assert route.connector_reregistrations == 1
+    assert backend.wait_count_before_connector_click == backend.wait_count_after_authority
 
 
 def test_same_radius_wrong_bearing_is_not_an_authorized_departure():

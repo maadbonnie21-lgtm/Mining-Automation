@@ -122,6 +122,7 @@ def run_route(
             stable = arrived = misses = attempts = 0
             start_connector: dict[str, Any] | None = None
             connector_authority: dict[str, Any] | None = None
+            connector_geometry: Any = None
             previous_target = None
             previous_map_geometry = None
             last_click_distance: float | None = None
@@ -141,9 +142,25 @@ def run_route(
                 result.end_window = frame.window
                 if result.start_window != frame.window:
                     raise RuntimeError("window_identity_or_geometry_changed")
+                observation_mode = "full_minimap_localization"
                 try:
-                    geometry, registration = route.observe(frame.image, waypoint)
+                    if index == 0 and start_connector is None and connector_authority is not None:
+                        reregister = getattr(route, "observe_at_geometry", None)
+                        if connector_geometry is None or not callable(reregister):
+                            raise RuntimeError("start_connector_fast_reregistration_unavailable")
+                        geometry, registration = reregister(
+                            frame.image,
+                            waypoint,
+                            connector_geometry,
+                        )
+                        observation_mode = "existing_geometry_fresh_terrain_reregistration"
+                    else:
+                        geometry, registration = route.observe(frame.image, waypoint)
                 except route.localization_error as exc:
+                    if index == 0 and start_connector is None and connector_authority is not None:
+                        raise RuntimeError(
+                            f"start_connector_fresh_terrain_unproven:{exc}"
+                        ) from exc
                     result.events.append(
                         {
                             "kind": "localization_recheck",
@@ -203,6 +220,7 @@ def run_route(
                         "registration": asdict(registration),
                         "minimap": asdict(geometry),
                         "stationary": stationary,
+                        "observation_mode": observation_mode,
                         "start_connector_match": connector_match,
                     }
                 )
@@ -285,6 +303,7 @@ def run_route(
                                     f"start_connector_current_frame_authority_unproven:{reason}"
                                 )
                             connector_authority = authority
+                            connector_geometry = geometry
                             continue
                         native_captured = connector_authority["native_captured_monotonic_s"]
                         if (

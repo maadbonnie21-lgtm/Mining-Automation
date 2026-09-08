@@ -393,6 +393,25 @@ class VisualRoute:
         registration = self.references[waypoint.image_key].register(crop_minimap(image, geometry))
         return geometry, registration
 
+    def observe_at_geometry(
+        self,
+        image: np.ndarray,
+        waypoint: Waypoint,
+        geometry: MinimapGeometry,
+    ) -> tuple[MinimapGeometry, Registration]:
+        """Re-register fresh terrain at an immediately prior, window-bound map geometry.
+
+        This narrow path is used only after the outbound connector's native
+        Resource+Inventory authority capture. No movement occurred between the
+        two frames, and the runtime still requires identical window geometry,
+        fresh terrain consensus, the same connector, and a current health proof.
+        """
+
+        registration = self.references[waypoint.image_key].register(
+            crop_minimap(image, geometry)
+        )
+        return geometry, registration
+
     localization_error = LocalizationError
     centre = (MAP_CENTRE, MAP_CENTRE)
 
