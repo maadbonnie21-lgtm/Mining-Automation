@@ -48,6 +48,7 @@ class NativeRouteBackend:
         self.hwnd, self.output, self.stop_file = hwnd, output, stop_file
         self.expected_title = expected_title
         self.focus_existing = focus_existing
+        self._foreground_recovery_used = False
         self.max_frame_age_s = max_frame_age_s
         self.frame_id = 0
         self.delivered_click_count = 0
@@ -77,7 +78,7 @@ class NativeRouteBackend:
             # This only requests focus; it does not restore an iconic window
             # or normalize its geometry. No focus hacks or repeated attempts.
             self.user32.SetForegroundWindow(self.hwnd)
-            time.sleep(0.15)
+            self.wait(0.15)
             self.guard()
         self.output.mkdir(parents=True, exist_ok=False)
         (self.output / "window.json").write_text(
@@ -124,17 +125,29 @@ class NativeRouteBackend:
         if current != self.initial:
             raise RuntimeError("window_identity_or_geometry_changed")
         if self.api.foreground_window() != self.hwnd:
-            if not self.focus_existing or not self.api.focus_window(self.hwnd):
-                raise RuntimeError("RuneLite_not_foreground_no_automatic_restore")
-            # Refocus only the already-bound exact HWND.  This API does not
-            # restore, resize, reposition, maximize, or otherwise normalize it.
-            time.sleep(0.20)
-            current = self.snapshot()
-            if current != self.initial:
-                raise RuntimeError("window_identity_or_geometry_changed")
-            if self.api.foreground_window() != self.hwnd:
-                raise RuntimeError("RuneLite_refocus_failed_no_restore")
+            raise RuntimeError("RuneLite_not_foreground_no_automatic_restore")
         return current
+
+    def _recover_foreground_before_capture(self) -> None:
+        """Allow one opt-in refocus only before acquiring a new input frame."""
+
+        self.check_cancelled()
+        current = self.snapshot()
+        if current != self.initial:
+            raise RuntimeError("window_identity_or_geometry_changed")
+        if self.api.foreground_window() == self.hwnd:
+            return
+        if self._foreground_recovery_used or not self.focus_existing:
+            raise RuntimeError("RuneLite_not_foreground_no_automatic_restore")
+        self._foreground_recovery_used = True
+        if not self.api.focus_window(self.hwnd):
+            raise RuntimeError("RuneLite_refocus_failed_no_restore")
+        self.wait(0.20)
+        current = self.snapshot()
+        if current != self.initial:
+            raise RuntimeError("window_identity_or_geometry_changed")
+        if self.api.foreground_window() != self.hwnd:
+            raise RuntimeError("RuneLite_refocus_failed_no_restore")
 
     def _screen_pixels(self, snapshot: dict[str, Any]) -> np.ndarray:
         """Read a physical client rectangle using the existing GDI lifecycle."""
@@ -154,6 +167,7 @@ class NativeRouteBackend:
         return np.frombuffer(payload, np.uint8).reshape(height, width, 4)[:, :, :3].copy()
 
     def capture(self, label: str) -> RouteFrame:
+        self._recover_foreground_before_capture()
         before = self.guard()
         timestamp = self.now()
         image = self._screen_pixels(before)

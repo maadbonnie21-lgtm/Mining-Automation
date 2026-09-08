@@ -68,15 +68,14 @@ def backend(tmp_path):
     }
     b.expected_title = "RuneLite - Chief Luma"
     b.focus_existing = False
+    b._foreground_recovery_used = False
     b.guard = lambda: b.initial.copy()
     b.now = lambda: 2.0
     b.wait = lambda s: None
     return b
 
 
-def test_guard_refocuses_only_bound_hwnd_without_accepting_geometry_change(
-    tmp_path, monkeypatch
-):
+def test_focus_loss_before_click_invalidates_old_frame_until_fresh_capture(tmp_path):
     b = backend(tmp_path)
     b.guard = NativeRouteBackend.guard.__get__(b)
     b.check_cancelled = lambda: None
@@ -92,15 +91,70 @@ def test_guard_refocuses_only_bound_hwnd_without_accepting_geometry_change(
         return True
 
     b.api.focus_window = focus_window
-    monkeypatch.setattr("mining_automation.navigation.windows.time.sleep", lambda _: None)
+    waits = []
+    b.wait = waits.append
+    old = RouteFrame(1, 1.0, None, b.initial, "old.png")
+    with pytest.raises(RuntimeError, match="RuneLite_not_foreground"):
+        b.click(old, (800, 140), SimpleNamespace(contains=lambda p: True))
+    assert b.api.focus_calls == []
+    assert b.api.events == []
 
-    assert b.guard() == b.initial
+    b._screen_pixels = lambda snapshot: np.zeros((1, 1, 3), dtype=np.uint8)
+    new = b.capture("fresh-after-refocus")
+    assert b.api.focus_calls == [42]
+    assert waits == [0.20]
+    assert new.frame_id == 2
+    with pytest.raises(RuntimeError, match="stale_native_input_proposal"):
+        b.click(old, (800, 140), SimpleNamespace(contains=lambda p: True))
+    assert b.api.events == []
+
+    b.click(new, (800, 140), SimpleNamespace(contains=lambda p: True))
+    assert b.api.events == ["down", "up"]
+
+
+def test_capture_refocus_is_bounded_and_rejects_geometry_change(tmp_path):
+    b = backend(tmp_path)
+    b.guard = NativeRouteBackend.guard.__get__(b)
+    b.check_cancelled = lambda: None
+    b.snapshot = lambda: b.initial.copy()
+    b.focus_existing = True
+    b.api.foreground = 99
+    b.api.foreground_window = lambda: b.api.foreground
+    b.api.focus_calls = []
+
+    def focus_window(hwnd):
+        b.api.focus_calls.append(hwnd)
+        b.api.foreground = hwnd
+        return True
+
+    b.api.focus_window = focus_window
+    b.wait = lambda _: None
+    b._screen_pixels = lambda snapshot: np.zeros((1, 1, 3), dtype=np.uint8)
+    b.capture("one-recovery")
     assert b.api.focus_calls == [42]
 
     b.api.foreground = 99
+    with pytest.raises(RuntimeError, match="RuneLite_not_foreground"):
+        b.capture("second-recovery-rejected")
+    assert b.api.focus_calls == [42]
+
+    b._foreground_recovery_used = False
+    b.api.foreground = 99
     b.snapshot = lambda: {**b.initial, "client_size": [1004, 1078]}
     with pytest.raises(RuntimeError, match="window_identity_or_geometry_changed"):
-        b.guard()
+        b.capture("geometry-changed")
+    assert b.api.focus_calls == [42]
+
+
+def test_capture_refocus_checks_cancellation_before_window_or_focus(tmp_path):
+    b = backend(tmp_path)
+    b.focus_existing = True
+    b.check_cancelled = lambda: (_ for _ in ()).throw(RuntimeError("owner_stop"))
+    b.snapshot = lambda: pytest.fail("snapshot after cancellation")
+    b.api.focus_window = lambda hwnd: pytest.fail(f"focus after cancellation for {hwnd}")
+
+    with pytest.raises(RuntimeError, match="owner_stop"):
+        b._recover_foreground_before_capture()
 
 
 def test_guard_does_not_refocus_without_explicit_focus_existing(tmp_path):
