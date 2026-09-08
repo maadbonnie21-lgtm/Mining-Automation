@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -9,7 +10,12 @@ from mining_automation.navigation.runtime import (
     point_segment_distance,
     run_route,
 )
-from mining_automation.navigation.visual_route import LocalizationError, Registration
+from mining_automation.navigation.visual_route import (
+    MAP_CENTRE,
+    LocalizationError,
+    Registration,
+    VisualRoute,
+)
 
 
 @dataclass
@@ -36,6 +42,7 @@ class Backend:
         self.stale = False
         self.miss_click = False
         self.cancel = False
+        self.wait_calls = []
 
     def now(self):
         return self.t
@@ -45,6 +52,7 @@ class Backend:
             raise RuntimeError("owner_stop")
 
     def wait(self, seconds):
+        self.wait_calls.append(seconds)
         self.t += seconds
 
     def capture(self, label):
@@ -203,3 +211,278 @@ def test_explicit_return_start_tolerance_is_not_widened():
     result = run_route(backend, Route(), limits=RouteLimits(start_tolerance=4.0))
     assert not result.success
     assert not backend.clicks
+
+
+class ConnectorGeometry(Geometry):
+    x: float = MAP_CENTRE
+    y: float = MAP_CENTRE
+
+    def screen_point(self, point):
+        return tuple(round(value) for value in point)
+
+    def contains(self, point):
+        return ((point[0] - MAP_CENTRE) ** 2 + (point[1] - MAP_CENTRE) ** 2) ** 0.5 < 80
+
+
+class ConnectorBackend(Backend):
+    def __init__(self, position=(-10.00010335957663, -5.00036695352385)):
+        super().__init__()
+        self.position = position
+        self.connector_outcome = "arrive"
+        self.connector_authority_overrides = {}
+        self.position_after_authority = None
+        self.post_authority_delay = 0.0
+        self.wait_count_after_authority = None
+        self.wait_count_before_connector_click = None
+
+    def verify_start_connector_authority(self, frame, connector):
+        self.t += 0.05
+        native_captured = self.t
+        authority = {
+            "accepted": True,
+            "reason": "accepted",
+            "route_source_frame_id": frame.frame_id,
+            "route_source_captured_monotonic_s": frame.captured_monotonic_s,
+            "native_frame_id": 1,
+            "native_captured_monotonic_s": native_captured,
+            "window": frame.window,
+            "expected_pose_id": connector["source_pose_id"],
+            "pose_id": connector["source_pose_id"],
+            "resource_view": "supported",
+            "inventory_occupied_slots": 28,
+            "inventory_capacity": 28,
+            "inventory_confidence": 1.0,
+            "inventory_unknown_reason": None,
+            "world_state": "full",
+        }
+        authority.update(self.connector_authority_overrides)
+        if self.position_after_authority is not None:
+            self.position = self.position_after_authority
+        self.t += self.post_authority_delay
+        self.wait_count_after_authority = len(self.wait_calls)
+        return authority
+
+    def click(self, frame, point, geometry):
+        if not self.clicks:
+            self.wait_count_before_connector_click = len(self.wait_calls)
+        self.clicks.append(point)
+        if len(self.clicks) == 1 and self.connector_outcome == "miss":
+            return
+        if len(self.clicks) == 1 and self.connector_outcome == "partial":
+            self.position = (-4.0, 0.0)
+            return
+        self.position = (
+            self.position[0] + point[0] - MAP_CENTRE,
+            self.position[1] + point[1] - MAP_CENTRE,
+        )
+
+
+class JitteringConnectorBackend(ConnectorBackend):
+    def __init__(self):
+        super().__init__()
+        self.preclick_positions = [
+            (-10.8, -5.0),
+            (-9.2, -5.0),
+            (-10.8, -5.0),
+            (-10.0, -5.0),
+            (-10.0, -5.0),
+        ]
+        self.first_click_frame_id = None
+
+    def capture(self, label):
+        if not self.clicks and self.preclick_positions:
+            self.position = self.preclick_positions.pop(0)
+        return super().capture(label)
+
+    def click(self, frame, point, geometry):
+        if self.first_click_frame_id is None:
+            self.first_click_frame_id = frame.frame_id
+        super().click(frame, point, geometry)
+
+
+class ConnectorRoute:
+    centre = (MAP_CENTRE, MAP_CENTRE)
+    localization_error = LocalizationError
+
+    def __init__(self, backend):
+        self.backend = backend
+        self.waypoints = [
+            SimpleNamespace(name=name, image_key=str(index), tolerance=3.0)
+            for index, name in enumerate(("mine_start", "road_join", "bank_counter"))
+        ]
+        profile = (
+            Path(__file__).resolve().parents[1]
+            / "src/mining_automation/navigation/profiles/varrock_east/route.json"
+        )
+        self.policy = VisualRoute(profile)
+        self.health = True
+        self.connector_reregistrations = 0
+
+    def _registration(self, image, waypoint):
+        goals = ((0.0, 0.0), (30.0, 0.0), (50.0, 0.0))
+        goal = goals[int(waypoint.image_key)]
+        target = (
+            MAP_CENTRE + goal[0] - image[0],
+            MAP_CENTRE + goal[1] - image[1],
+        )
+        distance = ((target[0] - MAP_CENTRE) ** 2 + (target[1] - MAP_CENTRE) ** 2) ** 0.5
+        return Registration(target, distance, 244, 0.89, 0.1, 0.99, 1.0, 0.0)
+
+    def observe(self, image, waypoint):
+        return ConnectorGeometry(), self._registration(image, waypoint)
+
+    def observe_at_geometry(self, image, waypoint, geometry):
+        self.connector_reregistrations += 1
+        return geometry, self._registration(image, waypoint)
+
+    def match_start_connector(self, waypoint, registration):
+        return self.policy.match_start_connector(waypoint, registration)
+
+    def verify_endpoint(self, image, geometry):
+        return {"accepted": True}
+
+    def verify_health(self, image, geometry):
+        return self.health
+
+
+def test_observed_post_third_departure_connects_to_canonical_start_then_route():
+    backend = ConnectorBackend()
+    route = ConnectorRoute(backend)
+    result = run_route(backend, route)
+    assert result.success
+    assert result.completed_checkpoints == ["mine_start", "road_join", "bank_counter"]
+    assert result.click_count == len(backend.clicks) == 3
+    assert backend.clicks[0] == (106, 101)
+    assert [event["kind"] for event in result.events].count("start_connector_dispatched") == 1
+    assert [event["kind"] for event in result.events].count("start_connector_arrival_verified") == 1
+    assert route.connector_reregistrations == 1
+    assert backend.wait_count_before_connector_click == backend.wait_count_after_authority
+
+
+def test_connector_fast_reregistration_rejects_missing_gameplay_chrome():
+    route = VisualRoute.__new__(VisualRoute)
+    route.verify_gameplay = lambda _image, _geometry: False
+    with pytest.raises(LocalizationError, match="gameplay_chrome_unproven"):
+        route.observe_at_geometry(
+            object(),
+            SimpleNamespace(image_key="map_mine_start"),
+            ConnectorGeometry(),
+        )
+
+
+def test_same_radius_wrong_bearing_is_not_an_authorized_departure():
+    backend = ConnectorBackend(position=(10.00010335957663, -5.00036695352385))
+    result = run_route(backend, ConnectorRoute(backend))
+    assert "not_at_recorded_mine_start" in result.stop_reason
+    assert not backend.clicks
+
+
+def test_start_connector_residual_outside_profile_bound_has_zero_input():
+    backend = ConnectorBackend(position=(-11.05, -4.5))
+    result = run_route(backend, ConnectorRoute(backend))
+    assert "not_at_recorded_mine_start" in result.stop_reason
+    assert not backend.clicks
+
+
+@pytest.mark.parametrize(
+    ("outcome", "reason"),
+    (
+        ("miss", "start_connector_arrival_not_proven"),
+        ("partial", "start_connector_arrival_not_proven"),
+    ),
+)
+def test_start_connector_never_retries_failed_or_partial_movement(outcome, reason):
+    backend = ConnectorBackend()
+    backend.connector_outcome = outcome
+    result = run_route(backend, ConnectorRoute(backend))
+    assert reason in result.stop_reason
+    assert result.click_count == len(backend.clicks) == 1
+
+
+def test_single_click_pilot_stops_after_verified_connector_arrival():
+    backend = ConnectorBackend()
+    result = run_route(backend, ConnectorRoute(backend), stop_after=1)
+    assert result.status == "STAGE_PASS" and not result.success
+    assert result.stop_reason == "departure_connector_complete_full_route_not_tested"
+    assert result.completed_checkpoints == ["mine_start"]
+    assert result.click_count == len(backend.clicks) == 1
+
+
+def test_two_transition_pilot_counts_connector_as_first_transition():
+    backend = ConnectorBackend()
+    result = run_route(backend, ConnectorRoute(backend), stop_after=2)
+    assert result.status == "STAGE_PASS" and not result.success
+    assert result.stop_reason == "requested_stage_complete_full_route_not_tested"
+    assert result.completed_checkpoints == ["mine_start", "road_join"]
+    assert result.click_count == len(backend.clicks) == 2
+
+
+def test_start_connector_requires_the_normal_stationarity_sample_count():
+    backend = JitteringConnectorBackend()
+    result = run_route(backend, ConnectorRoute(backend), stop_after=1)
+    assert result.status == "STAGE_PASS"
+    assert backend.first_click_frame_id == 6
+    assert result.click_count == len(backend.clicks) == 1
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {
+            "accepted": False,
+            "reason": "inventory_not_full",
+            "inventory_occupied_slots": 0,
+            "world_state": "ready",
+        },
+        {
+            "accepted": False,
+            "reason": "inventory_unknown",
+            "inventory_occupied_slots": None,
+            "inventory_confidence": 0.0,
+            "inventory_unknown_reason": "inventory_v3_unknown",
+            "world_state": "blocked",
+        },
+        {
+            "accepted": False,
+            "reason": "expected_mining_pose_not_supported",
+            "pose_id": None,
+            "resource_view": "unsupported",
+            "world_state": "blocked",
+        },
+    ),
+)
+def test_start_connector_requires_fresh_supported_pose_and_full_inventory(overrides):
+    backend = ConnectorBackend()
+    backend.connector_authority_overrides = overrides
+    result = run_route(backend, ConnectorRoute(backend))
+    assert "start_connector_current_frame_authority_unproven" in result.stop_reason
+    assert result.click_count == len(backend.clicks) == 0
+
+
+def test_connector_is_reregistered_after_native_authority_before_click():
+    backend = ConnectorBackend()
+    backend.position_after_authority = (10.0, -5.0)
+    result = run_route(backend, ConnectorRoute(backend))
+    assert "start_connector_changed_before_dispatch" in result.stop_reason
+    assert result.click_count == len(backend.clicks) == 0
+
+
+def test_stale_native_authority_cannot_reach_connector_click():
+    backend = ConnectorBackend()
+    backend.post_authority_delay = 1.1
+    result = run_route(backend, ConnectorRoute(backend))
+    assert "start_connector_authority_or_reregistration_stale" in result.stop_reason
+    assert result.click_count == len(backend.clicks) == 0
+
+
+def test_connector_path_preserves_health_and_stale_frame_zero_input_guards():
+    unhealthy = ConnectorBackend()
+    route = ConnectorRoute(unhealthy)
+    route.health = False
+    assert "healthy_display_unproven" in run_route(unhealthy, route).stop_reason
+    assert not unhealthy.clicks
+
+    stale = ConnectorBackend()
+    stale.stale = True
+    assert "stale_or_replayed_frame" in run_route(stale, ConnectorRoute(stale)).stop_reason
+    assert not stale.clicks

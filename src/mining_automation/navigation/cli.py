@@ -80,6 +80,15 @@ def main(argv: list[str] | None = None) -> int:
         (Path(__file__).parent / name).resolve()
         for name in ("__init__.py", "visual_route.py", "runtime.py", "windows.py")
     )
+    if config.get("start_connectors"):
+        tracked_files.extend(
+            (
+                root / "tools" / "run_three_rock_continuous_proof.py",
+                root / "tools" / "run_proven_mining_loop.py",
+                root / "src" / "mining_automation" / "controlled_mining_runner.py",
+                root / "src" / "mining_automation" / "mining_slice.py",
+            )
+        )
     for file in tracked_files:
         if not file.is_relative_to(root):
             parser.error("Live source and profile must belong to the exact reviewed checkout")
@@ -109,6 +118,21 @@ def main(argv: list[str] | None = None) -> int:
             focus_existing=args.focus_existing,
             stop_file=output / "STOP",
         )
+        if route.start_connectors:
+            tools_path = root / "tools"
+            sys.path.insert(0, str(tools_path))
+            from run_three_rock_continuous_proof import (  # type: ignore[import-not-found]
+                build_pose_detectors,
+                evaluate_resource,
+            )
+
+            from ..controlled_mining_runner import ProductionMiningPerceptionEvaluator
+
+            backend.prepare_start_connector_authority(
+                pose_detectors=build_pose_detectors(),
+                resource_evaluator=evaluate_resource,
+                inventory_evaluator=ProductionMiningPerceptionEvaluator(),
+            )
         result = run_route(backend, route, stop_after=args.stop_after)
         payload = asdict(result)
     except (Exception, KeyboardInterrupt) as exc:

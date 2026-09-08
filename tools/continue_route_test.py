@@ -42,9 +42,11 @@ for rel in [
     "src/mining_automation/navigation/visual_route.py",
 ]:
     git("ls-files", "--error-unmatch", rel)
-from mining_automation.navigation.runtime import RouteLimits, run_route
-from mining_automation.navigation.visual_route import VisualRoute
-from mining_automation.navigation.windows import NativeRouteBackend
+
+# Frozen-source and evidence checks intentionally precede these imports.
+from mining_automation.navigation.runtime import RouteLimits, run_route  # noqa: E402
+from mining_automation.navigation.visual_route import VisualRoute  # noqa: E402
+from mining_automation.navigation.windows import NativeRouteBackend  # noqa: E402
 
 route = VisualRoute(ROOT / "src/mining_automation/navigation/profiles/varrock_east/route.json")
 index = len(prior["completed_checkpoints"])
