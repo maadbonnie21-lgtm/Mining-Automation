@@ -86,6 +86,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         install_policy(policy)
         policy.check()
+        if request["kind"] == "outbound":
+            from mining_automation.beta_route import beta_route_backend
+            from mining_automation.navigation import cli as route_cli
+
+            composed: Any = beta_route_backend(NativeRouteBackend, policy)
+            route_entry: Any = route_cli
+            route_entry.NativeRouteBackend = composed
         kind = request["kind"]
         if kind == "home":
             from mining_automation.beta_home import verify_home

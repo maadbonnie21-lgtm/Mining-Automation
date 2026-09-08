@@ -31,6 +31,7 @@ def main() -> int:
             "mining_automation.beta_auth",
             "mining_automation.beta_mining",
             "mining_automation.beta_panel",
+            "mining_automation.beta_route",
             "run_mining_to_full_safe",
         ):
             importlib.import_module(name)

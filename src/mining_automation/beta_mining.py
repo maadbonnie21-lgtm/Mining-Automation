@@ -41,10 +41,12 @@ def run_with_fresh_expiry(backend: Any, config: Any, run_existing_safe_loop: Any
     """Only pre-down expiry can re-enter existing fresh acquisition; other failures stop."""
     results: list[Any] = []
     reacquisitions: list[dict[str, object]] = []
+    ordered_events: list[dict[str, object]] = []
     misses = 0
     while True:
         result = run_existing_safe_loop(backend, config)
         results.append(result)
+        ordered_events.extend(result.events)
         if result.verified_ores > 0:
             misses = 0
         expired = (
@@ -61,7 +63,7 @@ def run_with_fresh_expiry(backend: Any, config: Any, run_existing_safe_loop: Any
                 attempt_count=sum(item.attempt_count for item in results),
                 target_sequence=tuple(t for item in results for t in item.target_sequence),
                 dispatch_ids=tuple(t for item in results for t in item.dispatch_ids),
-                events=tuple(e for item in results for e in item.events) + tuple(reacquisitions),
+                events=tuple(ordered_events),
                 detail=result.detail + f"; zero_click_expiry_reacquisitions={len(reacquisitions)}",
             )
         misses += 1
@@ -75,6 +77,7 @@ def run_with_fresh_expiry(backend: Any, config: Any, run_existing_safe_loop: Any
                 input_count=0,
             )
         )
+        ordered_events.append(reacquisitions[-1])
         print(
             f"[REACQUIRE] Source expired before mouse-down; fresh geometry required ({misses}/2)",
             flush=True,

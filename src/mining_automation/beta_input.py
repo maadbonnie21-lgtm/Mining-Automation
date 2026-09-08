@@ -39,8 +39,11 @@ class InputPolicy:
         self.cancel, self.auth_cancel = cancel, auth_cancel
         self.smooth, self.authentication = smooth, authentication
         self.last_pointer: tuple[int, int] | None = None
+        self.dispatch_deadline: float | None = None
 
     def check(self) -> None:
+        if self.dispatch_deadline is not None:
+            require_fresh(self.dispatch_deadline, time.monotonic())
         if self.cancel.exists() or self.api.key_is_down(0x1B) or self.api.key_is_down(0x78):
             # Escape or F9 emergency is propagated to the parent latch.
             self.cancel.touch()
