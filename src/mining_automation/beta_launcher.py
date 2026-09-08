@@ -10,12 +10,18 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from .beta_backend import PhaseBackend
 from .beta_hotkeys import Hotkeys
 from .beta_process import InstanceLease
 from .beta_session import BetaSession, RunBreakRow, SessionControls, SessionSettings, atomic_json
+
+
+class PackPadding(TypedDict):
+    padx: int
+    pady: int
+
 
 REQUIRED_FEATURES = {"launcher", "canonical_finish", "emergency_stop"}
 
@@ -26,7 +32,9 @@ def check_handover(root: Path, sha: str, hwnd: int, settings: SessionSettings) -
         raise RuntimeError(
             "Awaiting exclusive issue #94 live-test handover for this build. No game input."
         )
-    value = json.loads(path.read_text(encoding="utf-8"))
+    value: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise RuntimeError("Invalid handover object")
     if (
         value.get("issue") != 94
         or type(value.get("comment_id")) is not int
@@ -128,7 +136,7 @@ class Launcher:
         self.varied = tk.BooleanVar(value=settings.varied_rock_points)
         self.selected_window = tk.StringVar()
         self.run_minutes, self.break_minutes = tk.StringVar(value="60"), tk.StringVar(value="10")
-        pad = {"padx": 14, "pady": 5}
+        pad: PackPadding = {"padx": 14, "pady": 5}
         self.form = ttk.Frame(self.window)
         self.form.pack(fill="both", expand=True)
         ttk.Label(self.form, text="Varrock East â€¢ Iron", font=("Segoe UI", 18, "bold")).pack(
@@ -250,9 +258,10 @@ class Launcher:
     def selected_row(self, event: Any = None) -> None:
         selection = self.rows.selection()
         if selection:
-            run, pause = self.rows.item(selection[0], "values")
-            self.run_minutes.set(run)
-            self.break_minutes.set(pause)
+            values = self.rows.item(selection[0], "values")
+            if isinstance(values, tuple) and len(values) == 2:
+                self.run_minutes.set(values[0])
+                self.break_minutes.set(values[1])
 
     def row_values(self) -> tuple[str, str]:
         run, pause = float(self.run_minutes.get()), float(self.break_minutes.get())
@@ -276,9 +285,9 @@ class Launcher:
     def copy_row(self) -> None:
         selection = self.rows.selection()
         if selection:
-            self.rows.insert(
-                "", self.rows.index(selection[0]) + 1, values=self.rows.item(selection[0], "values")
-            )
+            values = self.rows.item(selection[0], "values")
+            if isinstance(values, tuple):
+                self.rows.insert("", self.rows.index(selection[0]) + 1, values=values)
 
     def remove_row(self) -> None:
         selection = self.rows.selection()
@@ -356,12 +365,14 @@ class Launcher:
             )
             session = BetaSession(settings, controls, self.backend, self.session_output, sha=sha)
 
+            output = self.session_output
+
             def run() -> None:
                 try:
                     session.run()
                 except Exception as exc:
                     atomic_json(
-                        self.session_output / "launcher-error.json",
+                        output / "launcher-error.json",
                         dict(state="ERROR", reason=str(exc), return_not_completed=True),
                     )
 

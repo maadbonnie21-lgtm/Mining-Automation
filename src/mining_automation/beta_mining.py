@@ -5,21 +5,87 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from dataclasses import replace
+from functools import wraps
 from typing import Any
 
 from .beta_input import GuardedCameraApi, InputPolicy
 from .beta_interaction import (
+    InputExpired,
     click_at_proven_point,
     require_fresh,
     require_interior,
     sample_interior,
 )
-from .mining_loop_runtime import MiningDispatchResult, MiningHoverProof
+from .mining_loop_runtime import MiningDispatchResult, MiningHoverProof, MiningLoopStopReason
 from .mining_slice import MiningAttemptDispatchReceipt
 
 
+def zero_click_expiry(method: Any) -> Any:
+    @wraps(method)
+    def wrapped(self: Any, *args: Any, **kwargs: Any) -> Any:
+        self._zero_click_expired = False
+        try:
+            return method(self, *args, **kwargs)
+        except InputExpired:
+            # This exception is raised only at pre-down gates, never after native down.
+            self._zero_click_expired = True
+            self._selected = None
+            self.active_registration = {"pose": None, "detector": None}
+            raise
+
+    return wrapped
+
+
+def run_with_fresh_expiry(backend: Any, config: Any, run_existing_safe_loop: Any) -> Any:
+    """Only pre-down expiry can re-enter existing fresh acquisition; other failures stop."""
+    results: list[Any] = []
+    reacquisitions: list[dict[str, object]] = []
+    misses = 0
+    while True:
+        result = run_existing_safe_loop(backend, config)
+        results.append(result)
+        if result.verified_ores > 0:
+            misses = 0
+        expired = (
+            getattr(backend, "_zero_click_expired", False)
+            and result.stop_reason is MiningLoopStopReason.BACKEND_ERROR
+            and result.detail.startswith("backend raised InputExpired:")
+        )
+        if not expired or misses >= 2:
+            return replace(
+                result,
+                start_inventory=results[0].start_inventory,
+                verified_ores=sum(item.verified_ores for item in results),
+                click_count=sum(item.click_count for item in results),
+                attempt_count=sum(item.attempt_count for item in results),
+                target_sequence=tuple(t for item in results for t in item.target_sequence),
+                dispatch_ids=tuple(t for item in results for t in item.dispatch_ids),
+                events=tuple(e for item in results for e in item.events) + tuple(reacquisitions),
+                detail=result.detail + f"; zero_click_expiry_reacquisitions={len(reacquisitions)}",
+            )
+        misses += 1
+        backend._zero_click_expired = False
+        reacquisitions.append(
+            dict(
+                kind="zero_click_source_expiry_reacquire",
+                index=len(reacquisitions) + 1,
+                consecutive=misses,
+                action="discard_geometry_and_call_existing_fresh_acquisition",
+                input_count=0,
+            )
+        )
+        print(
+            f"[REACQUIRE] Source expired before mouse-down; fresh geometry required ({misses}/2)",
+            flush=True,
+        )
+
+
 def beta_mining_backend(base: type, policy: InputPolicy, *, varied_points: bool) -> type:
-    class BetaMiningBackend(base):
+    # The legacy backend is selected at runtime; this adapter preserves its implementation.
+    class BetaMiningBackend(base):  # type: ignore[misc]
+        passive_interval_s: float
+
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
             self.api = GuardedCameraApi(policy)
@@ -27,6 +93,7 @@ def beta_mining_backend(base: type, policy: InputPolicy, *, varied_points: bool)
             self._selected: tuple[str, tuple[int, int], tuple[int, int, int, int]] | None = None
 
         def open(self) -> None:
+            self._zero_click_expired = False
             policy.check()
             self.active_registration = {"pose": None, "detector": None}
             self._selected = None
@@ -62,6 +129,7 @@ def beta_mining_backend(base: type, policy: InputPolicy, *, varied_points: bool)
             finally:
                 self.passive_interval_s = interval
 
+        @zero_click_expiry
         def prove_hover(self, proposal: Any, *, iteration: int) -> MiningHoverProof:
             _, window = self._verify_window()
             region = proposal.target_region
@@ -104,6 +172,7 @@ def beta_mining_backend(base: type, policy: InputPolicy, *, varied_points: bool)
                 cursor_matches_target=policy.api.cursor_position() == screen,
             )
 
+        @zero_click_expiry
         def dispatch_one_click(
             self, proposal: Any, proof: MiningHoverProof, *, iteration: int
         ) -> MiningDispatchResult:

@@ -9,6 +9,7 @@ import runpy
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT / "tools")]
@@ -18,11 +19,13 @@ from mining_automation.beta_process import wait_for_parent_gate  # noqa: E402
 from mining_automation.beta_session import atomic_json  # noqa: E402
 
 
-def validate_request(path: Path) -> dict:
+def validate_request(path: Path) -> dict[str, Any]:
     path = path.resolve()
     if not path.is_relative_to((ROOT / "outputs").resolve()):
         raise ValueError("Child requests must be inside this checkout outputs")
-    request = json.loads(path.read_text(encoding="utf-8"))
+    request: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(request, dict):
+        raise ValueError("Phase request must be an object")
     for field in ("output", "gate", "cancel", "auth_cancel"):
         target = Path(request[field]).resolve()
         if not target.is_relative_to(path.parent):
@@ -114,20 +117,22 @@ def main(argv: list[str] | None = None) -> int:
             ]
             if kind == "mine":
                 sys.argv = [str(ROOT / "tools" / tool), *phase_args]
+                import run_mining_to_full as legacy_module
                 import run_mining_to_full_safe as safe
 
-                from mining_automation.beta_mining import beta_mining_backend
+                from mining_automation.beta_mining import beta_mining_backend, run_with_fresh_expiry
 
-                original_run = safe.mining.run_mining_until_full
-                safe.mining.WindowsMiningToFullBackend = beta_mining_backend(
+                legacy: Any = legacy_module
+                original_run = legacy.run_mining_until_full
+                legacy.WindowsMiningToFullBackend = beta_mining_backend(
                     safe.SafeWindowsMiningToFullBackend,
                     policy,
                     varied_points=request["varied_rock_points"],
                 )
-                safe.mining.run_mining_until_full = lambda backend, config: (
-                    safe._run_with_hover_recovery(backend, config, original_run)
+                legacy.run_mining_until_full = lambda backend, config: run_with_fresh_expiry(
+                    backend, config, lambda b, c: safe._run_with_hover_recovery(b, c, original_run)
                 )
-                code = safe.mining.main(phase_args)
+                code = int(legacy.main(phase_args))
             else:
                 sys.argv = [str(ROOT / "tools" / tool), *phase_args]
                 try:

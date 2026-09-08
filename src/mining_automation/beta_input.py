@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from pathlib import Path
 from typing import Any
@@ -65,7 +66,20 @@ class InputPolicy:
         if self.last_pointer is not None and self.api.cursor_position() != self.last_pointer:
             raise RuntimeError("human_cursor_displacement; input_ownership_lost")
         if self.smooth:
-            smooth_move(self.api, screen, check=self.check, deadline=deadline, sleep=self.wait)
+            duration = min(0.35, max(0.08, math.dist(self.api.cursor_position(), screen) / 3500))
+
+            def track(point: tuple[int, int]) -> None:
+                self.last_pointer = point
+
+            smooth_move(
+                self.api,
+                screen,
+                check=self.check,
+                deadline=deadline,
+                sleep=self.wait,
+                duration_s=duration,
+                trace=track,
+            )
         else:
             if deadline is not None:
                 require_fresh(deadline, time.monotonic())
@@ -92,7 +106,7 @@ class GuardedCameraApi:
 
     def focus_window(self, hwnd: int) -> bool:
         self.policy.check()
-        return hwnd == self.policy.hwnd and self.policy.api.foreground_window() == hwnd
+        return bool(hwnd == self.policy.hwnd and self.policy.api.foreground_window() == hwnd)
 
     def move_cursor(self, x: int, y: int) -> bool:
         self.policy.move((x, y))

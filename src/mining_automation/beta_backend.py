@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -113,6 +114,8 @@ class PhaseBackend:
         self.refresh_latches()
         self.controls.check(authentication=kind in ("login", "logout"))
         self._clean_build()
+        if shutil.disk_usage(self.root).free < 4 * 1024**3:
+            raise SessionUnproven("low_disk_reserve; no_new_phase_or_input; evidence_preserved")
         self.sequence += 1
         output.parent.mkdir(parents=True, exist_ok=True)
         gate = self.output / f"child-{self.sequence:04d}.ready"
@@ -177,7 +180,9 @@ class PhaseBackend:
                 self.refresh_latches()
                 self.controls.check(authentication=kind in ("login", "logout"))
                 result_path = output / "result.json"
-                result = json.loads(result_path.read_text(encoding="utf-8"))
+                result: dict[str, Any] = json.loads(result_path.read_text(encoding="utf-8"))
+                if not isinstance(result, dict):
+                    raise SessionUnproven("phase_receipt_must_be_an_object")
                 if self.child.returncode or result.get("success") is not True:
                     raise SessionUnproven(
                         f"{kind}:{result.get('stop_reason') or result.get('reason')}"

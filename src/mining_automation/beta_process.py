@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import ctypes
-import os
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, cast
 
 
 class InstanceLease:
     def __init__(self, path: Path) -> None:
-        self.path, self.stream = path, None
+        self.path = path
+        self.stream: BinaryIO | None = None
 
     def acquire(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -24,7 +24,7 @@ class InstanceLease:
                 stream.write(b"0")
                 stream.flush()
             stream.seek(0)
-            if os.name == "nt":
+            if sys.platform == "win32":
                 import msvcrt
 
                 msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
@@ -119,7 +119,7 @@ class ChildJob:
     def assign(self, child: subprocess.Popen[Any]) -> None:
         self.child = child
         if self.handle and not self.kernel.AssignProcessToJobObject(
-            self.handle, int(child._handle)
+            self.handle, int(cast(Any, child)._handle)
         ):
             child.kill()
             child.wait(timeout=5)
