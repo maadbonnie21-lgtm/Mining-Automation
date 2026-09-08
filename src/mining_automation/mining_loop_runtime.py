@@ -17,7 +17,7 @@ import math
 import time
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Final, Literal, Protocol, final
+from typing import Final, Literal, Protocol, cast, final
 
 from .contracts import InventoryState
 from .mining_slice import (
@@ -964,11 +964,12 @@ def run_mining_until_full(
                 assert after_iron is not None and after_gems is not None
                 iron_gained = after_iron - before_iron
                 gems_gained = after_gems - before_gems
+                occupied_after = cast(int, state.inventory.occupied_slots)
                 if (
                     iron_gained not in {0, 1}
                     or gems_gained not in {0, 1}
                     or iron_gained + gems_gained
-                    != state.inventory.occupied_slots - before
+                    != occupied_after - before
                 ):
                     return finish(
                         False,
