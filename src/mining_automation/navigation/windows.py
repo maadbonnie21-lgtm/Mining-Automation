@@ -25,6 +25,20 @@ from .runtime import RouteFrame
 
 
 class NativeRouteBackend:
+    # Native-only initialization is unreachable to Linux static analysis.
+    # Declare retained state without changing initialization or route authority.
+    capture_api: Any
+    api: Any
+    user32: Any
+    hwnd: int
+    output: Path
+    stop_file: Path | None
+    expected_title: str
+    max_frame_age_s: float
+    frame_id: int
+    delivered_click_count: int
+    initial: dict[str, Any]
+
     def __init__(
         self,
         hwnd: int,

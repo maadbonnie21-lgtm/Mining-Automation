@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -149,7 +148,7 @@ class PhaseBackend:
             str(self.root / "tools/run_beta_phase.py"),
             str(request),
         ]
-        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
         try:
             with log.open("w", encoding="utf-8") as stream:
                 self.child = subprocess.Popen(

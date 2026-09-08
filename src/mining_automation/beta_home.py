@@ -7,6 +7,7 @@ one fresh minimap click from the existing <=4-pixel EMPTY mine endpoint envelope
 from __future__ import annotations
 
 import hashlib
+import importlib
 import math
 import time
 from dataclasses import asdict
@@ -106,7 +107,7 @@ def verify_home(
     rock_receipt = None
     if fresh_rocks:
         # Reuse the same retained-reference, all-zone, same-frame miner assembler.
-        import run_mining_to_full_safe as safe
+        safe = importlib.import_module("run_mining_to_full_safe")
 
         from .perception.live_pose_references import verify_local_pose_references
 

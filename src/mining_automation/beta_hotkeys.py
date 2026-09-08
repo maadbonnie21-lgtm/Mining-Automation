@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import queue
+import sys
 import threading
 
 
@@ -23,6 +24,10 @@ class Hotkeys:
             raise RuntimeError(f"Cannot reserve F8/F9: {self.failure}") from self.failure
 
     def _listen(self) -> None:
+        if sys.platform != "win32":
+            self.failure = RuntimeError("Native beta hotkeys require Windows")
+            self.ready.set()
+            return
         from ctypes import wintypes
 
         ids: list[int] = []

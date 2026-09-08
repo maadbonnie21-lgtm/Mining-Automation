@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import sys
 from typing import Any
 
 
@@ -41,6 +42,10 @@ def place_panel(
 
 
 class StatusPanel:
+    widget: Any
+    hwnd: int
+    user32: Any
+
     def __init__(
         self,
         tk: Any,
@@ -51,6 +56,8 @@ class StatusPanel:
         stop: Any,
         emergency: Any,
     ) -> None:
+        if sys.platform != "win32":
+            raise RuntimeError("The native beta status panel requires Windows")
         from ctypes import wintypes
 
         user32 = ctypes.WinDLL("user32", use_last_error=True)

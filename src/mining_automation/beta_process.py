@@ -48,6 +48,7 @@ class ChildJob:
     """All child descendants die if the launcher exits. A gate blocks pre-assignment input."""
 
     def __init__(self) -> None:
+        self.kernel: Any = None
         self.handle: Any = None
         self.child: subprocess.Popen[Any] | None = None
         if sys.platform == "win32":
@@ -118,8 +119,10 @@ class ChildJob:
 
     def assign(self, child: subprocess.Popen[Any]) -> None:
         self.child = child
-        if self.handle and not self.kernel.AssignProcessToJobObject(
-            self.handle, int(cast(Any, child)._handle)
+        if (
+            sys.platform == "win32"
+            and self.handle
+            and not self.kernel.AssignProcessToJobObject(self.handle, int(cast(Any, child)._handle))
         ):
             child.kill()
             child.wait(timeout=5)
@@ -128,7 +131,7 @@ class ChildJob:
             )
 
     def terminate(self) -> None:
-        if self.handle:
+        if sys.platform == "win32" and self.handle:
             if not self.kernel.TerminateJobObject(self.handle, 2):
                 raise OSError(ctypes.get_last_error(), "Cannot terminate owned job")
         elif self.child is not None and self.child.poll() is None:
@@ -137,7 +140,7 @@ class ChildJob:
             self.child.wait(timeout=5)
 
     def close(self) -> None:
-        if self.handle:
+        if sys.platform == "win32" and self.handle:
             self.kernel.CloseHandle(self.handle)
             self.handle = None
 

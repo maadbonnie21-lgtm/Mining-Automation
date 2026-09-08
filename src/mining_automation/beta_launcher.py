@@ -23,6 +23,9 @@ class PackPadding(TypedDict):
     pady: int
 
 
+_NO_CONSOLE = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
 REQUIRED_FEATURES = {"launcher", "canonical_finish", "emergency_stop"}
 
 
@@ -71,7 +74,7 @@ def other_phase_processes() -> list[int]:
         capture_output=True,
         text=True,
         timeout=10,
-        creationflags=subprocess.CREATE_NO_WINDOW,
+        creationflags=_NO_CONSOLE,
     )
     value = json.loads(result.stdout) if result.stdout.strip() else []
     return [value] if isinstance(value, int) else list(value or [])
@@ -83,14 +86,14 @@ def git_head(root: Path) -> str:
         check=True,
         capture_output=True,
         text=True,
-        creationflags=subprocess.CREATE_NO_WINDOW,
+        creationflags=_NO_CONSOLE,
     )
     dirty = subprocess.run(
         ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"],
         check=True,
         capture_output=True,
         text=True,
-        creationflags=subprocess.CREATE_NO_WINDOW,
+        creationflags=_NO_CONSOLE,
     )
     if dirty.stdout.strip():
         raise RuntimeError("Source has uncommitted changes. No live start is allowed.")
@@ -107,7 +110,7 @@ class Launcher:
         self.lease = InstanceLease(self.data / "launcher.lock")
         self.lease.acquire()
         self.window = tk.Tk()
-        self.window.title("Mining Automation â€” Beta Controls")
+        self.window.title("Mining Automation ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Beta Controls")
         self.window.geometry("580x740")
         self.window.minsize(500, 600)
         self.worker: threading.Thread | None = None
@@ -119,9 +122,9 @@ class Launcher:
         self.panel: Any = None
         self.settings_path = self.data / "settings.json"
         self.message = tk.StringVar(
-            value="Development candidate â€” live acceptance not yet passed."
+            value="Development candidate ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â live acceptance not yet passed."
         )
-        self.activity = tk.StringVar(value="IDLE â€” no game input")
+        self.activity = tk.StringVar(value="IDLE ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no game input")
         self.metrics = tk.StringVar(value="Cycles 0   |   Ore deposited 0   |   Runtime 00:00:00")
         self.timing = tk.StringVar(value="No break scheduled")
         try:
@@ -139,11 +142,12 @@ class Launcher:
         pad: PackPadding = {"padx": 14, "pady": 5}
         self.form = ttk.Frame(self.window)
         self.form.pack(fill="both", expand=True)
-        ttk.Label(self.form, text="Varrock East â€¢ Iron", font=("Segoe UI", 18, "bold")).pack(
-            anchor="w", **pad
-        )
         ttk.Label(
-            self.form, text="Controls candidate â€¢ saved settings â€¢ one input-owning session"
+            self.form, text="Varrock East ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Iron", font=("Segoe UI", 18, "bold")
+        ).pack(anchor="w", **pad)
+        ttk.Label(
+            self.form,
+            text="Controls candidate ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ saved settings ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ one input-owning session",
         ).pack(anchor="w", **pad)
         self.combo = ttk.Combobox(self.form, textvariable=self.selected_window, state="readonly")
         self.combo.pack(fill="x", **pad)
@@ -162,9 +166,9 @@ class Launcher:
         ).pack(side="left", padx=8)
         ttk.Label(row, text="Cycle limit").pack(side="left", padx=8)
         ttk.Entry(row, textvariable=self.cycle_limit, width=7).pack(side="left")
-        ttk.Label(self.form, text="Routine rows â€” minutes active / minutes logged out").pack(
-            anchor="w", **pad
-        )
+        ttk.Label(
+            self.form, text="Routine rows ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â minutes active / minutes logged out"
+        ).pack(anchor="w", **pad)
         self.rows = ttk.Treeview(
             self.form, columns=("run", "break"), show="headings", height=5, selectmode="browse"
         )
@@ -428,7 +432,7 @@ class Launcher:
                 status = json.loads(
                     (self.session_output / "status.json").read_text(encoding="utf-8")
                 )
-                self.activity.set(f"{status['state']} â€¢ {status['phase']}")
+                self.activity.set(f"{status['state']} ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ {status['phase']}")
                 elapsed = int(status["elapsed_s"])
                 self.metrics.set(
                     f"Cycles {status['cycles_completed']} | Ore deposited {status['ore_deposited']} | "
@@ -444,7 +448,9 @@ class Launcher:
                         f"Wind-down overrun: {status['wind_down_overrun_s']:.0f}s"
                     )
                 else:
-                    self.timing.set("Continuous / finite mode â€” no automatic breaks")
+                    self.timing.set(
+                        "Continuous / finite mode ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no automatic breaks"
+                    )
                 self.message.set(status["reason"])
             except (OSError, ValueError, KeyError):
                 pass
