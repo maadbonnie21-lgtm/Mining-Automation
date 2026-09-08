@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -71,6 +72,29 @@ def test_safe_entry_does_not_use_feature_equivalence_as_input_authority() -> Non
     source = Path(safe_mining.__file__).read_text(encoding="utf-8")
     assert "classify_equivalent_start" not in source
     assert "proven_start_equivalence" not in source
+
+
+def _scaled_candidate(name: str, matched: int) -> tuple[str, object, dict[str, int]]:
+    detector = SimpleNamespace(profile=SimpleNamespace(scene_landmarks=(None,) * 6))
+    return name, detector, {"matched": matched}
+
+
+def test_scaled_registration_accepts_one_ordinary_gated_candidate() -> None:
+    only = _scaled_candidate("only", 5)
+    assert safe_mining.select_scaled_registration([only]) is only
+
+
+def test_scaled_registration_accepts_unique_full_match_among_multiple() -> None:
+    partial = _scaled_candidate("partial", 5)
+    full = _scaled_candidate("full", 6)
+    assert safe_mining.select_scaled_registration([partial, full]) is full
+
+
+def test_scaled_registration_rejects_unresolved_ambiguity() -> None:
+    first = _scaled_candidate("first", 6)
+    second = _scaled_candidate("second", 6)
+    assert safe_mining.select_scaled_registration([first, second]) is None
+    assert safe_mining.select_scaled_registration([]) is None
 
 
 def test_post_click_clean_observation_discards_stale_registered_geometry() -> None:

@@ -50,6 +50,29 @@ from mining_automation.perception.scaled_scene_registration import (  # noqa: E4
 )
 
 
+def select_scaled_registration(
+    candidates: list[tuple[str, Any, dict[str, Any]]],
+) -> tuple[str, Any, dict[str, Any]] | None:
+    """Select one scaled pose without weakening the frozen terrain gate.
+
+    One ordinary 5/6, three-zone registration remains sufficient when it is
+    the only candidate. If multiple registrations survive, require exactly
+    one candidate to match every frozen landmark; otherwise remain ambiguous.
+    """
+
+    if len(candidates) == 1:
+        return candidates[0]
+    full_matches = [
+        candidate
+        for candidate in candidates
+        if candidate[2].get("matched")
+        == len(candidate[1].profile.scene_landmarks)
+    ]
+    if len(full_matches) == 1:
+        return full_matches[0]
+    return None
+
+
 class SafeWindowsMiningToFullBackend(mining.WindowsMiningToFullBackend):
     """Keep strict proof gates while recovering modest scene/target misses."""
 
@@ -168,7 +191,8 @@ class SafeWindowsMiningToFullBackend(mining.WindowsMiningToFullBackend):
                     }
                 )
 
-            if len(scaled) != 1:
+            selected_scaled = select_scaled_registration(scaled)
+            if selected_scaled is None:
                 # Do not promote feature equivalence into live input authority.
                 # The former ORB path was dominated by stable RuneLite UI and
                 # bypassed the frozen 5/6, all-three-terrain-zone scene gate.
@@ -181,7 +205,7 @@ class SafeWindowsMiningToFullBackend(mining.WindowsMiningToFullBackend):
                     },
                 )
 
-            pose_name, detector, registration_evidence = scaled[0]
+            pose_name, detector, registration_evidence = selected_scaled
             active["pose"] = pose_name
             active["detector"] = detector
             resources = tuple(
