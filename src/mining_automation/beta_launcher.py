@@ -110,7 +110,7 @@ class Launcher:
         self.lease = InstanceLease(self.data / "launcher.lock")
         self.lease.acquire()
         self.window = tk.Tk()
-        self.window.title("Mining Automation ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Beta Controls")
+        self.window.title("Mining Automation - Beta Controls")
         self.window.geometry("580x740")
         self.window.minsize(500, 600)
         self.worker: threading.Thread | None = None
@@ -121,11 +121,9 @@ class Launcher:
         self.hotkeys: Hotkeys | None = None
         self.panel: Any = None
         self.settings_path = self.data / "settings.json"
-        self.message = tk.StringVar(
-            value="Development candidate ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â live acceptance not yet passed."
-        )
-        self.activity = tk.StringVar(value="IDLE ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no game input")
-        self.metrics = tk.StringVar(value="Cycles 0   |   Ore deposited 0   |   Runtime 00:00:00")
+        self.message = tk.StringVar(value="Development candidate - live acceptance not yet passed.")
+        self.activity = tk.StringVar(value="IDLE - no game input")
+        self.metrics = tk.StringVar(value="Cycles 0 | Iron 0 | Gems 0 | Runtime 00:00:00")
         self.timing = tk.StringVar(value="No break scheduled")
         try:
             settings = SessionSettings.load(self.settings_path)
@@ -142,12 +140,12 @@ class Launcher:
         pad: PackPadding = {"padx": 14, "pady": 5}
         self.form = ttk.Frame(self.window)
         self.form.pack(fill="both", expand=True)
-        ttk.Label(
-            self.form, text="Varrock East ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Iron", font=("Segoe UI", 18, "bold")
-        ).pack(anchor="w", **pad)
+        ttk.Label(self.form, text="Varrock East - Iron", font=("Segoe UI", 18, "bold")).pack(
+            anchor="w", **pad
+        )
         ttk.Label(
             self.form,
-            text="Controls candidate ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ saved settings ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ one input-owning session",
+            text="Controls candidate - saved settings - one input-owning session",
         ).pack(anchor="w", **pad)
         self.combo = ttk.Combobox(self.form, textvariable=self.selected_window, state="readonly")
         self.combo.pack(fill="x", **pad)
@@ -166,9 +164,9 @@ class Launcher:
         ).pack(side="left", padx=8)
         ttk.Label(row, text="Cycle limit").pack(side="left", padx=8)
         ttk.Entry(row, textvariable=self.cycle_limit, width=7).pack(side="left")
-        ttk.Label(
-            self.form, text="Routine rows ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â minutes active / minutes logged out"
-        ).pack(anchor="w", **pad)
+        ttk.Label(self.form, text="Routine rows - minutes active / minutes logged out").pack(
+            anchor="w", **pad
+        )
         self.rows = ttk.Treeview(
             self.form, columns=("run", "break"), show="headings", height=5, selectmode="browse"
         )
@@ -432,10 +430,11 @@ class Launcher:
                 status = json.loads(
                     (self.session_output / "status.json").read_text(encoding="utf-8")
                 )
-                self.activity.set(f"{status['state']} ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ {status['phase']}")
+                self.activity.set(f"{status['state']} - {status['phase']}")
                 elapsed = int(status["elapsed_s"])
                 self.metrics.set(
-                    f"Cycles {status['cycles_completed']} | Ore deposited {status['ore_deposited']} | "
+                    f"Cycles {status['cycles_completed']} | Iron {status['ore_deposited']} | "
+                    f"Gems {status.get('gems_deposited', 0)} | "
                     f"Runtime {elapsed // 3600:02d}:{elapsed // 60 % 60:02d}:{elapsed % 60:02d}"
                 )
                 if status["break_remaining_s"] is not None:
@@ -448,9 +447,7 @@ class Launcher:
                         f"Wind-down overrun: {status['wind_down_overrun_s']:.0f}s"
                     )
                 else:
-                    self.timing.set(
-                        "Continuous / finite mode ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no automatic breaks"
-                    )
+                    self.timing.set("Continuous / finite mode - no automatic breaks")
                 self.message.set(status["reason"])
             except (OSError, ValueError, KeyError):
                 pass

@@ -1,13 +1,14 @@
-# Beta controls candidate â€” issue #119 / PR #121
+# Beta controls candidate - issue #119 / PR #121
 
-This is an implementation candidate, not live-accepted software. Source work is
-confined to Mining-Automation-CONTINUOUS. Lead/Codex own current-loop reliability
-and the live-input slot. Opening the beta GUI during their test is not authorized.
+This is the combined implementation candidate in Mining-Automation-BETA-INTEGRATED,
+not live-accepted software. It includes the gem-capable core and the beta controls.
+The original CONTINUOUS and Codex reliability checkouts are unchanged.
+The launcher may be opened for settings; opening it never starts gameplay.
 
 ## Entry point and controls
 
-After an explicit exclusive issue #94 handover, double-click `Launch Mining Beta.cmd`
-in this checkout. Opening the launcher does not start gameplay. Select the existing
+Double-click `Launch Mining Beta.cmd` in this checkout to open the controls.
+Gameplay Start still requires the existing exclusive issue #94 live-test handover. Select the existing
 account window and press Start. Do not resize, restore, move or adjust RuneLite to
 make an unsupported view pass. The first authorized Start may focus the existing,
 non-minimized window once; losing focus later stops input.
@@ -18,14 +19,14 @@ be added, updated, copied, removed and reordered. Repeat loops the routine; othe
 the final break ends logged out. Saved settings never silently restart an active task.
 
 Normal Stop (F8) latches a drain: finish the current mining/outbound/bank/return
-sequence, deposit the scoped iron, verify empty and bank closed, then freshly verify
+sequence, deposit the approved iron/gems, verify empty and bank closed, then freshly verify
 the stationary canonical mine endpoint. No next cycle is started. During a break,
 Stop cancels the scheduled login. A normal close request waits for this same drain.
 Emergency Stop (F9) cancels owned input processes without attempting to walk home.
 Failures report `return_not_completed`; they do not invent a successful return.
 
 The nonactivating status panel is placed outside the game window. It shows phase,
-cycles, deposited ore, runtime, active/break countdown, wind-down overrun and reason.
+cycles, deposited iron and gems, runtime, active/break countdown, wind-down overrun and reason.
 Panel placement, GUI button operation, F8/F9 registration and emergency behavior
 still require live verification. Clicking Stop with the mouse must be tested too;
 a passing hotkey policy test does not prove pointer/focus handover works.
@@ -76,7 +77,9 @@ this inactive checkout with merge a8a5e393a5f0a192016c14d0ee7ff182690a5ab4. Its
 route/profile/controller and native Resource+C authority methods are preserved.
 The beta adapter also retains the native authority deadline through cursor travel
 and immediately before dispatch. This is source integration, NOT a successful live
-three-cycle result. Later lead/Codex focus-recovery changes are not implied included.
+three-cycle result. The combined build also retains the core focus-recovery changes and native ruby crop fix.
+Core source base: d4661b1d541310127921d86ac5eb828136b352da.
+Beta source: 770e87e996f36debfd2ef4600cbac279c12a4a70.
 
 ## Evidence and current limitations
 
@@ -106,3 +109,11 @@ Emergency/no further input; actual logout and timed break; Stop during break; or
 login plus fresh new ore; visible smooth motion and multiple proven points on the
 same rock; motion cancellation; and three consecutive full cycles of the changed
 integrated build. Keep PR #121 draft until the required evidence is reviewed on #94.
+
+## Combined-build checks and test limit
+
+See BETA_INTEGRATION.md for the actual checks on this combined build.
+Every live QA run must end at or before ten complete cycles. The next core proof
+is exactly three uninterrupted cycles; do not chain batches around the ten-cycle
+ceiling. Continuous mode remains an unbounded product setting, not permission
+for an unbounded test. No live handover or logout profile was invented here.

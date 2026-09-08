@@ -60,7 +60,7 @@ def main() -> int:
         )
         import ctypes
 
-        ctypes.windll.user32.MessageBoxW(None, str(exc), "Mining Automation â€” cannot start", 0x10)
+        ctypes.windll.user32.MessageBoxW(None, str(exc), "Mining Automation - cannot start", 0x10)
         return 2
 
 
