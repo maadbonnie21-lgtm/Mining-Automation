@@ -1,5 +1,7 @@
 """Development continuation of an exact stopped test; not an uninterrupted full pass."""
 
+# ruff: noqa: E402 -- source-checkout validation intentionally precedes imports.
+
 from __future__ import annotations
 
 import argparse
@@ -29,7 +31,10 @@ assert git("rev-parse", "HEAD") == a.sha and not git(
     "status", "--porcelain", "--untracked-files=no"
 )
 prior = json.loads(a.prior.read_text(encoding="utf-8"))
-assert prior["status"] == "STOP" and prior["stop_reason"] == "RuntimeError:repeated_no_progress"
+assert prior["status"] == "STOP" and prior["stop_reason"] in {
+    "RuntimeError:repeated_no_progress",
+    "RuntimeError:RuneLite_not_foreground_no_automatic_restore",
+}
 assert (
     prior["evidence_origin"] == "standalone_program" and not prior["operator_chose_walking_clicks"]
 )
@@ -48,11 +53,13 @@ from mining_automation.navigation.windows import NativeRouteBackend
 
 route = VisualRoute(ROOT / "src/mining_automation/navigation/profiles/varrock_east/route.json")
 index = len(prior["completed_checkpoints"])
-assert 0 < index < len(route.waypoints) - 1
+assert 0 < index < len(route.waypoints)
 assert prior["completed_checkpoints"] == [w.name for w in route.waypoints[:index]]
 observations = [e for e in prior["events"] if e["kind"] == "observation"]
 assert observations[-1]["waypoint"] == route.waypoints[index].name
-route.waypoints = route.waypoints[index:]
+# Resume from the last checkpoint actually proved by the stopped run.  The
+# next waypoint may merely have been observed before its click was dispatched.
+route.waypoints = route.waypoints[index - 1 :]
 result = {"status": "STOP", "success": False, "stop_reason": "not_started"}
 try:
     backend = NativeRouteBackend(

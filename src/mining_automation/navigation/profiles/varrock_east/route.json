@@ -26,6 +26,23 @@
   ],
   "healthy_display_reference": "23 HP",
   "counter_reference_radius": 95.55000000000004,
+  "start_connectors": [
+    {
+      "connector_id": "post_third_returned_to_canonical_mine_start",
+      "canonical_waypoint": "mine_start",
+      "canonical_offset": [
+        10.0,
+        5.0
+      ],
+      "offset_tolerance": 1.0,
+      "maximum_reach": 12.0,
+      "arrival_tolerance": 3.0,
+      "source_pose_id": "post_third_returned",
+      "mining_terminal_frame_sha256": "d4904cca0de4b3b18c07ee2f0be99a182486fe201e535679d626e60a05810ea8",
+      "route_observation_frame_sha256": "1b03fc9cdef9aa9865e371a031094d9d3125244fb8ebe14f33159e29abd4d444",
+      "pose_reference_sha256": "1b5ce3847f76e7e9a6a9fed50d6cbe10b6afcf6030e389277566e6cfdf4f17c6"
+    }
+  ],
   "waypoints": [
     {
       "name": "mine_start",

@@ -1,7 +1,19 @@
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
+from mining_automation.capture import Frame, PixelFormat, RawFrame
+from mining_automation.contracts import InventoryState, ResourceState
+from mining_automation.controlled_mining_runner import (
+    CANONICAL_INVENTORY_RELEASE,
+    CANONICAL_RESOURCE_RELEASE,
+)
+from mining_automation.mining_slice import (
+    InventoryPerceptionEnvelope,
+    ResourcePerceptionEnvelope,
+    ResourceViewState,
+)
 from mining_automation.navigation.runtime import RouteFrame
 from mining_automation.navigation.windows import NativeRouteBackend
 
@@ -45,10 +57,187 @@ def backend(tmp_path):
     b.frame_id = 1
     b.output = tmp_path
     b.max_frame_age_s = 4.0
-    b.initial = {"client_size": [1000, 800], "client_origin": [10, 20]}
+    b.initial = {
+        "client_size": [1005, 1078],
+        "client_origin": [10, 20],
+        "identity": {
+            "title": "RuneLite - Chief Luma",
+            "class_name": "SunAwtFrame",
+        },
+        "dpi": 96,
+    }
+    b.expected_title = "RuneLite - Chief Luma"
+    b.focus_existing = False
+    b._foreground_recovery_used = False
     b.guard = lambda: b.initial.copy()
     b.now = lambda: 2.0
     b.wait = lambda s: None
+    return b
+
+
+def test_focus_loss_before_click_invalidates_old_frame_until_fresh_capture(tmp_path):
+    b = backend(tmp_path)
+    b.guard = NativeRouteBackend.guard.__get__(b)
+    b.check_cancelled = lambda: None
+    b.snapshot = lambda: b.initial.copy()
+    b.focus_existing = True
+    b.api.foreground = 99
+    b.api.foreground_window = lambda: b.api.foreground
+    b.api.focus_calls = []
+
+    def focus_window(hwnd):
+        b.api.focus_calls.append(hwnd)
+        b.api.foreground = hwnd
+        return True
+
+    b.api.focus_window = focus_window
+    waits = []
+    b.wait = waits.append
+    old = RouteFrame(1, 1.0, None, b.initial, "old.png")
+    with pytest.raises(RuntimeError, match="RuneLite_not_foreground"):
+        b.click(old, (800, 140), SimpleNamespace(contains=lambda p: True))
+    assert b.api.focus_calls == []
+    assert b.api.events == []
+
+    b._screen_pixels = lambda snapshot: np.zeros((1, 1, 3), dtype=np.uint8)
+    new = b.capture("fresh-after-refocus")
+    assert b.api.focus_calls == [42]
+    assert waits == [0.20]
+    assert new.frame_id == 2
+    with pytest.raises(RuntimeError, match="stale_native_input_proposal"):
+        b.click(old, (800, 140), SimpleNamespace(contains=lambda p: True))
+    assert b.api.events == []
+
+    b.click(new, (800, 140), SimpleNamespace(contains=lambda p: True))
+    assert b.api.events == ["down", "up"]
+
+
+def test_capture_refocus_is_bounded_and_rejects_geometry_change(tmp_path):
+    b = backend(tmp_path)
+    b.guard = NativeRouteBackend.guard.__get__(b)
+    b.check_cancelled = lambda: None
+    b.snapshot = lambda: b.initial.copy()
+    b.focus_existing = True
+    b.api.foreground = 99
+    b.api.foreground_window = lambda: b.api.foreground
+    b.api.focus_calls = []
+
+    def focus_window(hwnd):
+        b.api.focus_calls.append(hwnd)
+        b.api.foreground = hwnd
+        return True
+
+    b.api.focus_window = focus_window
+    b.wait = lambda _: None
+    b._screen_pixels = lambda snapshot: np.zeros((1, 1, 3), dtype=np.uint8)
+    b.capture("one-recovery")
+    assert b.api.focus_calls == [42]
+
+    b.api.foreground = 99
+    with pytest.raises(RuntimeError, match="RuneLite_not_foreground"):
+        b.capture("second-recovery-rejected")
+    assert b.api.focus_calls == [42]
+
+    b._foreground_recovery_used = False
+    b.api.foreground = 99
+    b.snapshot = lambda: {**b.initial, "client_size": [1004, 1078]}
+    with pytest.raises(RuntimeError, match="window_identity_or_geometry_changed"):
+        b.capture("geometry-changed")
+    assert b.api.focus_calls == [42]
+
+
+def test_capture_refocus_checks_cancellation_before_window_or_focus(tmp_path):
+    b = backend(tmp_path)
+    b.focus_existing = True
+    b.check_cancelled = lambda: (_ for _ in ()).throw(RuntimeError("owner_stop"))
+    b.snapshot = lambda: pytest.fail("snapshot after cancellation")
+    b.api.focus_window = lambda hwnd: pytest.fail(f"focus after cancellation for {hwnd}")
+
+    with pytest.raises(RuntimeError, match="owner_stop"):
+        b._recover_foreground_before_capture()
+
+
+def test_guard_does_not_refocus_without_explicit_focus_existing(tmp_path):
+    b = backend(tmp_path)
+    b.guard = NativeRouteBackend.guard.__get__(b)
+    b.check_cancelled = lambda: None
+    b.snapshot = lambda: b.initial.copy()
+    b.api.foreground_window = lambda: 99
+    b.api.focus_window = lambda hwnd: pytest.fail(f"unexpected focus request for {hwnd}")
+
+    with pytest.raises(RuntimeError, match="RuneLite_not_foreground_no_automatic_restore"):
+        b.guard()
+
+
+def authority_backend(
+    tmp_path, *, inventory_count=28, resource_supported=True, pose_supported=True
+):
+    b = backend(tmp_path)
+    b.frame_id = 3
+    b.now = lambda: 1.8
+    native = Frame.from_raw(
+        RawFrame(
+            bytes(1005 * 1078 * 4),
+            1005,
+            1078,
+            PixelFormat.BGRA8888,
+        ),
+        frame_id=1,
+        captured_monotonic_s=1.2,
+    )
+    native_window = {
+        "hwnd": 42,
+        "title": "RuneLite - Chief Luma",
+        "class_name": "SunAwtFrame",
+        "is_visible": True,
+        "is_minimized": False,
+        "client_width": 1005,
+        "client_height": 1078,
+    }
+    b._capture_start_connector_native_frame = lambda: (
+        native,
+        native_window,
+        96,
+        str(tmp_path / "native.bgra"),
+    )
+    b._start_connector_pose_detectors = {"post_third_returned": object()}
+
+    def resource_evaluator(frame, epoch, detectors, excluded, active):
+        del frame, detectors, excluded, active
+        view = ResourceViewState.SUPPORTED if resource_supported else ResourceViewState.UNSUPPORTED
+        resources = (ResourceState("iron-1", "iron", False, 1.0),) if resource_supported else ()
+        return (
+            ResourcePerceptionEnvelope(
+                epoch=epoch,
+                release=CANONICAL_RESOURCE_RELEASE,
+                view=view,
+                resources=resources,
+            ),
+            "post_third_returned" if pose_supported else None,
+            {},
+        )
+
+    b._start_connector_resource_evaluator = resource_evaluator
+    unknown_reason = "inventory_v3_unknown" if inventory_count is None else None
+    confidence = 0.0 if inventory_count is None else 1.0
+
+    def evaluate_inventory(frame, epoch):
+        del frame
+        resource = ResourcePerceptionEnvelope(
+            epoch=epoch,
+            release=CANONICAL_RESOURCE_RELEASE,
+            view=ResourceViewState.UNSUPPORTED,
+            resources=(),
+        )
+        inventory = InventoryPerceptionEnvelope(
+            epoch=epoch,
+            release=CANONICAL_INVENTORY_RELEASE,
+            inventory=InventoryState(inventory_count, 28, confidence),
+            unknown_reason=unknown_reason,
+        )
+        return resource, inventory
+
+    b._start_connector_inventory_evaluator = SimpleNamespace(evaluate=evaluate_inventory)
     return b
 
 
@@ -136,3 +325,44 @@ def test_physical_reverse_round_trip_allows_only_two_pixel_awt_rounding(tmp_path
     frame = RouteFrame(1, 1.0, None, b.initial, "before.png")
     with pytest.raises(RuntimeError, match="round_trip"):
         b.click(frame, (800, 140), SimpleNamespace(contains=lambda p: True))
+
+
+@pytest.mark.parametrize(
+    ("inventory_count", "resource_supported", "pose_supported", "accepted", "reason"),
+    (
+        (28, True, True, True, "accepted"),
+        (0, True, True, False, "inventory_not_full"),
+        (None, True, True, False, "inventory_unknown"),
+        (28, False, False, False, "expected_mining_pose_not_supported"),
+    ),
+)
+def test_native_connector_authority_uses_atomic_resource_and_inventory_epoch(
+    tmp_path,
+    inventory_count,
+    resource_supported,
+    pose_supported,
+    accepted,
+    reason,
+):
+    b = authority_backend(
+        tmp_path,
+        inventory_count=inventory_count,
+        resource_supported=resource_supported,
+        pose_supported=pose_supported,
+    )
+    route_frame = RouteFrame(
+        3,
+        1.0,
+        np.zeros((1078, 1005, 3), dtype=np.uint8),
+        b.initial,
+        "route.png",
+    )
+    receipt = b.verify_start_connector_authority(
+        route_frame,
+        {"source_pose_id": "post_third_returned"},
+    )
+    assert receipt["accepted"] is accepted
+    assert receipt["reason"] == reason
+    assert receipt["route_source_frame_id"] == 3
+    assert receipt["native_frame_id"] == 1
+    assert receipt["native_captured_monotonic_s"] == 1.2

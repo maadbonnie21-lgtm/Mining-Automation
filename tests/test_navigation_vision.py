@@ -1,3 +1,6 @@
+import math
+from pathlib import Path
+
 import cv2
 import numpy as np
 import pytest
@@ -6,7 +9,9 @@ from mining_automation.navigation.visual_route import (
     MAP_CENTRE,
     LocalizationError,
     MinimapGeometry,
+    Registration,
     TerrainReference,
+    VisualRoute,
 )
 
 
@@ -54,10 +59,6 @@ def test_coordinate_mapping_uses_current_minimap():
 
 
 def test_same_scale_duplicate_compass_is_not_a_unique_minimap():
-    from pathlib import Path
-
-    from mining_automation.navigation.visual_route import VisualRoute
-
     path = (
         Path(__file__).resolve().parents[1]
         / "src/mining_automation/navigation/profiles/varrock_east/route.json"
@@ -70,3 +71,62 @@ def test_same_scale_duplicate_compass_is_not_a_unique_minimap():
     frame[50 : 50 + h, 900 : 900 + w] = anchor
     with pytest.raises(LocalizationError, match="ambiguous"):
         route.locator.locate(frame)
+
+
+def test_profile_connector_binds_exact_observed_departure_not_a_larger_radius():
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "src/mining_automation/navigation/profiles/varrock_east/route.json"
+    )
+    route = VisualRoute(path)
+    observed = Registration(
+        target=(105.50010335957663, 100.50036695352385),
+        distance=11.18059644527559,
+        inliers=244,
+        ratio=0.8905109489051095,
+        error=0.10136834532022476,
+        agreement=0.9993889086927739,
+        scale=1.0004775584387702,
+        rotation_degrees=0.015382927586891748,
+    )
+    match = route.match_start_connector(route.waypoints[0], observed)
+    assert match is not None
+    assert match["connector_id"] == "post_third_returned_to_canonical_mine_start"
+    assert match["offset_residual"] < 0.01
+    assert (
+        match["mining_terminal_frame_sha256"]
+        == "d4904cca0de4b3b18c07ee2f0be99a182486fe201e535679d626e60a05810ea8"
+    )
+    assert (
+        match["route_observation_frame_sha256"]
+        == "1b03fc9cdef9aa9865e371a031094d9d3125244fb8ebe14f33159e29abd4d444"
+    )
+    assert (
+        match["pose_reference_sha256"]
+        == "1b5ce3847f76e7e9a6a9fed50d6cbe10b6afcf6030e389277566e6cfdf4f17c6"
+    )
+
+    wrong_bearing = Registration(
+        target=(MAP_CENTRE - 10.00010335957663, MAP_CENTRE + 5.00036695352385),
+        distance=observed.distance,
+        inliers=observed.inliers,
+        ratio=observed.ratio,
+        error=observed.error,
+        agreement=observed.agreement,
+        scale=1.0,
+        rotation_degrees=0.0,
+    )
+    assert route.match_start_connector(route.waypoints[0], wrong_bearing) is None
+
+    outside_residual = Registration(
+        target=(MAP_CENTRE + 11.05, MAP_CENTRE + 4.5),
+        distance=math.hypot(11.05, 4.5),
+        inliers=observed.inliers,
+        ratio=observed.ratio,
+        error=observed.error,
+        agreement=observed.agreement,
+        scale=1.0,
+        rotation_degrees=0.0,
+    )
+    assert route.match_start_connector(route.waypoints[0], outside_residual) is None
+    assert route.match_start_connector(route.waypoints[-1], observed) is None
