@@ -67,10 +67,52 @@ def backend(tmp_path):
         "dpi": 96,
     }
     b.expected_title = "RuneLite - Chief Luma"
+    b.focus_existing = False
     b.guard = lambda: b.initial.copy()
     b.now = lambda: 2.0
     b.wait = lambda s: None
     return b
+
+
+def test_guard_refocuses_only_bound_hwnd_without_accepting_geometry_change(
+    tmp_path, monkeypatch
+):
+    b = backend(tmp_path)
+    b.guard = NativeRouteBackend.guard.__get__(b)
+    b.check_cancelled = lambda: None
+    b.snapshot = lambda: b.initial.copy()
+    b.focus_existing = True
+    b.api.foreground = 99
+    b.api.foreground_window = lambda: b.api.foreground
+    b.api.focus_calls = []
+
+    def focus_window(hwnd):
+        b.api.focus_calls.append(hwnd)
+        b.api.foreground = hwnd
+        return True
+
+    b.api.focus_window = focus_window
+    monkeypatch.setattr("mining_automation.navigation.windows.time.sleep", lambda _: None)
+
+    assert b.guard() == b.initial
+    assert b.api.focus_calls == [42]
+
+    b.api.foreground = 99
+    b.snapshot = lambda: {**b.initial, "client_size": [1004, 1078]}
+    with pytest.raises(RuntimeError, match="window_identity_or_geometry_changed"):
+        b.guard()
+
+
+def test_guard_does_not_refocus_without_explicit_focus_existing(tmp_path):
+    b = backend(tmp_path)
+    b.guard = NativeRouteBackend.guard.__get__(b)
+    b.check_cancelled = lambda: None
+    b.snapshot = lambda: b.initial.copy()
+    b.api.foreground_window = lambda: 99
+    b.api.focus_window = lambda hwnd: pytest.fail(f"unexpected focus request for {hwnd}")
+
+    with pytest.raises(RuntimeError, match="RuneLite_not_foreground_no_automatic_restore"):
+        b.guard()
 
 
 def authority_backend(

@@ -47,6 +47,7 @@ class NativeRouteBackend:
         self.api.declare_dpi_awareness()
         self.hwnd, self.output, self.stop_file = hwnd, output, stop_file
         self.expected_title = expected_title
+        self.focus_existing = focus_existing
         self.max_frame_age_s = max_frame_age_s
         self.frame_id = 0
         self.delivered_click_count = 0
@@ -123,7 +124,16 @@ class NativeRouteBackend:
         if current != self.initial:
             raise RuntimeError("window_identity_or_geometry_changed")
         if self.api.foreground_window() != self.hwnd:
-            raise RuntimeError("RuneLite_not_foreground_no_automatic_restore")
+            if not self.focus_existing or not self.api.focus_window(self.hwnd):
+                raise RuntimeError("RuneLite_not_foreground_no_automatic_restore")
+            # Refocus only the already-bound exact HWND.  This API does not
+            # restore, resize, reposition, maximize, or otherwise normalize it.
+            time.sleep(0.20)
+            current = self.snapshot()
+            if current != self.initial:
+                raise RuntimeError("window_identity_or_geometry_changed")
+            if self.api.foreground_window() != self.hwnd:
+                raise RuntimeError("RuneLite_refocus_failed_no_restore")
         return current
 
     def _screen_pixels(self, snapshot: dict[str, Any]) -> np.ndarray:
