@@ -291,25 +291,30 @@ class VisualRoute:
         return math.isfinite(value) and value >= 0.88
 
     def verify_endpoint(self, image: np.ndarray, geometry: MinimapGeometry) -> dict[str, Any]:
-        """Counter appearance is additional evidence, not banking authority."""
-        template = self.images["counter"]
+        """Require a proven static counter appearance at the registered endpoint."""
+        names = ["counter", *self.config.get("counter_additional_templates", [])]
         scale = geometry.radius / self.config["counter_reference_radius"]
-        # Only the gameplay view is searched, not chat or inventory chrome.
         height = round(image.shape[0] * 0.84)
         width = round(image.shape[1] * 0.66)
         world = image[32:height, :width, :3]
         best = -1.0
-        for factor in (scale * 0.95, scale, scale * 1.05):
-            tw, th = round(template.shape[1] * factor), round(template.shape[0] * factor)
-            if tw < 8 or th < 8 or tw >= width or th >= world.shape[0]:
-                continue
-            patch = cv2.resize(template, (tw, th))
-            scores = cv2.matchTemplate(world, patch, cv2.TM_CCOEFF_NORMED)
-            scores[~np.isfinite(scores)] = -1
-            best = max(best, float(cv2.minMaxLoc(scores)[1]))
+        matched_name = None
+        for name in names:
+            template = self.images[name]
+            for factor in (scale * 0.95, scale, scale * 1.05):
+                tw, th = round(template.shape[1] * factor), round(template.shape[0] * factor)
+                if tw < 8 or th < 8 or tw >= width or th >= world.shape[0]:
+                    continue
+                patch = cv2.resize(template, (tw, th))
+                scores = cv2.matchTemplate(world, patch, cv2.TM_CCOEFF_NORMED)
+                scores[~np.isfinite(scores)] = -1
+                score = float(cv2.minMaxLoc(scores)[1])
+                if score > best:
+                    best, matched_name = score, name
         return {
             "accepted": best >= 0.83,
             "counter_score": best,
+            "counter_template": matched_name,
             "bank_interface_opened": False,
             "authority": "arrival_only",
         }

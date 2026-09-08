@@ -6,7 +6,7 @@
   "source_pass": "2026-09-07 13:14:34-13:19:55 CDT",
   "provenance": "Original operator frames; geometry derived at compilation, not at run time",
   "assets": "terrain.npz",
-  "assets_sha256": "5e27e9aabadd4488cd70d0d96e9073ade55150f2f81a76bc75ed2160d2c9e104",
+  "assets_sha256": "a9fa4339ab6dda177e3bed622df4f480168406da56661213c926568bc845f3d6",
   "minimap_offset": [
     102.0,
     83.0
@@ -565,5 +565,20 @@
       "observed_stationary_distance": 3.6232104337995668,
       "reason": "Strong same-checkpoint terrain match and stable position; repeated sub-tile correction made no movement. Other checkpoint/corridor/health/input gates unchanged."
     }
-  ]
+  ],
+  "counter_additional_templates": [
+    "counter_verified_bank"
+  ],
+  "counter_variant_source": {
+    "run": "bank-program-20260907-162359",
+    "frame": "00009-verify-bank-closed.png",
+    "sha256": "29547aba1c6c66cd4ab2bac10903c85fbad1369b0cce4c25a039b9266e9929c7",
+    "crop": [
+      111,
+      596,
+      424,
+      690
+    ],
+    "meaning": "Static counter from independently verified real deposit and X-close; excludes avatar, bankers and inventory"
+  }
 }
