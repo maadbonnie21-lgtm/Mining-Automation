@@ -109,10 +109,12 @@ def run_route(
     last_timestamp = -1.0
     previous_target: tuple[float, float] | None = None
     last_frame: RouteFrame | None = None
+    verified_transitions = 0
     try:
         for index, waypoint in enumerate(route.waypoints):
             waypoint_begun = backend.now()
             stable = arrived = misses = attempts = 0
+            start_connector: dict[str, Any] | None = None
             previous_target = None
             previous_map_geometry = None
             last_click_distance: float | None = None
@@ -169,7 +171,22 @@ def run_route(
                 )
                 stable = stable + 1 if stationary else 0
                 previous_target = registration.target
-                tolerance = limits.start_tolerance if index == 0 else waypoint.tolerance
+                connector_match = None
+                if (
+                    index == 0
+                    and start_connector is None
+                    and registration.distance > limits.start_tolerance
+                ):
+                    matcher = getattr(route, "match_start_connector", None)
+                    if matcher is not None:
+                        connector_match = matcher(waypoint, registration)
+                tolerance = (
+                    start_connector["arrival_tolerance"]
+                    if start_connector is not None
+                    else limits.start_tolerance
+                    if index == 0
+                    else waypoint.tolerance
+                )
                 result.events.append(
                     {
                         "kind": "observation",
@@ -179,10 +196,47 @@ def run_route(
                         "registration": asdict(registration),
                         "minimap": asdict(geometry),
                         "stationary": stationary,
+                        "start_connector_match": connector_match,
                     }
                 )
-                if index == 0 and registration.distance > limits.start_tolerance:
-                    raise RuntimeError("not_at_recorded_mine_start")
+                if (
+                    index == 0
+                    and start_connector is None
+                    and registration.distance > limits.start_tolerance
+                ):
+                    if connector_match is None:
+                        raise RuntimeError("not_at_recorded_mine_start")
+                    if stable >= limits.stable_observations:
+                        if connector_match["canonical_waypoint"] != waypoint.name:
+                            raise RuntimeError("start_connector_waypoint_mismatch")
+                        if registration.distance > connector_match["maximum_reach"]:
+                            raise RuntimeError("start_connector_outside_bounded_reach")
+                        point = geometry.screen_point(registration.target)
+                        if not geometry.contains(point):
+                            raise RuntimeError("start_connector_target_outside_safe_minimap")
+                        backend.click(frame, point, geometry)
+                        result.click_count += 1
+                        start_connector = connector_match
+                        result.events.append(
+                            {
+                                "kind": "start_connector_dispatched",
+                                "waypoint": waypoint.name,
+                                "frame_id": frame.frame_id,
+                                "point": list(point),
+                                "connector": connector_match,
+                                "expected_distance": registration.distance,
+                            }
+                        )
+                        stable = arrived = 0
+                        previous_target = None
+                    backend.wait(limits.observation_interval_s)
+                    continue
+                if index == 0 and start_connector is not None and registration.distance > tolerance:
+                    arrived = 0
+                    if stationary and stable >= limits.stable_observations:
+                        raise RuntimeError("start_connector_arrival_not_proven")
+                    backend.wait(limits.observation_interval_s)
+                    continue
                 if registration.distance <= tolerance:
                     arrived += 1
                     if arrived >= limits.stable_observations and stationary:
@@ -205,6 +259,17 @@ def run_route(
                                 "frame_id": frame.frame_id,
                             }
                         )
+                        if index == 0 and start_connector is not None:
+                            result.events.append(
+                                {
+                                    "kind": "start_connector_arrival_verified",
+                                    "waypoint": waypoint.name,
+                                    "frame_id": frame.frame_id,
+                                    "connector_id": start_connector["connector_id"],
+                                    "arrival_distance": registration.distance,
+                                    "arrival_tolerance": tolerance,
+                                }
+                            )
                         break
                 else:
                     arrived = 0
@@ -256,9 +321,19 @@ def run_route(
                 backend.wait(limits.observation_interval_s)
             else:
                 raise RuntimeError("observation_budget_exhausted")
-            if stop_after is not None and index >= stop_after and index < len(route.waypoints) - 1:
+            if index > 0 or start_connector is not None:
+                verified_transitions += 1
+            if (
+                stop_after is not None
+                and verified_transitions >= stop_after
+                and index < len(route.waypoints) - 1
+            ):
                 result.status = "STAGE_PASS"
-                result.stop_reason = "requested_stage_complete_full_route_not_tested"
+                result.stop_reason = (
+                    "departure_connector_complete_full_route_not_tested"
+                    if verified_transitions == 1 and start_connector is not None
+                    else "requested_stage_complete_full_route_not_tested"
+                )
                 return result
         result.success = True
         result.status = "PASS"
