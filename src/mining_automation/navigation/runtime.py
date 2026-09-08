@@ -10,6 +10,12 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
+from ..mining_slice import (
+    INVENTORY_CAPACITY,
+    INVENTORY_PUBLICATION_FLOOR,
+    MAX_MINING_PERCEPTION_AGE_S,
+)
+
 
 @dataclass(frozen=True)
 class RouteFrame:
@@ -115,6 +121,7 @@ def run_route(
             waypoint_begun = backend.now()
             stable = arrived = misses = attempts = 0
             start_connector: dict[str, Any] | None = None
+            connector_authority: dict[str, Any] | None = None
             previous_target = None
             previous_map_geometry = None
             last_click_distance: float | None = None
@@ -202,6 +209,13 @@ def run_route(
                 if (
                     index == 0
                     and start_connector is None
+                    and connector_authority is not None
+                    and (registration.distance <= limits.start_tolerance or connector_match is None)
+                ):
+                    raise RuntimeError("start_connector_changed_before_dispatch")
+                if (
+                    index == 0
+                    and start_connector is None
                     and registration.distance > limits.start_tolerance
                 ):
                     if connector_match is None:
@@ -211,6 +225,77 @@ def run_route(
                             raise RuntimeError("start_connector_waypoint_mismatch")
                         if registration.distance > connector_match["maximum_reach"]:
                             raise RuntimeError("start_connector_outside_bounded_reach")
+                        if connector_authority is None:
+                            authority_check = getattr(
+                                backend,
+                                "verify_start_connector_authority",
+                                None,
+                            )
+                            if authority_check is None:
+                                raise RuntimeError(
+                                    "start_connector_current_frame_authority_unavailable"
+                                )
+                            authority = authority_check(frame, connector_match)
+                            result.events.append(
+                                {
+                                    "kind": "start_connector_current_frame_authority",
+                                    "waypoint": waypoint.name,
+                                    "frame_id": frame.frame_id,
+                                    "authority": authority,
+                                }
+                            )
+                            confidence = (
+                                authority.get("inventory_confidence")
+                                if isinstance(authority, dict)
+                                else None
+                            )
+                            native_captured = (
+                                authority.get("native_captured_monotonic_s")
+                                if isinstance(authority, dict)
+                                else None
+                            )
+                            if (
+                                not isinstance(authority, dict)
+                                or authority.get("route_source_frame_id") != frame.frame_id
+                                or authority.get("route_source_captured_monotonic_s")
+                                != frame.captured_monotonic_s
+                                or authority.get("window") != frame.window
+                                or authority.get("expected_pose_id")
+                                != connector_match["source_pose_id"]
+                                or authority.get("pose_id") != connector_match["source_pose_id"]
+                                or authority.get("resource_view") != "supported"
+                                or authority.get("inventory_occupied_slots") != INVENTORY_CAPACITY
+                                or authority.get("inventory_capacity") != INVENTORY_CAPACITY
+                                or type(confidence) is not float
+                                or not math.isfinite(confidence)
+                                or confidence < INVENTORY_PUBLICATION_FLOOR
+                                or authority.get("inventory_unknown_reason") is not None
+                                or authority.get("world_state") != "full"
+                                or type(native_captured) is not float
+                                or not math.isfinite(native_captured)
+                                or native_captured <= frame.captured_monotonic_s
+                                or authority.get("accepted") is not True
+                            ):
+                                reason = (
+                                    authority.get("reason", "invalid_receipt")
+                                    if isinstance(authority, dict)
+                                    else "invalid_receipt"
+                                )
+                                raise RuntimeError(
+                                    f"start_connector_current_frame_authority_unproven:{reason}"
+                                )
+                            connector_authority = authority
+                            continue
+                        native_captured = connector_authority["native_captured_monotonic_s"]
+                        if (
+                            frame.frame_id <= connector_authority["route_source_frame_id"]
+                            or frame.captured_monotonic_s <= native_captured
+                            or backend.now() - native_captured > MAX_MINING_PERCEPTION_AGE_S
+                            or connector_authority.get("window") != frame.window
+                            or connector_authority.get("expected_pose_id")
+                            != connector_match["source_pose_id"]
+                        ):
+                            raise RuntimeError("start_connector_authority_or_reregistration_stale")
                         point = geometry.screen_point(registration.target)
                         if not geometry.contains(point):
                             raise RuntimeError("start_connector_target_outside_safe_minimap")

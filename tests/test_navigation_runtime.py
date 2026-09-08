@@ -227,6 +227,35 @@ class ConnectorBackend(Backend):
         super().__init__()
         self.position = position
         self.connector_outcome = "arrive"
+        self.connector_authority_overrides = {}
+        self.position_after_authority = None
+        self.post_authority_delay = 0.0
+
+    def verify_start_connector_authority(self, frame, connector):
+        self.t += 0.05
+        native_captured = self.t
+        authority = {
+            "accepted": True,
+            "reason": "accepted",
+            "route_source_frame_id": frame.frame_id,
+            "route_source_captured_monotonic_s": frame.captured_monotonic_s,
+            "native_frame_id": 1,
+            "native_captured_monotonic_s": native_captured,
+            "window": frame.window,
+            "expected_pose_id": connector["source_pose_id"],
+            "pose_id": connector["source_pose_id"],
+            "resource_view": "supported",
+            "inventory_occupied_slots": 28,
+            "inventory_capacity": 28,
+            "inventory_confidence": 1.0,
+            "inventory_unknown_reason": None,
+            "world_state": "full",
+        }
+        authority.update(self.connector_authority_overrides)
+        if self.position_after_authority is not None:
+            self.position = self.position_after_authority
+        self.t += self.post_authority_delay
+        return authority
 
     def click(self, frame, point, geometry):
         self.clicks.append(point)
@@ -363,8 +392,58 @@ def test_start_connector_requires_the_normal_stationarity_sample_count():
     backend = JitteringConnectorBackend()
     result = run_route(backend, ConnectorRoute(backend), stop_after=1)
     assert result.status == "STAGE_PASS"
-    assert backend.first_click_frame_id == 5
+    assert backend.first_click_frame_id == 6
     assert result.click_count == len(backend.clicks) == 1
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {
+            "accepted": False,
+            "reason": "inventory_not_full",
+            "inventory_occupied_slots": 0,
+            "world_state": "ready",
+        },
+        {
+            "accepted": False,
+            "reason": "inventory_unknown",
+            "inventory_occupied_slots": None,
+            "inventory_confidence": 0.0,
+            "inventory_unknown_reason": "inventory_v3_unknown",
+            "world_state": "blocked",
+        },
+        {
+            "accepted": False,
+            "reason": "expected_mining_pose_not_supported",
+            "pose_id": None,
+            "resource_view": "unsupported",
+            "world_state": "blocked",
+        },
+    ),
+)
+def test_start_connector_requires_fresh_supported_pose_and_full_inventory(overrides):
+    backend = ConnectorBackend()
+    backend.connector_authority_overrides = overrides
+    result = run_route(backend, ConnectorRoute(backend))
+    assert "start_connector_current_frame_authority_unproven" in result.stop_reason
+    assert result.click_count == len(backend.clicks) == 0
+
+
+def test_connector_is_reregistered_after_native_authority_before_click():
+    backend = ConnectorBackend()
+    backend.position_after_authority = (10.0, -5.0)
+    result = run_route(backend, ConnectorRoute(backend))
+    assert "start_connector_changed_before_dispatch" in result.stop_reason
+    assert result.click_count == len(backend.clicks) == 0
+
+
+def test_stale_native_authority_cannot_reach_connector_click():
+    backend = ConnectorBackend()
+    backend.post_authority_delay = 1.1
+    result = run_route(backend, ConnectorRoute(backend))
+    assert "start_connector_authority_or_reregistration_stale" in result.stop_reason
+    assert result.click_count == len(backend.clicks) == 0
 
 
 def test_connector_path_preserves_health_and_stale_frame_zero_input_guards():
