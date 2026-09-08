@@ -5,6 +5,7 @@ import pytest
 
 from mining_automation.navigation.runtime import (
     RouteFrame,
+    RouteLimits,
     point_segment_distance,
     run_route,
 )
@@ -176,3 +177,29 @@ def test_first_stage_pilot_never_issues_a_corrective_second_click():
     assert not result.success
     assert len(backend.clicks) == 1
     assert "single_click_pilot_arrival_not_proven" in result.stop_reason
+
+
+def test_observed_departure_sampling_noise_still_requires_all_route_checkpoints():
+    backend = Backend()
+    backend.position = -1.0004510011058667
+    result = run_route(backend, Route())
+    assert result.success
+    assert result.completed_checkpoints == ["mine_start", "road_join", "bank_counter"]
+    assert result.click_count == len(backend.clicks) == 2
+
+
+def test_start_sampling_allowance_is_bounded_to_a_quarter_pixel():
+    backend = Backend()
+    backend.position = -1.026
+    result = run_route(backend, Route())
+    assert not result.success
+    assert "not_at_recorded_mine_start" in result.stop_reason
+    assert not backend.clicks
+
+
+def test_explicit_return_start_tolerance_is_not_widened():
+    backend = Backend()
+    backend.position = -0.405
+    result = run_route(backend, Route(), limits=RouteLimits(start_tolerance=4.0))
+    assert not result.success
+    assert not backend.clicks
