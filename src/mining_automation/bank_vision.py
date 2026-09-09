@@ -107,9 +107,13 @@ class BankVision:
         return (title, close) if close.score >= 0.85 else None
 
     def bank_booth_hover_text(self, image: Any) -> bool:
-        """Recognize the current top-left Bank booth action text by color geometry."""
-        roi = image[32:60, 0:330, :3]
-        if roi.shape[0] != 28 or roi.shape[1] != 330:
+        """Recognize the Bank booth action text in the logical 804px presentation."""
+        logical = image
+        if image.shape[1] != 804:
+            scale = 804 / image.shape[1]
+            logical = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        roi = logical[24:48, 0:264, :3]
+        if roi.shape[0] != 24 or roi.shape[1] != 264:
             return False
         blue, green, red = cv2.split(roi)
         cyan = (blue > 120) & (green > 120) & (red < 120) & (
@@ -118,14 +122,14 @@ class BankVision:
         white = (blue > 170) & (green > 170) & (red > 170)
         cyan_count = int(cyan.sum())
         white_count = int(white.sum())
-        if not 350 <= cyan_count <= 550 or not 400 <= white_count <= 700:
+        if not 180 <= cyan_count <= 350 or not 250 <= white_count <= 500:
             return False
         ys, xs = np.where(cyan)
         if len(xs) == 0:
             return False
-        left, top = int(xs.min()), int(ys.min()) + 32
-        right, bottom = int(xs.max()), int(ys.max()) + 32
-        return 48 <= left <= 65 and 138 <= right <= 160 and 38 <= top <= 43 and 50 <= bottom <= 55
+        left, top = int(xs.min()), int(ys.min()) + 24
+        right, bottom = int(xs.max()), int(ys.max()) + 24
+        return 40 <= left <= 52 and 112 <= right <= 128 and 30 <= top <= 35 and 39 <= bottom <= 44
 
     def inventory_origin(self, image: Any) -> tuple[int, int]:
         edge = self.match(
