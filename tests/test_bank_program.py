@@ -162,7 +162,7 @@ def fake_runner(
         del image, args, kwargs
         if key == "booth":
             return Match(86, 446, 83, 69, booth_score)
-        if key in ("bank_hover", "bank_hover_original", "bank_hover_live2"):
+        if key in ("bank_hover", "bank_hover_original", "bank_hover_live2", "bank_hover_live3"):
             return Match(0, 24, 112, 13, hover_score)
         return Match(260, 650, 39, 37, 1.0)
 
