@@ -106,6 +106,27 @@ class BankVision:
         )
         return (title, close) if close.score >= 0.85 else None
 
+    def bank_booth_hover_text(self, image: Any) -> bool:
+        """Recognize the current top-left Bank booth action text by color geometry."""
+        roi = image[32:60, 0:330, :3]
+        if roi.shape[0] != 28 or roi.shape[1] != 330:
+            return False
+        blue, green, red = cv2.split(roi)
+        cyan = (blue > 120) & (green > 120) & (red < 120) & (
+            blue.astype(np.int16) + green.astype(np.int16) - 2 * red.astype(np.int16) > 120
+        )
+        white = (blue > 170) & (green > 170) & (red > 170)
+        cyan_count = int(cyan.sum())
+        white_count = int(white.sum())
+        if not 350 <= cyan_count <= 550 or not 400 <= white_count <= 700:
+            return False
+        ys, xs = np.where(cyan)
+        if len(xs) == 0:
+            return False
+        left, top = int(xs.min()), int(ys.min()) + 32
+        right, bottom = int(xs.max()), int(ys.max()) + 32
+        return 48 <= left <= 65 and 138 <= right <= 160 and 38 <= top <= 43 and 50 <= bottom <= 55
+
     def inventory_origin(self, image: Any) -> tuple[int, int]:
         edge = self.match(
             image,

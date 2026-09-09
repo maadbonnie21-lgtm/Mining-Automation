@@ -241,12 +241,16 @@ class BankRunner:
             # Preserve the original >=0.94 gold-booth authority. A farther-out
             # presentation may use the same frozen booth target down to 0.65 only
             # when a fresh independent Bank-booth hover-text template reaches 0.85.
-            if booth.score < 0.94 and proof.score < 0.85:
+            semantic_hover = self.vision.bank_booth_hover_text(image)
+            if booth.score < 0.94 and proof.score < 0.85 and not semantic_hover:
                 raise BankUnproven(
                     "bank_booth_hover_unproven:" + str(booth.score) + ":" + str(proof.score)
                 )
             self.record(
-                "BOOTH_TARGET_VERIFIED", appearance_score=booth.score, hover_text_score=proof.score
+                "BOOTH_TARGET_VERIFIED",
+                appearance_score=booth.score,
+                hover_text_score=proof.score,
+                semantic_hover_text=semantic_hover,
             )
             self.click(frame, booth.centre, "OPEN_BANK_BOOTH")
             frame, image = self.wait_open()

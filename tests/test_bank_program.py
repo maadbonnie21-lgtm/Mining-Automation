@@ -170,6 +170,7 @@ def fake_runner(
         inventory=inventory,
         bank_controls=controls,
         match=match,
+        bank_booth_hover_text=lambda image: hover_score >= 0.85,
         deposit_all_prefix_score=lambda image: 1.0,
         deposit_all_prefix_source_sha256="8dcaf2733824e7904c0b282b83180f14df7a64b0f0f82468f2dac8c6a0b7fa14",
     )
