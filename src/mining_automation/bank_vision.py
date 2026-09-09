@@ -252,6 +252,29 @@ class BankVision:
         item; it does not infer or OCR an unfamiliar suffix.
         """
 
+        logical = image
+        if image.shape[1] != 804:
+            scale = 804 / image.shape[1]
+            logical = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        action_roi = logical[24:48, 0:100, :3]
+        if action_roi.shape[:2] == (24, 100):
+            low = np.min(action_roi, axis=2)
+            high = np.max(action_roi, axis=2)
+            white = (low > 120) & ((high - low) < 55)
+            ys, xs = np.where(white)
+            if len(xs):
+                count = int(white.sum())
+                left, top = int(xs.min()), int(ys.min()) + 24
+                right, bottom = int(xs.max()), int(ys.max()) + 24
+                if (
+                    220 <= count <= 320
+                    and 7 <= left <= 12
+                    and 80 <= right <= 90
+                    and 31 <= top <= 34
+                    and 44 <= bottom <= 47
+                ):
+                    return 1.0
+
         height, width = _DEPOSIT_ALL_PREFIX_SHAPE
         template = (
             np.unpackbits(
