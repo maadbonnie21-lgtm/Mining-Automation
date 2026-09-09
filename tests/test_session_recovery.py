@@ -6,6 +6,8 @@ from mining_automation.capture import Frame, PixelFormat, RawFrame
 from mining_automation.validation.session_recovery import (
     DISCONNECTED_OK_CLIENT_POINT,
     DISCONNECTED_SCREEN,
+    DISCONNECTED_SCREEN_CURRENT,
+    DISCONNECTED_SCREENS,
     PLAY_NOW_CLIENT_POINT,
     PREAUTHENTICATED_PLAY_NOW_CURRENT,
     PREAUTHENTICATED_PLAY_NOW_SCREENS,
@@ -80,4 +82,16 @@ def test_current_play_now_fingerprint_is_additive_and_exact() -> None:
         (340, 294, 90, 24),
         (300, 250, 170, 78),
         (260, 210, 250, 190),
+    )
+
+
+def test_current_disconnect_fingerprint_is_additive_and_exact() -> None:
+    assert tuple(item.fingerprint_id for item in DISCONNECTED_SCREENS) == (
+        "disconnected-ok-v1",
+        "disconnected-ok-20260909-v1",
+    )
+    assert tuple(anchor.region for anchor in DISCONNECTED_SCREEN_CURRENT.anchors) == (
+        (235, 240, 305, 40),
+        (305, 305, 160, 50),
+        (205, 198, 360, 200),
     )

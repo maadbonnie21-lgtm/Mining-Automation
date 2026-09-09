@@ -76,10 +76,31 @@ DISCONNECTED_SCREEN: Final[SessionScreenFingerprint] = SessionScreenFingerprint(
 )
 
 
+DISCONNECTED_SCREEN_CURRENT: Final[SessionScreenFingerprint] = SessionScreenFingerprint(
+    fingerprint_id="disconnected-ok-20260909-v1",
+    anchors=(
+        SessionScreenAnchor(
+            (235, 240, 305, 40), "af4825da182e1116a6bc9de89eacfa9bbd41bd19bd78639b52c18eb595176ac4"
+        ),
+        SessionScreenAnchor(
+            (305, 305, 160, 50), "9b8a418ba636796673f21dd0c96d43bc212f634bccda2f45842354ccc3003faa"
+        ),
+        SessionScreenAnchor(
+            (205, 198, 360, 200), "6e0f172bfeba712d897d3cc2732f72824519f7ec8ba3ef7c59830862e1706f06"
+        ),
+    ),
+)
+
+DISCONNECTED_SCREENS: Final[tuple[SessionScreenFingerprint, ...]] = (
+    DISCONNECTED_SCREEN,
+    DISCONNECTED_SCREEN_CURRENT,
+)
+
+
 def matches_disconnected_screen(frame: Frame) -> bool:
     """Recognize the source-proven normal disconnect dialog."""
 
-    return matches_session_screen(frame, DISCONNECTED_SCREEN)
+    return any(matches_session_screen(frame, item) for item in DISCONNECTED_SCREENS)
 
 
 PREAUTHENTICATED_PLAY_NOW: Final[SessionScreenFingerprint] = SessionScreenFingerprint(
