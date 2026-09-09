@@ -234,7 +234,7 @@ class BankRunner:
             proof = max(
                 (
                     self.vision.match(image, key, (0, 24, 330, 60), text=True)
-                    for key in ("bank_hover", "bank_hover_original", "bank_hover_live2", "bank_hover_live3")
+                    for key in ("bank_hover", "bank_hover_original", "bank_hover_live2", "bank_hover_live3", "bank_hover_live4")
                 ),
                 key=lambda match: match.score,
             )
