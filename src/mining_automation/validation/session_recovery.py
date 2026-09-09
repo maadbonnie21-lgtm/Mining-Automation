@@ -53,8 +53,7 @@ def matches_session_screen(
     ):
         return False
     return all(
-        _region_sha256(frame, anchor.region) == anchor.sha256
-        for anchor in fingerprint.anchors
+        _region_sha256(frame, anchor.region) == anchor.sha256 for anchor in fingerprint.anchors
     )
 
 
@@ -106,10 +105,37 @@ PREAUTHENTICATED_PLAY_NOW: Final[SessionScreenFingerprint] = SessionScreenFinger
 )
 
 
+PREAUTHENTICATED_PLAY_NOW_CURRENT: Final[SessionScreenFingerprint] = SessionScreenFingerprint(
+    fingerprint_id="preauthenticated-play-now-20260909-v1",
+    anchors=(
+        SessionScreenAnchor(
+            (335, 260, 100, 30), "c03c8f4560d28a3e858b5d1311301340823b417921780e53a8be79b99f2df7fd"
+        ),
+        SessionScreenAnchor(
+            (340, 294, 90, 24), "7add875961df5a8ce3174298a8f9acfb0458e27c69d9ff125f38126309fc8b44"
+        ),
+        SessionScreenAnchor(
+            (300, 250, 170, 78), "359ff4b60bed514290e65e5599ff0dfa146d52da8d5c00e91f69c3c49593e003"
+        ),
+        SessionScreenAnchor(
+            (260, 210, 250, 190), "f139abb6a75bff359aaf132ab690a93da8a4cc684b871e8f085c5f583bfdd7be"
+        ),
+    ),
+)
+
+PREAUTHENTICATED_PLAY_NOW_SCREENS: Final[tuple[SessionScreenFingerprint, ...]] = (
+    PREAUTHENTICATED_PLAY_NOW,
+    PREAUTHENTICATED_PLAY_NOW_CURRENT,
+)
+
+
 def matches_preauthenticated_play_now(frame: Frame) -> bool:
     """Require every source-proven anchor before permitting one re-entry click."""
 
-    return matches_session_screen(frame, PREAUTHENTICATED_PLAY_NOW)
+    return any(
+        matches_session_screen(frame, fingerprint)
+        for fingerprint in PREAUTHENTICATED_PLAY_NOW_SCREENS
+    )
 
 
 def is_pre_authenticated_play_now(frame: Frame) -> bool:
@@ -178,9 +204,7 @@ def _matches_welcome_button_signature(frame: Frame) -> bool:
     red_fraction = _region_fraction(
         frame,
         WELCOME_BUTTON_REGION,
-        lambda red, green, blue: (
-            red > 90 and red * 4 > green * 5 and red * 4 > blue * 5
-        ),
+        lambda red, green, blue: red > 90 and red * 4 > green * 5 and red * 4 > blue * 5,
     )
     if red_fraction < WELCOME_MIN_RED_DOMINANT_FRACTION:
         return False
