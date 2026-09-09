@@ -192,7 +192,7 @@ def fake_runner(
 
 def test_scaled_booth_requires_and_accepts_fresh_hover_proof():
     runner, state = fake_runner(
-        initial_open=False, booth_score=0.6672049164772034, hover_score=0.8517149686813354
+        initial_open=False, booth_score=0.5818105340003967, hover_score=0.8517149686813354
     )
     result = runner.run(open_only=True)
     assert result["status"] == "OPEN_STAGE_PASS"

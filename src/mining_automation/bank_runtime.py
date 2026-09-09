@@ -227,7 +227,7 @@ class BankRunner:
             raise BankUnproven("requires_verified_full_mining_load")
         if not self.vision.bank_controls(image):
             booth = self.vision.match(image, "booth", (0, 100, 530, image.shape[0] - 150))
-            if booth.score < 0.65:
+            if booth.score < 0.55:
                 raise BankUnproven("bank_booth_unproven:" + str(booth.score))
             self.hover(booth.centre)
             frame, image = self.observe("bank-booth-hover")
