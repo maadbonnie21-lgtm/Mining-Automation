@@ -1,5 +1,7 @@
 """Offline regressions; these synthetic fixtures are not live-client evidence."""
 
+import base64
+import zlib
 from types import SimpleNamespace
 
 import numpy as np
@@ -95,11 +97,15 @@ def test_ruby_signature_on_wrong_slot_background_remains_unknown():
 def test_fresh_deposit_all_prefix_proof_is_not_present_on_a_clean_top_bar():
     image = np.zeros((862, 804, 3), np.uint8)
     assert BankVision.deposit_all_prefix_score(image) == 0.0
-    mask = np.unpackbits(
-        np.frombuffer(bytes.fromhex(_DEPOSIT_ALL_PREFIX_MASK_HEX), dtype=np.uint8),
-        bitorder="big",
-        count=18 * 92,
-    ).reshape((18, 92)).astype(bool)
+    mask = (
+        np.unpackbits(
+            np.frombuffer(bytes.fromhex(_DEPOSIT_ALL_PREFIX_MASK_HEX), dtype=np.uint8),
+            bitorder="big",
+            count=18 * 92,
+        )
+        .reshape((18, 92))
+        .astype(bool)
+    )
     crop = image[29:47, 3:95]
     crop[mask] = (255, 255, 255)
     assert BankVision.deposit_all_prefix_score(image) == 1.0
@@ -125,8 +131,7 @@ def fake_runner(close_works=True, initial_ores=28, initial_gems=0):
 
     def inventory(image):
         gem_items = [
-            {"item_id": "uncut_ruby", "slot": (649, 747, 689, 781)}
-            for _ in range(state["gems"])
+            {"item_id": "uncut_ruby", "slot": (649, 747, 689, 781)} for _ in range(state["gems"])
         ]
         return {
             "ore_count": state["ore"],
@@ -218,3 +223,35 @@ def test_ruby_bank_crop_matches_original_native_slot_22_alignment():
     assert result["gems"][0]["slot_index"] == 22
     assert result["empty_count"] == 4
     assert result["unknown_count"] == 0
+
+
+def test_current_logical_bank_ruby_presentation_is_exact_and_rejects_mutation():
+    encoded = (
+        "eNq1lVtz01YQgB/KtMi6naOLddeRJVmW7RDfM4SYuH3oQ4cOl+lDmKQECCFOAIMhxaGEQtq0/7trHdsxJL4kgZlvNGNb/nbP"
+        "rna12sivnsXNetys5VaqEVwB+Lg64c6LQeUjaJQLeFqNwkw55Wsd4ZvKz/R/xfpPT36letlAp/3jQsdQKoXMZfxgu17Oeioy"
+        "BFZPMMZoyVyEWE3oU8l710tZypyHgtuWFoOcqdzT0W+acFvlf1W5W2NsGsIthW1JzCpmQol3JIFSzXvN2uwQkHloKHd1/MFX"
+        "PvnpD776ysXPAQfvOQjYddC2JW4Y/H2d+1lO/SgxrQQii/PUrbEY2Jjfs+V/QzVBOwrSH/30YUbtOFLbQsCOibZM8ZEpPjTE"
+        "dZ1f0zlASzFxFDQbxfn9x6EC/v9C/TjQDj3lvSe9tHHb7Pu3TfQk4TEEMvoYLJOLwpXGwrn8x6FK/QdEfkvw4TDEkzG2TARN"
+        "sdmroe8t1wrn92vg7xGp66C3Ln5PpI6NHxnC1tAP8nWdK3JXTCxUiv45/f0QIz/Qc/E7gp+aAlQGqgTteGjw4K/y3ympq3EU"
+        "Tm/BWX7lnyAN/n0XQX32XQynOCB4z0K7NtRf2NA58P+iMA6fykXZ6S2g/l0bj+TA34Fy4El/etKnjPyHi1+7CK4dGxotPkiS"
+        "B+6l2Uhks37mxtQWgN/CfNtGp/xyj8gHnrJP5DdE7rrSjtWvPE0eWNO4n2SWSGLtWnghP5gHvHaVttX3Qwt+1wf5A7fVFDxF"
+        "hThqNiYeYakUEgVtmuJR8Jn/XWYg77py28I7dn+Wt2mIYYmoP47jZr04ZXmWc24OsV3yWQs+BkrPo5ljyHw32RVPrcGI0RDz"
+        "+IHlcpZnGfj76RLRslD5yD8IcTl/cgR5tOW+8AOwju6q7Dx+WNG1BX9B4kZdPgrgycFvCH7poI6DnjvoWQLUf8sc8NhEd1Te"
+        "Fbh8Pj/dTyGysGaIf/kyNLpHcNdFIKd0aBQYLgOGd8B9TSwjPnTdSrk0c4sC0OWahtYN4QXsfEt8YZ/4AfgSlsOmjh4MuaMK"
+        "GVGIc9FyffFmozD7LVyPIYSHWOuHKyHz/ZrGn8jtE/mGDiPGAxGfCgmB5Geu6LFnFRoRwLzE2dCXscsxFIdjLJYxhxgJUeBX"
+        "y6Ub9Wvnfd1DPrDVSwU/l/WjMJhEtbII8nkqM/E4jSLEmgT8ehn5t6O1VBxw0fT+BwbhR9s="
+    )
+    raw = zlib.decompress(base64.b64decode(encoded))
+    item = BankVision._logical_bank_byproduct(full_slot_rgb=raw, slot_index=22)
+    assert item is not None
+    assert item["item_id"] == "uncut_ruby"
+    assert item["presentation_slot_rgb_sha256"] == (
+        "52f4b427fadbaec40936200ec8a5a51fa4f264f0f6f75fbb5647d77c6d6e919e"
+    )
+    changed = bytearray(raw)
+    for offset in range(0, len(changed), 3):
+        red, green, blue = changed[offset : offset + 3]
+        if red > 60 and red - green > 30 and red - blue > 35:
+            changed[offset : offset + 3] = b"\x00\x00\x00"
+            break
+    assert BankVision._logical_bank_byproduct(full_slot_rgb=bytes(changed), slot_index=22) is None

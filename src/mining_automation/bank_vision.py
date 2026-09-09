@@ -25,6 +25,13 @@ _DEPOSIT_ALL_PREFIX_MASK_HEX = (
     "0000000000"
 )
 _DEPOSIT_ALL_PREFIX_SHAPE = (18, 92)
+_BANK_LOGICAL_UNCUT_RUBY_SLOT_RGB_SHA256 = (
+    "52f4b427fadbaec40936200ec8a5a51fa4f264f0f6f75fbb5647d77c6d6e919e"
+)
+_BANK_LOGICAL_UNCUT_RUBY_SPRITE_SIGNATURE_SHA256 = (
+    "ce17d36306110a3d5fbcaa75a4d42dfacd0702199b1a68e799d19b6f6c6112cd"
+)
+
 _DEPOSIT_ALL_PREFIX_SOURCE_SHA256 = (
     "8dcaf2733824e7904c0b282b83180f14df7a64b0f0f82468f2dac8c6a0b7fa14"
 )
@@ -109,6 +116,34 @@ class BankVision:
             raise BankUnproven("inventory_border_unproven:" + str(edge.score))
         return edge.x - 193, edge.y + 1
 
+    @staticmethod
+    def _logical_bank_byproduct(*, full_slot_rgb: bytes, slot_index: int) -> dict[str, Any] | None:
+        """Recognize the source-verified ruby after the fixed bank-view resize."""
+        if type(full_slot_rgb) is not bytes or len(full_slot_rgb) != 32 * 32 * 3:
+            return None
+        if type(slot_index) is not int or not 0 <= slot_index < 28:
+            return None
+        signature = bytearray()
+        for y in range(32):
+            for x in range(32):
+                offset = (y * 32 + x) * 3
+                red, green, blue = full_slot_rgb[offset : offset + 3]
+                if red > 60 and red - green > 30 and red - blue > 35:
+                    signature.extend((x, y, red, green, blue))
+        if (
+            hashlib.sha256(signature).hexdigest()
+            != _BANK_LOGICAL_UNCUT_RUBY_SPRITE_SIGNATURE_SHA256
+        ):
+            return None
+        return {
+            "item_id": "uncut_ruby",
+            "display_name": "Uncut ruby",
+            "slot_index": slot_index,
+            "presentation": "bank_logical_resampled",
+            "presentation_slot_rgb_sha256": hashlib.sha256(full_slot_rgb).hexdigest(),
+            "source_slot_rgb_sha256": _BANK_LOGICAL_UNCUT_RUBY_SLOT_RGB_SHA256,
+        }
+
     def inventory(self, image: Any, origin: tuple[int, int] | None = None) -> dict[str, Any]:
         left, top = origin or self.inventory_origin(image)
         ores = []
@@ -132,10 +167,7 @@ class BankVision:
                 perimeter = np.ones((32, 32), dtype=bool)
                 perimeter[3:29, 3:29] = False
                 background_delta = np.max(
-                    np.abs(
-                        slot_pixels.astype(np.int16)
-                        - expected_slot_pixels.astype(np.int16)
-                    ),
+                    np.abs(slot_pixels.astype(np.int16) - expected_slot_pixels.astype(np.int16)),
                     axis=2,
                 )
                 background_proven = float(np.mean(background_delta[perimeter] < 22)) > 0.93
@@ -148,9 +180,17 @@ class BankVision:
                     if background_proven
                     else None
                 )
+                logical_byproduct = (
+                    self._logical_bank_byproduct(full_slot_rgb=full_slot_rgb, slot_index=index)
+                    if background_proven and byproduct is None
+                    else None
+                )
                 slot = (x, y, x + 40, y + 34)
                 if byproduct is not None:
                     gems.append({"slot": slot, **asdict(byproduct)})
+                    continue
+                if logical_byproduct is not None:
+                    gems.append({"slot": slot, **logical_byproduct})
                     continue
                 expected = self.assets["ore"]
                 scores = cv2.matchTemplate(patch, expected, cv2.TM_CCOEFF_NORMED)
@@ -188,11 +228,15 @@ class BankVision:
         """
 
         height, width = _DEPOSIT_ALL_PREFIX_SHAPE
-        template = np.unpackbits(
-            np.frombuffer(bytes.fromhex(_DEPOSIT_ALL_PREFIX_MASK_HEX), dtype=np.uint8),
-            bitorder="big",
-            count=height * width,
-        ).reshape((height, width)).astype(bool)
+        template = (
+            np.unpackbits(
+                np.frombuffer(bytes.fromhex(_DEPOSIT_ALL_PREFIX_MASK_HEX), dtype=np.uint8),
+                bitorder="big",
+                count=height * width,
+            )
+            .reshape((height, width))
+            .astype(bool)
+        )
         best = 0.0
         for y in range(28, 31):
             for x in range(2, 5):
