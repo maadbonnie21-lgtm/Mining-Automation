@@ -328,7 +328,8 @@ def register_translation(frame: Frame, detector: ProfiledResourceDetector):
     matched_ids = {item[0].landmark_id for item in matched}
     shifted_landmarks_list = []
     for landmark, _, dx, dy in recovered:
-        if landmark.landmark_id in matched_ids:
+        is_matched = landmark.landmark_id in matched_ids
+        if is_matched:
             new_region = (landmark.region[0] + dx, landmark.region[1] + dy, 48, 48)
         else:
             mapped = np.asarray([
@@ -343,7 +344,12 @@ def register_translation(frame: Frame, detector: ProfiledResourceDetector):
                 48,
             )
         if not registered_landmark_region_preserves_zone(landmark, new_region):
-            return None
+            # A matched inlier must always preserve its frozen macro zone.
+            # An already-unmatched landmark cannot veto a registration that
+            # independently proved the frozen 5/6 quorum across all 3 zones.
+            if is_matched:
+                return None
+            continue
         shifted_landmarks_list.append(replace(landmark, region=new_region))
     shifted_landmarks = tuple(shifted_landmarks_list)
     shifted_candidates_list = []
@@ -385,6 +391,54 @@ def register_translation(frame: Frame, detector: ProfiledResourceDetector):
             "affine": affine.tolist(),
         },
     )
+
+
+def _intersect_regions(regions):
+    if not regions:
+        return None
+    left = max(region[0] for region in regions)
+    top = max(region[1] for region in regions)
+    right = min(region[0] + region[2] for region in regions)
+    bottom = min(region[1] + region[3] for region in regions)
+    if right <= left or bottom <= top:
+        return None
+    return left, top, right - left, bottom - top
+
+
+def _choose_consensus_available_registration(candidates):
+    if len(candidates) < 2:
+        return None
+    common_ids = set.intersection(*(set(states) for _, _, _, states in candidates))
+    available_ids = sorted(
+        resource_id
+        for resource_id in common_ids
+        if all(states[resource_id].available is True for _, _, _, states in candidates)
+    )
+    if len(available_ids) != 1:
+        return None
+    resource_id = available_ids[0]
+    states = [item[3][resource_id] for item in candidates]
+    regions = [state.interaction_region for state in states]
+    if any(region is None for region in regions):
+        return None
+    concrete_regions = [region for region in regions if region is not None]
+    intersection = _intersect_regions(concrete_regions)
+    if intersection is None:
+        return None
+    selected_state = replace(
+        states[0],
+        confidence=min(state.confidence for state in states),
+        interaction_region=intersection,
+    )
+    consensus_evidence = {
+        'kind': 'distributed_affine_consensus_registration',
+        'consensus_poses': [item[0] for item in candidates],
+        'consensus_resource_id': resource_id,
+        'consensus_regions': [list(region) for region in concrete_regions],
+        'consensus_intersection': list(intersection),
+        'registrations': [item[2] for item in candidates],
+    }
+    return consensus_evidence, selected_state
 
 
 def evaluate_resource(frame: Frame, epoch: PerceptionEpoch, detectors, excluded, active):
@@ -429,6 +483,33 @@ def evaluate_resource(frame: Frame, epoch: PerceptionEpoch, detectors, excluded,
             pose_name, detector, registration_evidence = translated[0]
             passed.append((pose_name, detector))
             diagnoses["software_registration"] = registration_evidence
+        elif len(translated) > 1:
+            consensus_candidates = []
+            for pose_name, detector, registration_evidence in translated:
+                states = {
+                    state.resource_id: state
+                    for observation in detector.detect(frame)
+                    if observation.evidence["resource_id"] not in excluded
+                    for state in (resource_state_from_observation(observation),)
+                }
+                consensus_candidates.append(
+                    (pose_name, detector, registration_evidence, states)
+                )
+            consensus = _choose_consensus_available_registration(consensus_candidates)
+            if consensus is not None:
+                registration_evidence, selected_state = consensus
+                # Consensus proves one common resource and conservative geometry,
+                # not a pose identity. Force the fresh validation capture to
+                # reacquire from all frozen poses instead of carrying one forward.
+                active["pose"] = None
+                active["detector"] = None
+                diagnoses["software_registration"] = registration_evidence
+                return ResourcePerceptionEnvelope(
+                    epoch=epoch,
+                    release=CANONICAL_RESOURCE_RELEASE,
+                    view=ResourceViewState.SUPPORTED,
+                    resources=(selected_state,),
+                ), None, diagnoses
     if len(passed) != 1:
         return ResourcePerceptionEnvelope(
             epoch=epoch,
