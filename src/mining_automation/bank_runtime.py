@@ -227,32 +227,50 @@ class BankRunner:
             raise BankUnproven("requires_verified_full_mining_load")
         if not self.vision.bank_controls(image):
             booth = self.vision.match(image, "booth", (0, 100, 530, image.shape[0] - 150))
-            if booth.score < 0.55:
-                raise BankUnproven("bank_booth_unproven:" + str(booth.score))
-            self.hover(booth.centre)
-            frame, image = self.observe("bank-booth-hover")
-            proof = max(
-                (
-                    self.vision.match(image, key, (0, 24, 330, 60), text=True)
-                    for key in ("bank_hover", "bank_hover_original", "bank_hover_live2", "bank_hover_live3", "bank_hover_live4")
-                ),
-                key=lambda match: match.score,
-            )
-            # Preserve the original >=0.94 gold-booth authority. A farther-out
-            # presentation may use the same frozen booth target down to 0.65 only
-            # when a fresh independent Bank-booth hover-text template reaches 0.85.
-            semantic_hover = self.vision.bank_booth_hover_text(image)
-            if booth.score < 0.94 and proof.score < 0.85 and not semantic_hover:
-                raise BankUnproven(
-                    "bank_booth_hover_unproven:" + str(booth.score) + ":" + str(proof.score)
+            candidates: list[tuple[str, tuple[int, int]]] = []
+            if booth.score >= 0.55:
+                candidates.append(("appearance", booth.centre))
+            # 2026-09-09 World 301 live hover proof: logical (80,416), physical
+            # (100,520) at the current 1.25 mapping yielded exact "Bank booth".
+            # It is hover-only until the same fresh frame re-proves that text.
+            candidates.append(("current_bank_booth", (80, 416)))
+            verified = None
+            last_proof_score = 0.0
+            for source, candidate in candidates:
+                self.hover(candidate)
+                probe_frame, probe_image = self.observe("bank-booth-hover")
+                proof = max(
+                    (
+                        self.vision.match(probe_image, key, (0, 24, 330, 60), text=True)
+                        for key in (
+                            "bank_hover",
+                            "bank_hover_original",
+                            "bank_hover_live2",
+                            "bank_hover_live3",
+                            "bank_hover_live4",
+                        )
+                    ),
+                    key=lambda match: match.score,
                 )
+                semantic_hover = self.vision.bank_booth_hover_text(probe_image)
+                last_proof_score = max(last_proof_score, proof.score)
+                if booth.score >= 0.94 or proof.score >= 0.85 or semantic_hover:
+                    verified = (source, candidate, probe_frame, probe_image, proof.score, semantic_hover)
+                    break
+            if verified is None:
+                raise BankUnproven(
+                    "bank_booth_hover_unproven:" + str(booth.score) + ":" + str(last_proof_score)
+                )
+            source, booth_point, frame, image, proof_score, semantic_hover = verified
             self.record(
                 "BOOTH_TARGET_VERIFIED",
                 appearance_score=booth.score,
-                hover_text_score=proof.score,
+                hover_text_score=proof_score,
                 semantic_hover_text=semantic_hover,
+                target_source=source,
+                logical_point=list(booth_point),
             )
-            self.click(frame, booth.centre, "OPEN_BANK_BOOTH")
+            self.click(frame, booth_point, "OPEN_BANK_BOOTH")
             frame, image = self.wait_open()
         if open_only:
             return {"status": "OPEN_STAGE_PASS", "success": False, "deposit_verified": False}
