@@ -111,11 +111,18 @@ def test_fresh_deposit_all_prefix_proof_is_not_present_on_a_clean_top_bar():
     assert BankVision.deposit_all_prefix_score(image) == 1.0
 
 
-def fake_runner(close_works=True, initial_ores=28, initial_gems=0):
+def fake_runner(
+    close_works=True,
+    initial_ores=28,
+    initial_gems=0,
+    initial_open=True,
+    booth_score=1.0,
+    hover_score=1.0,
+):
     state = {
         "ore": initial_ores,
         "gems": initial_gems,
-        "open": True,
+        "open": initial_open,
         "clicks": [],
         "frame": 0,
     }
@@ -150,16 +157,27 @@ def fake_runner(close_works=True, initial_ores=28, initial_gems=0):
         )
 
     runner.observe = observe
+
+    def match(image, key, *args, **kwargs):
+        del image, args, kwargs
+        if key == "booth":
+            return Match(86, 446, 83, 69, booth_score)
+        if key in ("bank_hover", "bank_hover_original", "bank_hover_live2"):
+            return Match(0, 24, 112, 13, hover_score)
+        return Match(260, 650, 39, 37, 1.0)
+
     runner.vision = SimpleNamespace(
         inventory=inventory,
         bank_controls=controls,
-        match=lambda *a, **kw: Match(260, 650, 39, 37, 1.0),
+        match=match,
         deposit_all_prefix_score=lambda image: 1.0,
         deposit_all_prefix_source_sha256="8dcaf2733824e7904c0b282b83180f14df7a64b0f0f82468f2dac8c6a0b7fa14",
     )
 
     def click(frame, point, action):
         state["clicks"].append(action)
+        if action == "OPEN_BANK_BOOTH":
+            state["open"] = True
         if action == "DEPOSIT_ALL_IRON_ORE_ONLY":
             state["ore"] = 0
         if action == "DEPOSIT_ALL_UNCUT_RUBY_ONLY":
@@ -169,6 +187,22 @@ def fake_runner(close_works=True, initial_ores=28, initial_gems=0):
 
     runner.click = click
     return runner, state
+
+
+def test_scaled_booth_requires_and_accepts_fresh_hover_proof():
+    runner, state = fake_runner(
+        initial_open=False, booth_score=0.6672049164772034, hover_score=0.8517149686813354
+    )
+    result = runner.run(open_only=True)
+    assert result["status"] == "OPEN_STAGE_PASS"
+    assert state["clicks"] == ["OPEN_BANK_BOOTH"]
+
+
+def test_scaled_booth_without_hover_proof_never_clicks():
+    runner, state = fake_runner(initial_open=False, booth_score=0.6672, hover_score=0.84)
+    with pytest.raises(BankUnproven, match="bank_booth_hover_unproven"):
+        runner.run(open_only=True)
+    assert state["clicks"] == []
 
 
 def test_deposit_is_followed_by_X_and_verified_closed():

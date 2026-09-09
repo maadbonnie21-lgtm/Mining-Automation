@@ -85,9 +85,7 @@ class BankRunner:
             return [tuple(slot) for slot in inventory["ore_slots"]]
         if item_id == "uncut_ruby":
             return [
-                tuple(item["slot"])
-                for item in inventory["gems"]
-                if item["item_id"] == "uncut_ruby"
+                tuple(item["slot"]) for item in inventory["gems"] if item["item_id"] == "uncut_ruby"
             ]
         raise BankUnproven("unsupported_deposit_item:" + item_id)
 
@@ -168,8 +166,7 @@ class BankRunner:
             source_prefix_sha256=self.vision.deposit_all_prefix_source_sha256,
         )
         if point not in [
-            ((slot[0] + slot[2]) // 2, (slot[1] + slot[3]) // 2)
-            for slot in hover_slots
+            ((slot[0] + slot[2]) // 2, (slot[1] + slot[3]) // 2) for slot in hover_slots
         ]:
             raise BankUnproven("hovered_item_identity_changed:" + item_id)
         if prefix_score < 0.85:
@@ -204,9 +201,7 @@ class BankRunner:
             (fresh_slots[0][1] + fresh_slots[0][3]) // 2,
         )
         action = (
-            "DEPOSIT_ALL_IRON_ORE_ONLY"
-            if item_id == "iron_ore"
-            else "DEPOSIT_ALL_UNCUT_RUBY_ONLY"
+            "DEPOSIT_ALL_IRON_ORE_ONLY" if item_id == "iron_ore" else "DEPOSIT_ALL_UNCUT_RUBY_ONLY"
         )
         self.click(frame, fresh_point, action)
         self.hover((100, 15))
@@ -232,7 +227,7 @@ class BankRunner:
             raise BankUnproven("requires_verified_full_mining_load")
         if not self.vision.bank_controls(image):
             booth = self.vision.match(image, "booth", (0, 100, 530, image.shape[0] - 150))
-            if booth.score < 0.94:
+            if booth.score < 0.65:
                 raise BankUnproven("bank_booth_unproven:" + str(booth.score))
             self.hover(booth.centre)
             frame, image = self.observe("bank-booth-hover")
@@ -243,9 +238,13 @@ class BankRunner:
                 ),
                 key=lambda match: match.score,
             )
-            # Text sampling changes across captures. It is diagnostic for OPEN,
-            # not the input authority: the precise gold booth appearance is.
-            # No item action is possible until the bank title and X both verify.
+            # Preserve the original >=0.94 gold-booth authority. A farther-out
+            # presentation may use the same frozen booth target down to 0.65 only
+            # when a fresh independent Bank-booth hover-text template reaches 0.85.
+            if booth.score < 0.94 and proof.score < 0.85:
+                raise BankUnproven(
+                    "bank_booth_hover_unproven:" + str(booth.score) + ":" + str(proof.score)
+                )
             self.record(
                 "BOOTH_TARGET_VERIFIED", appearance_score=booth.score, hover_text_score=proof.score
             )
