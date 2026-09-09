@@ -169,8 +169,8 @@ class BankVision:
             "source_slot_rgb_sha256": _BANK_LOGICAL_UNCUT_RUBY_SLOT_RGB_SHA256,
         }
 
-    def inventory(self, image: Any, origin: tuple[int, int] | None = None) -> dict[str, Any]:
-        left, top = origin or self.inventory_origin(image)
+    def _inventory_at_origin(self, image: Any, origin: tuple[int, int]) -> dict[str, Any]:
+        left, top = origin
         ores = []
         gems = []
         empties = []
@@ -242,6 +242,24 @@ class BankVision:
             "ore_slots": ores,
             "origin": [left, top],
         }
+
+    def inventory(self, image: Any, origin: tuple[int, int] | None = None) -> dict[str, Any]:
+        if origin is not None:
+            return self._inventory_at_origin(image, origin)
+        left, top = self.inventory_origin(image)
+        candidates = [
+            self._inventory_at_origin(image, (left, top + offset))
+            for offset in range(-2, 11)
+            if 0 <= top + offset < image.shape[0] - 255
+        ]
+        if not candidates:
+            raise BankUnproven("inventory_origin_candidates_empty")
+        candidates.sort(key=lambda item: (item["unknown_count"], abs(item["origin"][1] - top)))
+        best = candidates[0]
+        tied = [item for item in candidates if item["unknown_count"] == best["unknown_count"]]
+        if best["unknown_count"] and len(tied) > 1:
+            raise BankUnproven("inventory_origin_ambiguous")
+        return best
 
     @staticmethod
     def deposit_all_prefix_score(image: Any) -> float:
