@@ -248,6 +248,7 @@ class ConnectorBackend(Backend):
             "window": frame.window,
             "expected_pose_id": connector["source_pose_id"],
             "pose_id": connector["source_pose_id"],
+            "pose_supported": True,
             "resource_view": "supported",
             "inventory_occupied_slots": 28,
             "inventory_capacity": 28,
@@ -457,6 +458,14 @@ def test_start_connector_requires_fresh_supported_pose_and_full_inventory(overri
     result = run_route(backend, ConnectorRoute(backend))
     assert "start_connector_current_frame_authority_unproven" in result.stop_reason
     assert result.click_count == len(backend.clicks) == 0
+
+
+def test_start_connector_accepts_different_current_supported_pose_name():
+    backend = ConnectorBackend()
+    backend.connector_authority_overrides = {"pose_id": "at_center", "pose_supported": True}
+    result = run_route(backend, ConnectorRoute(backend))
+    assert result.success
+    assert result.click_count == len(backend.clicks) == 3
 
 
 def test_connector_is_reregistered_after_native_authority_before_click():

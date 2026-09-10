@@ -170,7 +170,7 @@ def test_guard_does_not_refocus_without_explicit_focus_existing(tmp_path):
 
 
 def authority_backend(
-    tmp_path, *, inventory_count=28, resource_supported=True, pose_supported=True
+    tmp_path, *, inventory_count=28, resource_supported=True, pose_supported=True, pose_id="post_third_returned"
 ):
     b = backend(tmp_path)
     b.frame_id = 3
@@ -200,7 +200,7 @@ def authority_backend(
         96,
         str(tmp_path / "native.bgra"),
     )
-    b._start_connector_pose_detectors = {"post_third_returned": object()}
+    b._start_connector_pose_detectors = {"post_third_returned": object(), "at_center": object()}
 
     def resource_evaluator(frame, epoch, detectors, excluded, active):
         del frame, detectors, excluded, active
@@ -213,7 +213,7 @@ def authority_backend(
                 view=view,
                 resources=resources,
             ),
-            "post_third_returned" if pose_supported else None,
+            pose_id if pose_supported else None,
             {},
         )
 
@@ -366,3 +366,18 @@ def test_native_connector_authority_uses_atomic_resource_and_inventory_epoch(
     assert receipt["route_source_frame_id"] == 3
     assert receipt["native_frame_id"] == 1
     assert receipt["native_captured_monotonic_s"] == 1.2
+
+
+def test_native_connector_authority_accepts_different_known_supported_mining_pose(tmp_path):
+    b = authority_backend(tmp_path, pose_id="at_center")
+    route_frame = RouteFrame(
+        3, 1.0, np.zeros((1078, 1005, 3), dtype=np.uint8), b.initial, "route.png"
+    )
+    receipt = b.verify_start_connector_authority(
+        route_frame, {"source_pose_id": "post_third_returned"}
+    )
+    assert receipt["accepted"] is True
+    assert receipt["reason"] == "accepted"
+    assert receipt["expected_pose_id"] == "post_third_returned"
+    assert receipt["pose_id"] == "at_center"
+    assert receipt["pose_supported"] is True

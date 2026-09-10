@@ -280,7 +280,9 @@ def run_route(
                                 or authority.get("window") != frame.window
                                 or authority.get("expected_pose_id")
                                 != connector_match["source_pose_id"]
-                                or authority.get("pose_id") != connector_match["source_pose_id"]
+                                or authority.get("pose_supported") is not True
+                                or type(authority.get("pose_id")) is not str
+                                or not authority.get("pose_id")
                                 or authority.get("resource_view") != "supported"
                                 or authority.get("inventory_occupied_slots") != INVENTORY_CAPACITY
                                 or authority.get("inventory_capacity") != INVENTORY_CAPACITY

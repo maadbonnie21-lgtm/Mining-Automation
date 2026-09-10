@@ -291,14 +291,15 @@ class NativeRouteBackend:
         if after != before or frame.frame_id != self.frame_id:
             raise RuntimeError("window_changed_during_start_connector_authority")
         inventory_state = inventory.inventory
+        pose_supported = type(pose) is str and pose in detectors
         accepted = (
-            pose == expected_pose
+            pose_supported
             and resource.view is ResourceViewState.SUPPORTED
             and inventory.unknown_reason is None
             and inventory_state.occupied_slots == INVENTORY_CAPACITY
             and state.status is WorldStatePublicationStatus.FULL
         )
-        if pose != expected_pose:
+        if not pose_supported:
             reason = "expected_mining_pose_not_supported"
         elif resource.view is not ResourceViewState.SUPPORTED:
             reason = "resource_view_not_supported"
@@ -324,6 +325,7 @@ class NativeRouteBackend:
             "window": before,
             "expected_pose_id": expected_pose,
             "pose_id": pose,
+            "pose_supported": pose_supported,
             "resource_view": resource.view.value,
             "inventory_occupied_slots": inventory_state.occupied_slots,
             "inventory_capacity": inventory_state.capacity,
