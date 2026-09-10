@@ -38,3 +38,24 @@ def test_counter_detection_does_not_search_inventory_or_chat():
     assert not r.verify_endpoint(im, SimpleNamespace(radius=r.config["counter_reference_radius"]))[
         "accepted"
     ]
+
+
+def test_counter_detection_checks_observed_intermediate_scale(monkeypatch):
+    r = route()
+    im = np.zeros((1078, 1005, 3), np.uint8)
+
+    def score_only_observed_scale(_world, patch, _method):
+        score = 0.9 if patch.shape[:2] == (96, 321) else 0.0
+        return np.array([[score]], dtype=np.float32)
+
+    monkeypatch.setattr(
+        "mining_automation.navigation.visual_route.cv2.matchTemplate",
+        score_only_observed_scale,
+    )
+
+    result = r.verify_endpoint(
+        im, SimpleNamespace(radius=r.config["counter_reference_radius"])
+    )
+    assert result["accepted"]
+    assert result["counter_score"] == pytest.approx(0.9)
+    assert result["counter_template"] == "counter_verified_bank"

@@ -442,7 +442,7 @@ class VisualRoute:
         matched_name = None
         for name in names:
             template = self.images[name]
-            for factor in (scale * 0.95, scale, scale * 1.05):
+            for factor in (scale * 0.95, scale, scale * 1.025, scale * 1.05):
                 tw, th = round(template.shape[1] * factor), round(template.shape[0] * factor)
                 if tw < 8 or th < 8 or tw >= width or th >= world.shape[0]:
                     continue
