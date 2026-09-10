@@ -118,6 +118,7 @@ def fake_runner(
     initial_open=True,
     booth_score=1.0,
     hover_score=1.0,
+    ambiguous_hover_origin=False,
 ):
     state = {
         "ore": initial_ores,
@@ -125,6 +126,8 @@ def fake_runner(
         "open": initial_open,
         "clicks": [],
         "frame": 0,
+        "label": None,
+        "inventory_origins": [],
     }
     runner = BankRunner.__new__(BankRunner)
     runner.backend = SimpleNamespace(wait=lambda seconds: None)
@@ -134,9 +137,13 @@ def fake_runner(
 
     def observe(label):
         state["frame"] += 1
+        state["label"] = label
         return SimpleNamespace(frame_id=state["frame"], evidence_path=label), image
 
-    def inventory(image):
+    def inventory(image, origin=None):
+        state["inventory_origins"].append(origin)
+        if ambiguous_hover_origin and state["label"] == "iron_ore-deposit-all-hover" and origin is None:
+            raise BankUnproven("inventory_origin_ambiguous")
         gem_items = [
             {"item_id": "uncut_ruby", "slot": (649, 747, 689, 781)} for _ in range(state["gems"])
         ]
@@ -149,6 +156,7 @@ def fake_runner(
             "empty_count": 28 - state["ore"] - state["gems"],
             "unknown_count": 0,
             "ore_slots": [(565, 567, 605, 601)] * state["ore"],
+            "origin": [552, 564],
         }
 
     def controls(image):
@@ -210,6 +218,14 @@ def test_deposit_is_followed_by_X_and_verified_closed():
     runner, state = fake_runner()
     result = runner.run()
     assert result["success"] and result["bank_closed_verified"]
+    assert state["clicks"] == ["DEPOSIT_ALL_IRON_ORE_ONLY", "CLOSE_BANK_X"]
+
+
+def test_hover_identity_reuses_clean_inventory_origin_when_relocalization_is_ambiguous():
+    runner, state = fake_runner(ambiguous_hover_origin=True)
+    result = runner.run()
+    assert result["success"]
+    assert (552, 564) in state["inventory_origins"]
     assert state["clicks"] == ["DEPOSIT_ALL_IRON_ORE_ONLY", "CLOSE_BANK_X"]
 
 

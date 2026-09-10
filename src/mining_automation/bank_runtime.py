@@ -162,7 +162,10 @@ class BankRunner:
         point = ((slots[0][0] + slots[0][2]) // 2, (slots[0][1] + slots[0][3]) // 2)
         self.hover(point)
         frame, image = self.observe(f"{item_id}-deposit-all-hover")
-        hovered = self.vision.inventory(image)
+        # The live hover can transiently obscure unrelated slots.  Keep the
+        # clean, immediately preceding inventory origin while re-proving the
+        # hovered item's identity instead of re-localising from that overlay.
+        hovered = self.vision.inventory(image, tuple(inventory["origin"]))
         hover_slots = self._item_slots(hovered, item_id)
         prefix_score = self.vision.deposit_all_prefix_score(image)
         self.record(
