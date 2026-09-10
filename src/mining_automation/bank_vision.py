@@ -288,11 +288,11 @@ class BankVision:
                 left, top = int(xs.min()), int(ys.min()) + 24
                 right, bottom = int(xs.max()), int(ys.max()) + 24
                 if (
-                    220 <= count <= 320
-                    and 7 <= left <= 12
+                    220 <= count <= 420
+                    and 4 <= left <= 12
                     and 80 <= right <= 90
                     and 31 <= top <= 34
-                    and 44 <= bottom <= 47
+                    and 44 <= bottom <= 50
                 ):
                     return 1.0
 
