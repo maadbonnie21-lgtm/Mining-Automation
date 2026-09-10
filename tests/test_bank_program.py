@@ -134,6 +134,29 @@ def test_current_live_deposit_all_prefix_geometry_is_accepted_without_item_suffi
     assert BankVision.deposit_all_prefix_score(image) < 0.85
 
 
+def test_current_clean_deposit_all_prefix_geometry_is_accepted_without_item_suffix():
+    packed = zlib.decompress(
+        base64.b64decode(
+            "eJxjYCAC2CGYBcSoZ6iAUMzNBswJIIYEg5lkg2QDiHmAWeIMwxkQK41B4lgCW/LBhw8/"
+            "2DD8M2YwNpacOUOy/ZnhDMaZM86cqTjDYNhzgOd8W1pCWgJjTxpDWoKxIbMxA0+yAfPD"
+            "jx8+fOxjSAYZyYOwNgHOYkYISuBzKADRVyNA"
+        )
+    )
+    mask = (
+        np.unpackbits(
+            np.frombuffer(packed, dtype=np.uint8), bitorder="big", count=24 * 85
+        )
+        .reshape((24, 85))
+        .astype(bool)
+    )
+    image = np.zeros((862, 804, 3), np.uint8)
+    image[24:48, 0:85][mask] = (255, 255, 255)
+    assert BankVision.deposit_all_prefix_score(image) == 1.0
+
+    image[24:48, 63:85] = 0
+    assert BankVision.deposit_all_prefix_score(image) < 0.85
+
+
 def fake_runner(
     close_works=True,
     initial_ores=28,
