@@ -140,7 +140,7 @@ class BankVision:
             "inventory_edge",
             (image.shape[1] - 100, image.shape[0] - 340, image.shape[1], image.shape[0]),
         )
-        if edge.score < 0.80:
+        if edge.score < 0.75:
             raise BankUnproven("inventory_border_unproven:" + str(edge.score))
         return edge.x - 193, edge.y + 1
 
