@@ -121,7 +121,14 @@ class BankRunner:
             frame, image = self.observe(label)
             if not self.vision.bank_controls(image):
                 raise BankUnproven("bank_not_open_during_deposit_verification")
-            inventory = self.vision.inventory(image)
+            try:
+                inventory = self.vision.inventory(image)
+            except BankUnproven as exc:
+                if str(exc) == "inventory_origin_ambiguous":
+                    proofs = 0
+                    self.backend.wait(0.25)
+                    continue
+                raise
             last = (frame, image, inventory)
             if self._known_composition(
                 inventory,
