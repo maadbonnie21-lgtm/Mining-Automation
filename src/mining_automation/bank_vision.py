@@ -249,7 +249,7 @@ class BankVision:
         left, top = self.inventory_origin(image)
         candidates = [
             self._inventory_at_origin(image, (left, top + offset))
-            for offset in range(-2, 11)
+            for offset in range(-12, 33)
             if 0 <= top + offset < image.shape[0] - 255
         ]
         if not candidates:
