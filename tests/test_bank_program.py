@@ -111,6 +111,52 @@ def test_fresh_deposit_all_prefix_proof_is_not_present_on_a_clean_top_bar():
     assert BankVision.deposit_all_prefix_score(image) == 1.0
 
 
+def test_current_live_deposit_all_prefix_geometry_is_accepted_without_item_suffix():
+    packed = zlib.decompress(
+        base64.b64decode(
+            "eNpjYCAA/igw/v//AMhgPsDA/ICA4goIxdzAnACiJRjMGCQbQKwDzBIMZ0CMNAaJA2zJBx8+/"
+            "GDD8I/B2Fhy5gzJ9mcGjDNnnDlTcYbBsIHnfFtaQloCYw9DWoKxIbMxA08CM1D1hY99DMlA/"
+            "TxwuxJgDGa4kAROhwEAKXgjOw=="
+        )
+    )
+    mask = (
+        np.unpackbits(
+            np.frombuffer(packed, dtype=np.uint8), bitorder="big", count=24 * 77
+        )
+        .reshape((24, 77))
+        .astype(bool)
+    )
+    image = np.zeros((862, 804, 3), np.uint8)
+    image[24:48, 0:77][mask] = (255, 255, 255)
+    assert BankVision.deposit_all_prefix_score(image) == 1.0
+
+    image[24:48, 54:77] = 0
+    assert BankVision.deposit_all_prefix_score(image) < 0.85
+
+
+def test_current_clean_deposit_all_prefix_geometry_is_accepted_without_item_suffix():
+    packed = zlib.decompress(
+        base64.b64decode(
+            "eJxjYCAC2CGYBcSoZ6iAUMzNBswJIIYEg5lkg2QDiHmAWeIMwxkQK41B4lgCW/LBhw8/"
+            "2DD8M2YwNpacOUOy/ZnhDMaZM86cqTjDYNhzgOd8W1pCWgJjTxpDWoKxIbMxA0+yAfPD"
+            "jx8+fOxjSAYZyYOwNgHOYkYISuBzKADRVyNA"
+        )
+    )
+    mask = (
+        np.unpackbits(
+            np.frombuffer(packed, dtype=np.uint8), bitorder="big", count=24 * 85
+        )
+        .reshape((24, 85))
+        .astype(bool)
+    )
+    image = np.zeros((862, 804, 3), np.uint8)
+    image[24:48, 0:85][mask] = (255, 255, 255)
+    assert BankVision.deposit_all_prefix_score(image) == 1.0
+
+    image[24:48, 63:85] = 0
+    assert BankVision.deposit_all_prefix_score(image) < 0.85
+
+
 def fake_runner(
     close_works=True,
     initial_ores=28,
@@ -118,6 +164,7 @@ def fake_runner(
     initial_open=True,
     booth_score=1.0,
     hover_score=1.0,
+    ambiguous_hover_origin=False,
 ):
     state = {
         "ore": initial_ores,
@@ -125,6 +172,8 @@ def fake_runner(
         "open": initial_open,
         "clicks": [],
         "frame": 0,
+        "label": None,
+        "inventory_origins": [],
     }
     runner = BankRunner.__new__(BankRunner)
     runner.backend = SimpleNamespace(wait=lambda seconds: None)
@@ -134,9 +183,13 @@ def fake_runner(
 
     def observe(label):
         state["frame"] += 1
+        state["label"] = label
         return SimpleNamespace(frame_id=state["frame"], evidence_path=label), image
 
-    def inventory(image):
+    def inventory(image, origin=None):
+        state["inventory_origins"].append(origin)
+        if ambiguous_hover_origin and state["label"] == "iron_ore-deposit-all-hover" and origin is None:
+            raise BankUnproven("inventory_origin_ambiguous")
         gem_items = [
             {"item_id": "uncut_ruby", "slot": (649, 747, 689, 781)} for _ in range(state["gems"])
         ]
@@ -149,6 +202,7 @@ def fake_runner(
             "empty_count": 28 - state["ore"] - state["gems"],
             "unknown_count": 0,
             "ore_slots": [(565, 567, 605, 601)] * state["ore"],
+            "origin": [552, 564],
         }
 
     def controls(image):
@@ -210,6 +264,14 @@ def test_deposit_is_followed_by_X_and_verified_closed():
     runner, state = fake_runner()
     result = runner.run()
     assert result["success"] and result["bank_closed_verified"]
+    assert state["clicks"] == ["DEPOSIT_ALL_IRON_ORE_ONLY", "CLOSE_BANK_X"]
+
+
+def test_hover_identity_reuses_clean_inventory_origin_when_relocalization_is_ambiguous():
+    runner, state = fake_runner(ambiguous_hover_origin=True)
+    result = runner.run()
+    assert result["success"]
+    assert (552, 564) in state["inventory_origins"]
     assert state["clicks"] == ["DEPOSIT_ALL_IRON_ORE_ONLY", "CLOSE_BANK_X"]
 
 

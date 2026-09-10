@@ -277,6 +277,42 @@ class BankVision:
         if image.shape[1] != 804:
             scale = 804 / image.shape[1]
             logical = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        current_prefix_roi = logical[24:48, 0:77, :3]
+        if current_prefix_roi.shape[:2] == (24, 77):
+            low = np.min(current_prefix_roi, axis=2)
+            high = np.max(current_prefix_roi, axis=2)
+            white = (low > 120) & ((high - low) < 55)
+            ys, xs = np.where(white)
+            if len(xs):
+                count = int(white.sum())
+                left, top = int(xs.min()), int(ys.min()) + 24
+                right, bottom = int(xs.max()), int(ys.max()) + 24
+                if (
+                    240 <= count <= 275
+                    and 8 <= left <= 10
+                    and 74 <= right <= 76
+                    and 26 <= top <= 28
+                    and 44 <= bottom <= 46
+                ):
+                    return 1.0
+        clean_prefix_roi = logical[24:48, 0:85, :3]
+        if clean_prefix_roi.shape[:2] == (24, 85):
+            low = np.min(clean_prefix_roi, axis=2)
+            high = np.max(clean_prefix_roi, axis=2)
+            white = (low > 120) & ((high - low) < 55)
+            ys, xs = np.where(white)
+            if len(xs):
+                count = int(white.sum())
+                left, top = int(xs.min()), int(ys.min()) + 24
+                right, bottom = int(xs.max()), int(ys.max()) + 24
+                if (
+                    260 <= count <= 278
+                    and 8 <= left <= 10
+                    and 82 <= right <= 84
+                    and 26 <= top <= 28
+                    and 44 <= bottom <= 46
+                ):
+                    return 1.0
         action_roi = logical[24:48, 0:100, :3]
         if action_roi.shape[:2] == (24, 100):
             low = np.min(action_roi, axis=2)
