@@ -25,6 +25,9 @@ _DEPOSIT_ALL_PREFIX_MASK_HEX = (
     "0000000000"
 )
 _DEPOSIT_ALL_PREFIX_SHAPE = (18, 92)
+_DEPOSIT_ALL_PREFIX_CURRENT_MASK_HEX = (
+    "00000000000000000000000000000000000000000000000000000000000000000000007800000000000000e0cc0006c00000000018001b0cc000660000000001800318cc000660000000019800318cc000661e1e0f0f81e003f8cc000ee333319981987e318cc007ee3333198f19800318cc007ee3e33188199800318cc007ee3033198199800318cc007fc1f3e0f1f18e00318cc007c000300000000000000000781003000000000000000007ff003000000000000000007ff003000000000000000007ff00000000000000000000"
+)
 _BANK_LOGICAL_UNCUT_RUBY_SLOT_RGB_SHA256 = (
     "52f4b427fadbaec40936200ec8a5a51fa4f264f0f6f75fbb5647d77c6d6e919e"
 )
@@ -294,14 +297,13 @@ class BankVision:
                     return 1.0
 
         height, width = _DEPOSIT_ALL_PREFIX_SHAPE
-        template = (
+        templates = tuple(
             np.unpackbits(
-                np.frombuffer(bytes.fromhex(_DEPOSIT_ALL_PREFIX_MASK_HEX), dtype=np.uint8),
+                np.frombuffer(bytes.fromhex(mask_hex), dtype=np.uint8),
                 bitorder="big",
                 count=height * width,
-            )
-            .reshape((height, width))
-            .astype(bool)
+            ).reshape((height, width)).astype(bool)
+            for mask_hex in (_DEPOSIT_ALL_PREFIX_MASK_HEX, _DEPOSIT_ALL_PREFIX_CURRENT_MASK_HEX)
         )
         best = 0.0
         for y in range(28, 31):
@@ -312,10 +314,8 @@ class BankVision:
                 low = np.min(crop, axis=2)
                 high = np.max(crop, axis=2)
                 actual = (low > 120) & ((high - low) < 55)
-                union = int(np.count_nonzero(template | actual))
-                if union:
-                    best = max(
-                        best,
-                        float(np.count_nonzero(template & actual)) / union,
-                    )
+                for template in templates:
+                    union = int(np.count_nonzero(template | actual))
+                    if union:
+                        best = max(best, float(np.count_nonzero(template & actual)) / union)
         return best
