@@ -90,9 +90,7 @@ class BankRunner:
             return [tuple(slot) for slot in inventory["ore_slots"]]
         if item_id == "uncut_ruby":
             return [
-                tuple(item["slot"])
-                for item in inventory["gems"]
-                if item["item_id"] == "uncut_ruby"
+                tuple(item["slot"]) for item in inventory["gems"] if item["item_id"] == "uncut_ruby"
             ]
         raise BankUnproven("unsupported_deposit_item:" + item_id)
 
@@ -128,7 +126,14 @@ class BankRunner:
             frame, image = self.observe(label)
             if not self.vision.bank_controls(image):
                 raise BankUnproven("bank_not_open_during_deposit_verification")
-            inventory = self.vision.inventory(image)
+            try:
+                inventory = self.vision.inventory(image)
+            except BankUnproven as exc:
+                if str(exc) == "inventory_origin_ambiguous":
+                    proofs = 0
+                    self.backend.wait(0.25)
+                    continue
+                raise
             last = (frame, image, inventory)
             if self._known_composition(
                 inventory,
@@ -162,7 +167,10 @@ class BankRunner:
         point = ((slots[0][0] + slots[0][2]) // 2, (slots[0][1] + slots[0][3]) // 2)
         self.hover(point)
         frame, image = self.observe(f"{item_id}-deposit-all-hover")
-        hovered = self.vision.inventory(image)
+        # The live hover can transiently obscure unrelated slots.  Keep the
+        # clean, immediately preceding inventory origin while re-proving the
+        # hovered item's identity instead of re-localising from that overlay.
+        hovered = self.vision.inventory(image, tuple(inventory["origin"]))
         hover_slots = self._item_slots(hovered, item_id)
         prefix_score = self.vision.deposit_all_prefix_score(image)
         self.record(
@@ -173,8 +181,7 @@ class BankRunner:
             source_prefix_sha256=self.vision.deposit_all_prefix_source_sha256,
         )
         if point not in [
-            ((slot[0] + slot[2]) // 2, (slot[1] + slot[3]) // 2)
-            for slot in hover_slots
+            ((slot[0] + slot[2]) // 2, (slot[1] + slot[3]) // 2) for slot in hover_slots
         ]:
             raise BankUnproven("hovered_item_identity_changed:" + item_id)
         if prefix_score < 0.85:
@@ -209,9 +216,7 @@ class BankRunner:
             (fresh_slots[0][1] + fresh_slots[0][3]) // 2,
         )
         action = (
-            "DEPOSIT_ALL_IRON_ORE_ONLY"
-            if item_id == "iron_ore"
-            else "DEPOSIT_ALL_UNCUT_RUBY_ONLY"
+            "DEPOSIT_ALL_IRON_ORE_ONLY" if item_id == "iron_ore" else "DEPOSIT_ALL_UNCUT_RUBY_ONLY"
         )
         self.click(frame, fresh_point, action)
         self.hover((100, 15))
@@ -237,24 +242,58 @@ class BankRunner:
             raise BankUnproven("requires_verified_full_mining_load")
         if not self.vision.bank_controls(image):
             booth = self.vision.match(image, "booth", (0, 100, 530, image.shape[0] - 150))
-            if booth.score < 0.94:
-                raise BankUnproven("bank_booth_unproven:" + str(booth.score))
-            self.hover(booth.centre)
-            frame, image = self.observe("bank-booth-hover")
-            proof = max(
-                (
-                    self.vision.match(image, key, (0, 24, 330, 60), text=True)
-                    for key in ("bank_hover", "bank_hover_original", "bank_hover_live2")
-                ),
-                key=lambda match: match.score,
-            )
-            # Text sampling changes across captures. It is diagnostic for OPEN,
-            # not the input authority: the precise gold booth appearance is.
-            # No item action is possible until the bank title and X both verify.
+            candidates: list[tuple[str, tuple[int, int]]] = []
+            if booth.score >= 0.55:
+                candidates.append(("appearance", booth.centre))
+            # 2026-09-09 World 301 live hover proof: logical (80,416), physical
+            # (100,520) at the current 1.25 mapping yielded exact "Bank booth".
+            # It is hover-only until the same fresh frame re-proves that text.
+            # Bounded hover-only fallbacks across the same reviewed booth face.
+            # A point never earns click authority unless that exact fresh hover
+            # independently proves Bank booth text.
+            for point in (
+                (80, 416), (110, 416), (140, 416),
+                (80, 440), (110, 440), (140, 440),
+                (80, 464), (110, 464), (140, 464),
+            ):
+                candidates.append(("bank_booth_hover_scan", point))
+            verified = None
+            last_proof_score = 0.0
+            for source, candidate in candidates:
+                self.hover(candidate)
+                probe_frame, probe_image = self.observe("bank-booth-hover")
+                proof = max(
+                    (
+                        self.vision.match(probe_image, key, (0, 24, 330, 60), text=True)
+                        for key in (
+                            "bank_hover",
+                            "bank_hover_original",
+                            "bank_hover_live2",
+                            "bank_hover_live3",
+                            "bank_hover_live4",
+                        )
+                    ),
+                    key=lambda match: match.score,
+                )
+                semantic_hover = self.vision.bank_booth_hover_text(probe_image)
+                last_proof_score = max(last_proof_score, proof.score)
+                if booth.score >= 0.94 or proof.score >= 0.85 or semantic_hover:
+                    verified = (source, candidate, probe_frame, probe_image, proof.score, semantic_hover)
+                    break
+            if verified is None:
+                raise BankUnproven(
+                    "bank_booth_hover_unproven:" + str(booth.score) + ":" + str(last_proof_score)
+                )
+            source, booth_point, frame, image, proof_score, semantic_hover = verified
             self.record(
-                "BOOTH_TARGET_VERIFIED", appearance_score=booth.score, hover_text_score=proof.score
+                "BOOTH_TARGET_VERIFIED",
+                appearance_score=booth.score,
+                hover_text_score=proof_score,
+                semantic_hover_text=semantic_hover,
+                target_source=source,
+                logical_point=list(booth_point),
             )
-            self.click(frame, booth.centre, "OPEN_BANK_BOOTH")
+            self.click(frame, booth_point, "OPEN_BANK_BOOTH")
             frame, image = self.wait_open()
         if open_only:
             return {"status": "OPEN_STAGE_PASS", "success": False, "deposit_verified": False}

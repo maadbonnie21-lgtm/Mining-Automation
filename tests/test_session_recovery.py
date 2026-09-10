@@ -6,7 +6,11 @@ from mining_automation.capture import Frame, PixelFormat, RawFrame
 from mining_automation.validation.session_recovery import (
     DISCONNECTED_OK_CLIENT_POINT,
     DISCONNECTED_SCREEN,
+    DISCONNECTED_SCREEN_CURRENT,
+    DISCONNECTED_SCREENS,
     PLAY_NOW_CLIENT_POINT,
+    PREAUTHENTICATED_PLAY_NOW_CURRENT,
+    PREAUTHENTICATED_PLAY_NOW_SCREENS,
     WELCOME_CLICK_HERE_TO_PLAY,
     WELCOME_PLAY_CLIENT_POINT,
     SessionScreenAnchor,
@@ -31,7 +35,9 @@ def test_exact_fingerprint_engine_requires_every_anchor() -> None:
 
 def test_fingerprint_engine_rejects_wrong_geometry() -> None:
     zero_pixel = hashlib.sha256(bytes(4)).hexdigest()
-    fingerprint = SessionScreenFingerprint("synthetic", (SessionScreenAnchor((1, 1, 1, 1), zero_pixel),))
+    fingerprint = SessionScreenFingerprint(
+        "synthetic", (SessionScreenAnchor((1, 1, 1, 1), zero_pixel),)
+    )
     assert matches_session_screen(_frame(width=1004), fingerprint) is False
 
 
@@ -63,4 +69,29 @@ def test_welcome_fingerprint_uses_proven_foreground_anchors() -> None:
     assert tuple(anchor.region for anchor in fingerprint.anchors) == (
         (442, 76, 16, 16),
         (310, 363, 12, 12),
+    )
+
+
+def test_current_play_now_fingerprint_is_additive_and_exact() -> None:
+    assert tuple(item.fingerprint_id for item in PREAUTHENTICATED_PLAY_NOW_SCREENS) == (
+        "preauthenticated-play-now-v1",
+        "preauthenticated-play-now-20260909-v1",
+    )
+    assert tuple(anchor.region for anchor in PREAUTHENTICATED_PLAY_NOW_CURRENT.anchors) == (
+        (335, 260, 100, 30),
+        (340, 294, 90, 24),
+        (300, 250, 170, 78),
+        (260, 210, 250, 190),
+    )
+
+
+def test_current_disconnect_fingerprint_is_additive_and_exact() -> None:
+    assert tuple(item.fingerprint_id for item in DISCONNECTED_SCREENS) == (
+        "disconnected-ok-v1",
+        "disconnected-ok-20260909-v1",
+    )
+    assert tuple(anchor.region for anchor in DISCONNECTED_SCREEN_CURRENT.anchors) == (
+        (235, 240, 305, 40),
+        (305, 305, 160, 50),
+        (205, 198, 360, 200),
     )

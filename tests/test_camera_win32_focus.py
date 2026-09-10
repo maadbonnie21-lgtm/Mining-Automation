@@ -32,7 +32,9 @@ class _FakeKernel32:
         return 100
 
 
-def test_focus_attaches_foreground_and_target_then_detaches(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_focus_attaches_foreground_and_target_then_detaches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from mining_automation.validation import _camera_win32_calls as win32
 
     foreground = [99]
@@ -84,3 +86,34 @@ def test_focus_failure_still_detaches_every_attached_thread(
 
     assert win32.focus_window(42) is False
     assert user32.attach_calls[-2:] == [(100, 200, False), (100, 300, False)]
+
+
+def test_client_origin_uses_already_physical_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mining_automation.validation import _camera_win32_calls as win32
+    from mining_automation.validation.camera_coordinates import PhysicalScreenPoint
+
+    class Transform:
+        def physical_client_origin(self, hwnd: int) -> PhysicalScreenPoint:
+            assert hwnd == 42
+            return PhysicalScreenPoint(458, 0)
+
+    monkeypatch.setattr(win32, "_coordinate_transform", Transform())
+    monkeypatch.setattr(win32, "physical_screen_to_physical_client", lambda h, x, y: (0, 0))
+    monkeypatch.setattr(
+        win32, "pointer_mapping", lambda *args: (_ for _ in ()).throw(AssertionError("not used"))
+    )
+    assert win32.client_to_screen(42, 0, 0) == (458, 0)
+
+
+def test_client_origin_rejects_non_exact_reverse(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mining_automation.validation import _camera_win32_calls as win32
+    from mining_automation.validation.camera_coordinates import PhysicalScreenPoint
+
+    class Transform:
+        def physical_client_origin(self, hwnd: int) -> PhysicalScreenPoint:
+            return PhysicalScreenPoint(458, 0)
+
+    monkeypatch.setattr(win32, "_coordinate_transform", Transform())
+    monkeypatch.setattr(win32, "physical_screen_to_physical_client", lambda h, x, y: (1, 0))
+    with pytest.raises(OSError, match="origin reverse mapping"):
+        win32.client_to_screen(42, 0, 0)

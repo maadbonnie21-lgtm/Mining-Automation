@@ -215,14 +215,18 @@ class NativeRouteBackend:
         resource_evaluator: Any,
         inventory_evaluator: Any,
     ) -> None:
-        """Prepare preserved mining evaluators before any authority frame exists."""
+        """Prepare the preserved inventory evaluator before any authority frame exists."""
 
-        if not pose_detectors or not callable(resource_evaluator):
-            raise RuntimeError("start_connector_mining_evaluators_unavailable")
-        if not callable(getattr(inventory_evaluator, "evaluate", None)):
+        # These remain compatibility parameters for the existing route CLI.
+        # Navigation authority evaluates neither current mining pose nor
+        # Resource state. The detector registry only binds the connector's
+        # existing source-pose metadata to a known configured profile.
+        del resource_evaluator
+        if not pose_detectors:
+            raise RuntimeError("start_connector_source_pose_metadata_unavailable")
+        if not callable(getattr(inventory_evaluator, "_evaluate_packaged_inventory", None)):
             raise RuntimeError("start_connector_inventory_evaluator_unavailable")
         self._start_connector_pose_detectors = pose_detectors
-        self._start_connector_resource_evaluator = resource_evaluator
         self._start_connector_inventory_evaluator = inventory_evaluator
 
     def verify_start_connector_authority(
@@ -230,14 +234,14 @@ class NativeRouteBackend:
         frame: RouteFrame,
         connector: dict[str, Any],
     ) -> dict[str, Any]:
-        """Require one native BGRA Resource+Inventory epoch before route input."""
+        """Require one fresh native full-inventory epoch before route input."""
 
         from ..mining_slice import (
             INVENTORY_CAPACITY,
+            INVENTORY_PUBLICATION_FLOOR,
+            MAX_MINING_PERCEPTION_AGE_S,
+            InventoryPerceptionEnvelope,
             PerceptionEpoch,
-            ResourceViewState,
-            WorldStatePublicationStatus,
-            assemble_atomic_mining_world_state,
         )
         from ..perception.live_pose_references import POSE_FRAME_HEIGHT, POSE_FRAME_WIDTH
 
@@ -246,18 +250,27 @@ class NativeRouteBackend:
             raise RuntimeError("stale_start_connector_authority_frame")
         expected_pose = connector.get("source_pose_id")
         detectors = self._start_connector_pose_detectors
-        resource_evaluator = self._start_connector_resource_evaluator
         inventory_evaluator = self._start_connector_inventory_evaluator
         if (
             type(expected_pose) is not str
             or detectors is None
             or expected_pose not in detectors
-            or not callable(resource_evaluator)
-            or not callable(getattr(inventory_evaluator, "evaluate", None))
         ):
             return {
                 "accepted": False,
-                "reason": "source_pose_evaluator_unavailable",
+                "reason": "source_connector_identity_unavailable",
+                "route_source_frame_id": frame.frame_id,
+                "route_source_captured_monotonic_s": frame.captured_monotonic_s,
+                "window": before,
+                "expected_pose_id": expected_pose,
+            }
+        inventory_only_evaluator = getattr(
+            inventory_evaluator, "_evaluate_packaged_inventory", None
+        )
+        if not callable(inventory_only_evaluator):
+            return {
+                "accepted": False,
+                "reason": "source_inventory_evaluator_unavailable",
                 "route_source_frame_id": frame.frame_id,
                 "route_source_captured_monotonic_s": frame.captured_monotonic_s,
                 "window": before,
@@ -301,46 +314,72 @@ class NativeRouteBackend:
             frame_payload_sha256=payload_sha256,
             pixel_format="bgra8888",
         )
-        resource, pose, _ = resource_evaluator(
-            mining_frame,
-            epoch,
-            detectors,
-            frozenset(),
-            {"pose": None, "detector": None},
-        )
-        _, inventory = inventory_evaluator.evaluate(mining_frame, epoch)
+        evaluation = inventory_only_evaluator(mining_frame)
+        inventory = evaluation if type(evaluation) is InventoryPerceptionEnvelope else None
+        if inventory is None:
+            try:
+                inventory_state, unknown_reason = evaluation
+            except (TypeError, ValueError):
+                pass
+            else:
+                try:
+                    inventory = InventoryPerceptionEnvelope(
+                        epoch=epoch,
+                        release=inventory_evaluator.inventory_release,
+                        inventory=inventory_state,
+                        unknown_reason=unknown_reason,
+                    )
+                except (AttributeError, TypeError, ValueError):
+                    pass
         evaluated = self.now()
-        state = assemble_atomic_mining_world_state(
-            resource=resource,
-            inventory=inventory,
-            evaluated_monotonic_s=evaluated,
-        )
         after = self.guard()
         if after != before or frame.frame_id != self.frame_id:
             raise RuntimeError("window_changed_during_start_connector_authority")
-        inventory_state = inventory.inventory
-        accepted = (
-            pose == expected_pose
-            and resource.view is ResourceViewState.SUPPORTED
-            and inventory.unknown_reason is None
-            and inventory_state.occupied_slots == INVENTORY_CAPACITY
-            and state.status is WorldStatePublicationStatus.FULL
+        exact_envelope = type(inventory) is InventoryPerceptionEnvelope
+        inventory_state = inventory.inventory if exact_envelope else None
+        same_epoch = exact_envelope and inventory.epoch == epoch
+        perception_age = (
+            evaluated - mining_frame.captured_monotonic_s
+            if type(evaluated) is float
+            else None
         )
-        if pose != expected_pose:
-            reason = "expected_mining_pose_not_supported"
-        elif resource.view is not ResourceViewState.SUPPORTED:
-            reason = "resource_view_not_supported"
+        fresh = (
+            type(perception_age) is float
+            and math.isfinite(perception_age)
+            and 0.0 <= perception_age <= MAX_MINING_PERCEPTION_AGE_S
+        )
+        confidence = inventory_state.confidence if inventory_state is not None else None
+        if not exact_envelope:
+            reason = "inventory_envelope_invalid"
+        elif not same_epoch:
+            reason = "inventory_epoch_mismatch"
+        elif type(inventory_state.capacity) is not int or inventory_state.capacity != INVENTORY_CAPACITY:
+            reason = "inventory_layout_invalid"
         elif inventory.unknown_reason is not None:
             reason = "inventory_unknown"
-        elif inventory_state.occupied_slots != INVENTORY_CAPACITY:
+        elif (
+            type(inventory_state.occupied_slots) is not int
+            or inventory_state.occupied_slots != INVENTORY_CAPACITY
+        ):
             reason = "inventory_not_full"
-        elif state.status is not WorldStatePublicationStatus.FULL:
-            reason = state.stop_reason.value
+        elif (
+            type(confidence) is not float
+            or not math.isfinite(confidence)
+            or confidence < INVENTORY_PUBLICATION_FLOOR
+            or confidence > 1.0
+        ):
+            reason = "inventory_confidence_below_floor"
+        elif not fresh:
+            reason = "inventory_perception_stale"
         else:
             reason = "accepted"
         return {
-            "accepted": accepted,
+            "accepted": reason == "accepted",
             "reason": reason,
+            "authority_kind": "navigation_full_inventory",
+            "resource_evaluated": False,
+            "mining_pose_evaluated": False,
+            "mining_world_state_evaluated": False,
             "route_source_frame_id": frame.frame_id,
             "route_source_captured_monotonic_s": frame.captured_monotonic_s,
             "native_frame_id": mining_frame.frame_id,
@@ -351,15 +390,18 @@ class NativeRouteBackend:
             "native_dpi": native_dpi,
             "window": before,
             "expected_pose_id": expected_pose,
-            "pose_id": pose,
-            "resource_view": resource.view.value,
-            "inventory_occupied_slots": inventory_state.occupied_slots,
-            "inventory_capacity": inventory_state.capacity,
-            "inventory_confidence": inventory_state.confidence,
-            "inventory_unknown_reason": inventory.unknown_reason,
-            "world_state": state.status.value,
-            "world_state_stop_reason": state.stop_reason.value,
-            "perception_age_s": evaluated - mining_frame.captured_monotonic_s,
+            "inventory_epoch": asdict(inventory.epoch) if exact_envelope else None,
+            "inventory_occupied_slots": (
+                inventory_state.occupied_slots if inventory_state is not None else None
+            ),
+            "inventory_capacity": (
+                inventory_state.capacity if inventory_state is not None else None
+            ),
+            "inventory_confidence": confidence,
+            "inventory_unknown_reason": (
+                inventory.unknown_reason if exact_envelope else "invalid_inventory_envelope"
+            ),
+            "perception_age_s": perception_age,
         }
 
     def _capture_start_connector_native_frame(

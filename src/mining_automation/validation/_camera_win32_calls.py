@@ -328,9 +328,7 @@ def window_identity(hwnd: int) -> tuple[int, int, str, str]:
 
 def _window_owner(hwnd: int) -> tuple[int, int]:
     process_id = wintypes.DWORD()
-    thread_id = int(
-        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
-    )
+    thread_id = int(_user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id)))
     if thread_id <= 0 or process_id.value <= 0:
         raise OSError("GetWindowThreadProcessId failed for the target RuneLite window")
     return int(process_id.value), thread_id
@@ -385,11 +383,7 @@ def focus_window(hwnd: int) -> bool:
     attached_threads: list[int] = []
     try:
         for thread_id in (foreground_thread, target_thread):
-            if (
-                thread_id > 0
-                and thread_id != current_thread
-                and thread_id not in attached_threads
-            ):
+            if thread_id > 0 and thread_id != current_thread and thread_id not in attached_threads:
                 if _user32.AttachThreadInput(current_thread, thread_id, True):
                     attached_threads.append(thread_id)
         _user32.BringWindowToTop(hwnd)
@@ -420,9 +414,7 @@ def focused_descendant(hwnd: int) -> int:
     """Return the target thread's existing focused child without activation."""
 
     process_id = wintypes.DWORD()
-    thread_id = int(
-        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
-    )
+    thread_id = int(_user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id)))
     if thread_id <= 0:
         raise OSError("GetWindowThreadProcessId failed for target window")
     info = _GUITHREADINFO()
@@ -593,8 +585,7 @@ class _NativeCameraCoordinateTransform(CameraCoordinateTransform):
             ctypes.byref(native_point),
         ):
             raise OSError(
-                "PhysicalToLogicalPointForPerMonitorDPI failed for the target "
-                "RuneLite window"
+                "PhysicalToLogicalPointForPerMonitorDPI failed for the target RuneLite window"
             )
         return LogicalScreenPoint(int(native_point.x), int(native_point.y))
 
@@ -609,8 +600,7 @@ class _NativeCameraCoordinateTransform(CameraCoordinateTransform):
             ctypes.byref(native_point),
         ):
             raise OSError(
-                "LogicalToPhysicalPointForPerMonitorDPI failed for the target "
-                "RuneLite window"
+                "LogicalToPhysicalPointForPerMonitorDPI failed for the target RuneLite window"
             )
         return PhysicalScreenPoint(int(native_point.x), int(native_point.y))
 
@@ -639,6 +629,12 @@ def client_to_screen(hwnd: int, x: int, y: int) -> tuple[int, int]:
     transform must recover the original logical client point exactly.
     """
 
+    if x == 0 and y == 0:
+        origin = _coordinate_transform.physical_client_origin(hwnd)
+        reverse = physical_screen_to_physical_client(hwnd, *origin.pair)
+        if reverse != (0, 0):
+            raise OSError("physical client origin reverse mapping was not exact")
+        return origin.pair
     return require_exact_round_trip(pointer_mapping(hwnd, x, y)).pair
 
 
@@ -679,10 +675,7 @@ def mapping_candidate_comparison(hwnd: int, x: int, y: int) -> dict[str, object]
         int(wrong_order_point.y),
     )
     if not _user32.ClientToScreen(hwnd, ctypes.byref(wrong_order_point)):
-        raise OSError(
-            "comparison wrong-order ClientToScreen failed for the target "
-            "RuneLite window"
-        )
+        raise OSError("comparison wrong-order ClientToScreen failed for the target RuneLite window")
 
     corrected = pointer_mapping(hwnd, x, y)
     return {
@@ -754,22 +747,20 @@ def dpi_environment(hwnd: int) -> CameraDpiEnvironment:
     if target_dpi <= 0:
         raise OSError("GetDpiForWindow failed for the target RuneLite window")
 
-    origin = pointer_mapping(hwnd, 0, 0)
-    x_basis = pointer_mapping(hwnd, _STANDARD_DPI, 0)
-    y_basis = pointer_mapping(hwnd, 0, _STANDARD_DPI)
-    require_exact_round_trip(origin)
+    # Measure effective scaling from interior logical-client points. Some DPI-unaware
+    # Java/AWT windows reject LogicalToPhysicalPointForPerMonitorDPI exactly on
+    # the physical top/left client edge even though interior mappings round-trip.
+    basis = pointer_mapping(hwnd, _STANDARD_DPI, _STANDARD_DPI)
+    x_basis = pointer_mapping(hwnd, _STANDARD_DPI * 2, _STANDARD_DPI)
+    y_basis = pointer_mapping(hwnd, _STANDARD_DPI, _STANDARD_DPI * 2)
+    require_exact_round_trip(basis)
     require_exact_round_trip(x_basis)
     require_exact_round_trip(y_basis)
-    scale_x = (
-        x_basis.physical_screen.x - origin.physical_screen.x
-    ) / _STANDARD_DPI
-    scale_y = (
-        y_basis.physical_screen.y - origin.physical_screen.y
-    ) / _STANDARD_DPI
+    scale_x = (x_basis.physical_screen.x - basis.physical_screen.x) / _STANDARD_DPI
+    scale_y = (y_basis.physical_screen.y - basis.physical_screen.y) / _STANDARD_DPI
     if scale_x <= 0.0 or scale_y <= 0.0:
         raise OSError(
-            "target DPI mapping returned a non-positive effective scale: "
-            f"x={scale_x}, y={scale_y}"
+            f"target DPI mapping returned a non-positive effective scale: x={scale_x}, y={scale_y}"
         )
     physical_size = client_size(hwnd)
     logical_size = (
@@ -780,9 +771,7 @@ def dpi_environment(hwnd: int) -> CameraDpiEnvironment:
         caller_thread_context=_context_value(caller_thread_context),
         caller_thread_awareness=_awareness_name(caller_thread_awareness),
         caller_process_context=(
-            _context_value(caller_process_context)
-            if caller_process_context is not None
-            else None
+            _context_value(caller_process_context) if caller_process_context is not None else None
         ),
         caller_process_awareness=(
             _awareness_name(caller_process_awareness)
@@ -847,9 +836,7 @@ def left_button_is_down() -> bool:
 def send_middle_button(*, button_up: bool) -> int:
     """Send exactly one middle-button phase and return its accepted count."""
 
-    event = _mouse_input(
-        _MOUSEEVENTF_MIDDLEUP if button_up else _MOUSEEVENTF_MIDDLEDOWN
-    )
+    event = _mouse_input(_MOUSEEVENTF_MIDDLEUP if button_up else _MOUSEEVENTF_MIDDLEDOWN)
     return int(_user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(_INPUT)))
 
 

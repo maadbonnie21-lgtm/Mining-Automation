@@ -25,6 +25,16 @@ _DEPOSIT_ALL_PREFIX_MASK_HEX = (
     "0000000000"
 )
 _DEPOSIT_ALL_PREFIX_SHAPE = (18, 92)
+_DEPOSIT_ALL_PREFIX_CURRENT_MASK_HEX = (
+    "00000000000000000000000000000000000000000000000000000000000000000000007800000000000000e0cc0006c00000000018001b0cc000660000000001800318cc000660000000019800318cc000661e1e0f0f81e003f8cc000ee333319981987e318cc007ee3333198f19800318cc007ee3e33188199800318cc007ee3033198199800318cc007fc1f3e0f1f18e00318cc007c000300000000000000000781003000000000000000007ff003000000000000000007ff003000000000000000007ff00000000000000000000"
+)
+_BANK_LOGICAL_UNCUT_RUBY_SLOT_RGB_SHA256 = (
+    "52f4b427fadbaec40936200ec8a5a51fa4f264f0f6f75fbb5647d77c6d6e919e"
+)
+_BANK_LOGICAL_UNCUT_RUBY_SPRITE_SIGNATURE_SHA256 = (
+    "ce17d36306110a3d5fbcaa75a4d42dfacd0702199b1a68e799d19b6f6c6112cd"
+)
+
 _DEPOSIT_ALL_PREFIX_SOURCE_SHA256 = (
     "8dcaf2733824e7904c0b282b83180f14df7a64b0f0f82468f2dac8c6a0b7fa14"
 )
@@ -99,18 +109,71 @@ class BankVision:
         )
         return (title, close) if close.score >= 0.85 else None
 
+    def bank_booth_hover_text(self, image: Any) -> bool:
+        """Recognize the Bank booth action text in the logical 804px presentation."""
+        logical = image
+        if image.shape[1] != 804:
+            scale = 804 / image.shape[1]
+            logical = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        roi = logical[24:48, 0:264, :3]
+        if roi.shape[0] != 24 or roi.shape[1] != 264:
+            return False
+        blue, green, red = cv2.split(roi)
+        cyan = (blue > 120) & (green > 120) & (red < 120) & (
+            blue.astype(np.int16) + green.astype(np.int16) - 2 * red.astype(np.int16) > 120
+        )
+        white = (blue > 170) & (green > 170) & (red > 170)
+        cyan_count = int(cyan.sum())
+        white_count = int(white.sum())
+        if not 180 <= cyan_count <= 350 or not 250 <= white_count <= 500:
+            return False
+        ys, xs = np.where(cyan)
+        if len(xs) == 0:
+            return False
+        left, top = int(xs.min()), int(ys.min()) + 24
+        right, bottom = int(xs.max()), int(ys.max()) + 24
+        return 40 <= left <= 52 and 112 <= right <= 128 and 30 <= top <= 35 and 39 <= bottom <= 44
+
     def inventory_origin(self, image: Any) -> tuple[int, int]:
         edge = self.match(
             image,
             "inventory_edge",
             (image.shape[1] - 100, image.shape[0] - 340, image.shape[1], image.shape[0]),
         )
-        if edge.score < 0.80:
+        if edge.score < 0.75:
             raise BankUnproven("inventory_border_unproven:" + str(edge.score))
         return edge.x - 193, edge.y + 1
 
-    def inventory(self, image: Any, origin: tuple[int, int] | None = None) -> dict[str, Any]:
-        left, top = origin or self.inventory_origin(image)
+    @staticmethod
+    def _logical_bank_byproduct(*, full_slot_rgb: bytes, slot_index: int) -> dict[str, Any] | None:
+        """Recognize the source-verified ruby after the fixed bank-view resize."""
+        if type(full_slot_rgb) is not bytes or len(full_slot_rgb) != 32 * 32 * 3:
+            return None
+        if type(slot_index) is not int or not 0 <= slot_index < 28:
+            return None
+        signature = bytearray()
+        for y in range(32):
+            for x in range(32):
+                offset = (y * 32 + x) * 3
+                red, green, blue = full_slot_rgb[offset : offset + 3]
+                if red > 60 and red - green > 30 and red - blue > 35:
+                    signature.extend((x, y, red, green, blue))
+        if (
+            hashlib.sha256(signature).hexdigest()
+            != _BANK_LOGICAL_UNCUT_RUBY_SPRITE_SIGNATURE_SHA256
+        ):
+            return None
+        return {
+            "item_id": "uncut_ruby",
+            "display_name": "Uncut ruby",
+            "slot_index": slot_index,
+            "presentation": "bank_logical_resampled",
+            "presentation_slot_rgb_sha256": hashlib.sha256(full_slot_rgb).hexdigest(),
+            "source_slot_rgb_sha256": _BANK_LOGICAL_UNCUT_RUBY_SLOT_RGB_SHA256,
+        }
+
+    def _inventory_at_origin(self, image: Any, origin: tuple[int, int]) -> dict[str, Any]:
+        left, top = origin
         ores = []
         gems = []
         empties = []
@@ -132,10 +195,7 @@ class BankVision:
                 perimeter = np.ones((32, 32), dtype=bool)
                 perimeter[3:29, 3:29] = False
                 background_delta = np.max(
-                    np.abs(
-                        slot_pixels.astype(np.int16)
-                        - expected_slot_pixels.astype(np.int16)
-                    ),
+                    np.abs(slot_pixels.astype(np.int16) - expected_slot_pixels.astype(np.int16)),
                     axis=2,
                 )
                 background_proven = float(np.mean(background_delta[perimeter] < 22)) > 0.93
@@ -148,9 +208,17 @@ class BankVision:
                     if background_proven
                     else None
                 )
+                logical_byproduct = (
+                    self._logical_bank_byproduct(full_slot_rgb=full_slot_rgb, slot_index=index)
+                    if background_proven and byproduct is None
+                    else None
+                )
                 slot = (x, y, x + 40, y + 34)
                 if byproduct is not None:
                     gems.append({"slot": slot, **asdict(byproduct)})
+                    continue
+                if logical_byproduct is not None:
+                    gems.append({"slot": slot, **logical_byproduct})
                     continue
                 expected = self.assets["ore"]
                 scores = cv2.matchTemplate(patch, expected, cv2.TM_CCOEFF_NORMED)
@@ -178,6 +246,24 @@ class BankVision:
             "origin": [left, top],
         }
 
+    def inventory(self, image: Any, origin: tuple[int, int] | None = None) -> dict[str, Any]:
+        if origin is not None:
+            return self._inventory_at_origin(image, origin)
+        left, top = self.inventory_origin(image)
+        candidates = [
+            self._inventory_at_origin(image, (left, top + offset))
+            for offset in range(-12, 33)
+            if 0 <= top + offset < image.shape[0] - 255
+        ]
+        if not candidates:
+            raise BankUnproven("inventory_origin_candidates_empty")
+        candidates.sort(key=lambda item: (item["unknown_count"], abs(item["origin"][1] - top)))
+        best = candidates[0]
+        tied = [item for item in candidates if item["unknown_count"] == best["unknown_count"]]
+        if best["unknown_count"] and len(tied) > 1:
+            raise BankUnproven("inventory_origin_ambiguous")
+        return best
+
     @staticmethod
     def deposit_all_prefix_score(image: Any) -> float:
         """Match the frozen live ``Deposit-All`` action prefix only.
@@ -187,12 +273,56 @@ class BankVision:
         item; it does not infer or OCR an unfamiliar suffix.
         """
 
+        logical = image
+        if image.shape[1] != 804:
+            scale = 804 / image.shape[1]
+            logical = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        current_prefix_roi = logical[24:48, 0:77, :3]
+        if current_prefix_roi.shape[:2] == (24, 77):
+            low = np.min(current_prefix_roi, axis=2)
+            high = np.max(current_prefix_roi, axis=2)
+            white = (low > 120) & ((high - low) < 55)
+            ys, xs = np.where(white)
+            if len(xs):
+                count = int(white.sum())
+                left, top = int(xs.min()), int(ys.min()) + 24
+                right, bottom = int(xs.max()), int(ys.max()) + 24
+                if (
+                    240 <= count <= 275
+                    and 8 <= left <= 10
+                    and 74 <= right <= 76
+                    and 26 <= top <= 28
+                    and 44 <= bottom <= 46
+                ):
+                    return 1.0
+        action_roi = logical[24:48, 0:100, :3]
+        if action_roi.shape[:2] == (24, 100):
+            low = np.min(action_roi, axis=2)
+            high = np.max(action_roi, axis=2)
+            white = (low > 120) & ((high - low) < 55)
+            ys, xs = np.where(white)
+            if len(xs):
+                count = int(white.sum())
+                left, top = int(xs.min()), int(ys.min()) + 24
+                right, bottom = int(xs.max()), int(ys.max()) + 24
+                if (
+                    220 <= count <= 420
+                    and 4 <= left <= 12
+                    and 80 <= right <= 90
+                    and 31 <= top <= 34
+                    and 44 <= bottom <= 50
+                ):
+                    return 1.0
+
         height, width = _DEPOSIT_ALL_PREFIX_SHAPE
-        template = np.unpackbits(
-            np.frombuffer(bytes.fromhex(_DEPOSIT_ALL_PREFIX_MASK_HEX), dtype=np.uint8),
-            bitorder="big",
-            count=height * width,
-        ).reshape((height, width)).astype(bool)
+        templates = tuple(
+            np.unpackbits(
+                np.frombuffer(bytes.fromhex(mask_hex), dtype=np.uint8),
+                bitorder="big",
+                count=height * width,
+            ).reshape((height, width)).astype(bool)
+            for mask_hex in (_DEPOSIT_ALL_PREFIX_MASK_HEX, _DEPOSIT_ALL_PREFIX_CURRENT_MASK_HEX)
+        )
         best = 0.0
         for y in range(28, 31):
             for x in range(2, 5):
@@ -202,10 +332,8 @@ class BankVision:
                 low = np.min(crop, axis=2)
                 high = np.max(crop, axis=2)
                 actual = (low > 120) & ((high - low) < 55)
-                union = int(np.count_nonzero(template | actual))
-                if union:
-                    best = max(
-                        best,
-                        float(np.count_nonzero(template & actual)) / union,
-                    )
+                for template in templates:
+                    union = int(np.count_nonzero(template | actual))
+                    if union:
+                        best = max(best, float(np.count_nonzero(template & actual)) / union)
         return best

@@ -53,8 +53,7 @@ def matches_session_screen(
     ):
         return False
     return all(
-        _region_sha256(frame, anchor.region) == anchor.sha256
-        for anchor in fingerprint.anchors
+        _region_sha256(frame, anchor.region) == anchor.sha256 for anchor in fingerprint.anchors
     )
 
 
@@ -77,10 +76,31 @@ DISCONNECTED_SCREEN: Final[SessionScreenFingerprint] = SessionScreenFingerprint(
 )
 
 
+DISCONNECTED_SCREEN_CURRENT: Final[SessionScreenFingerprint] = SessionScreenFingerprint(
+    fingerprint_id="disconnected-ok-20260909-v1",
+    anchors=(
+        SessionScreenAnchor(
+            (235, 240, 305, 40), "af4825da182e1116a6bc9de89eacfa9bbd41bd19bd78639b52c18eb595176ac4"
+        ),
+        SessionScreenAnchor(
+            (305, 305, 160, 50), "9b8a418ba636796673f21dd0c96d43bc212f634bccda2f45842354ccc3003faa"
+        ),
+        SessionScreenAnchor(
+            (205, 198, 360, 200), "6e0f172bfeba712d897d3cc2732f72824519f7ec8ba3ef7c59830862e1706f06"
+        ),
+    ),
+)
+
+DISCONNECTED_SCREENS: Final[tuple[SessionScreenFingerprint, ...]] = (
+    DISCONNECTED_SCREEN,
+    DISCONNECTED_SCREEN_CURRENT,
+)
+
+
 def matches_disconnected_screen(frame: Frame) -> bool:
     """Recognize the source-proven normal disconnect dialog."""
 
-    return matches_session_screen(frame, DISCONNECTED_SCREEN)
+    return any(matches_session_screen(frame, item) for item in DISCONNECTED_SCREENS)
 
 
 PREAUTHENTICATED_PLAY_NOW: Final[SessionScreenFingerprint] = SessionScreenFingerprint(
@@ -106,10 +126,37 @@ PREAUTHENTICATED_PLAY_NOW: Final[SessionScreenFingerprint] = SessionScreenFinger
 )
 
 
+PREAUTHENTICATED_PLAY_NOW_CURRENT: Final[SessionScreenFingerprint] = SessionScreenFingerprint(
+    fingerprint_id="preauthenticated-play-now-20260909-v1",
+    anchors=(
+        SessionScreenAnchor(
+            (335, 260, 100, 30), "c03c8f4560d28a3e858b5d1311301340823b417921780e53a8be79b99f2df7fd"
+        ),
+        SessionScreenAnchor(
+            (340, 294, 90, 24), "7add875961df5a8ce3174298a8f9acfb0458e27c69d9ff125f38126309fc8b44"
+        ),
+        SessionScreenAnchor(
+            (300, 250, 170, 78), "359ff4b60bed514290e65e5599ff0dfa146d52da8d5c00e91f69c3c49593e003"
+        ),
+        SessionScreenAnchor(
+            (260, 210, 250, 190), "f139abb6a75bff359aaf132ab690a93da8a4cc684b871e8f085c5f583bfdd7be"
+        ),
+    ),
+)
+
+PREAUTHENTICATED_PLAY_NOW_SCREENS: Final[tuple[SessionScreenFingerprint, ...]] = (
+    PREAUTHENTICATED_PLAY_NOW,
+    PREAUTHENTICATED_PLAY_NOW_CURRENT,
+)
+
+
 def matches_preauthenticated_play_now(frame: Frame) -> bool:
     """Require every source-proven anchor before permitting one re-entry click."""
 
-    return matches_session_screen(frame, PREAUTHENTICATED_PLAY_NOW)
+    return any(
+        matches_session_screen(frame, fingerprint)
+        for fingerprint in PREAUTHENTICATED_PLAY_NOW_SCREENS
+    )
 
 
 def is_pre_authenticated_play_now(frame: Frame) -> bool:
@@ -178,9 +225,7 @@ def _matches_welcome_button_signature(frame: Frame) -> bool:
     red_fraction = _region_fraction(
         frame,
         WELCOME_BUTTON_REGION,
-        lambda red, green, blue: (
-            red > 90 and red * 4 > green * 5 and red * 4 > blue * 5
-        ),
+        lambda red, green, blue: red > 90 and red * 4 > green * 5 and red * 4 > blue * 5,
     )
     if red_fraction < WELCOME_MIN_RED_DOMINANT_FRACTION:
         return False

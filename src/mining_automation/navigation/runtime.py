@@ -272,6 +272,11 @@ def run_route(
                                 if isinstance(authority, dict)
                                 else None
                             )
+                            perception_age = (
+                                authority.get("perception_age_s")
+                                if isinstance(authority, dict)
+                                else None
+                            )
                             if (
                                 not isinstance(authority, dict)
                                 or authority.get("route_source_frame_id") != frame.frame_id
@@ -280,15 +285,20 @@ def run_route(
                                 or authority.get("window") != frame.window
                                 or authority.get("expected_pose_id")
                                 != connector_match["source_pose_id"]
-                                or authority.get("pose_id") != connector_match["source_pose_id"]
-                                or authority.get("resource_view") != "supported"
-                                or authority.get("inventory_occupied_slots") != INVENTORY_CAPACITY
+                                or type(authority.get("inventory_occupied_slots")) is not int
+                                or authority.get("inventory_occupied_slots")
+                                != INVENTORY_CAPACITY
+                                or type(authority.get("inventory_capacity")) is not int
                                 or authority.get("inventory_capacity") != INVENTORY_CAPACITY
                                 or type(confidence) is not float
                                 or not math.isfinite(confidence)
                                 or confidence < INVENTORY_PUBLICATION_FLOOR
+                                or confidence > 1.0
                                 or authority.get("inventory_unknown_reason") is not None
-                                or authority.get("world_state") != "full"
+                                or type(perception_age) is not float
+                                or not math.isfinite(perception_age)
+                                or perception_age < 0.0
+                                or perception_age > MAX_MINING_PERCEPTION_AGE_S
                                 or type(native_captured) is not float
                                 or not math.isfinite(native_captured)
                                 or native_captured <= frame.captured_monotonic_s

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "assets_sha256": "4a9ad14853fc637146904f88d34ad684a439cbed56d6cf61a369f4cd5505185e",
+  "assets_sha256": "b5a3a9a2e08d9a3e7f74e2d854bafd2a48c77c7bf89e065a6979e132ac82bde2",
   "source": "retained user bank demonstration and current observed booth",
   "original_sha256": {
     "135": "cfb7b91319cb87314ea0775f1a3a146bb7a8b5dfd42fb2a269d1ff3e352f6444",
@@ -11,5 +11,9 @@
   },
   "bank_hover_live_evidence_sha256": "8f572aa3ec2a236925203335db56d7310f3ffa5797998ccf53ecd239f5f1be4d",
   "bank_hover_live2_sha256": "7ac766ef6ed9ddf93bec66d2e8e3a0a6452081cab691b5aae4978b0c6ac3ab64",
-  "selected_all_evidence_sha256": "bfbcd2da6da57f0c6d8785143245e74dc4468547ba90437c7bafa82ba6ed9dd4"
+  "selected_all_evidence_sha256": "bfbcd2da6da57f0c6d8785143245e74dc4468547ba90437c7bafa82ba6ed9dd4",
+  "bank_hover_live3_source_png_sha256": "00ddf3350d6ad90ab1bae43f7de7462d0ca48d5390ba6bd7c1403ecfd29b05b9",
+  "bank_hover_live3_sha256": "6064592750d271d7582ca2de868b42aaa8e69e96a2f9c125f5b4bc82fc2cf197",
+  "bank_hover_live4_source_png_sha256": "22479d41649e9d5b16154450f6b7db939dccead2f1c27e2ef1d12a8a7d307073",
+  "bank_hover_live4_sha256": "b313219248fa279379aeb1d4b77d694b97212a8be13b21e9eca26de9af82df29"
 }

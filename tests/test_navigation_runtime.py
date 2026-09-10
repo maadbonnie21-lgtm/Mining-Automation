@@ -241,19 +241,21 @@ class ConnectorBackend(Backend):
         authority = {
             "accepted": True,
             "reason": "accepted",
+            "authority_kind": "navigation_full_inventory",
+            "resource_evaluated": False,
+            "mining_pose_evaluated": False,
+            "mining_world_state_evaluated": False,
             "route_source_frame_id": frame.frame_id,
             "route_source_captured_monotonic_s": frame.captured_monotonic_s,
             "native_frame_id": 1,
             "native_captured_monotonic_s": native_captured,
             "window": frame.window,
             "expected_pose_id": connector["source_pose_id"],
-            "pose_id": connector["source_pose_id"],
-            "resource_view": "supported",
             "inventory_occupied_slots": 28,
             "inventory_capacity": 28,
             "inventory_confidence": 1.0,
             "inventory_unknown_reason": None,
-            "world_state": "full",
+            "perception_age_s": 0.01,
         }
         authority.update(self.connector_authority_overrides)
         if self.position_after_authority is not None:
@@ -432,7 +434,11 @@ def test_start_connector_requires_the_normal_stationarity_sample_count():
             "accepted": False,
             "reason": "inventory_not_full",
             "inventory_occupied_slots": 0,
-            "world_state": "ready",
+        },
+        {
+            "accepted": False,
+            "reason": "inventory_not_full",
+            "inventory_occupied_slots": 28.0,
         },
         {
             "accepted": False,
@@ -440,23 +446,71 @@ def test_start_connector_requires_the_normal_stationarity_sample_count():
             "inventory_occupied_slots": None,
             "inventory_confidence": 0.0,
             "inventory_unknown_reason": "inventory_v3_unknown",
-            "world_state": "blocked",
         },
         {
             "accepted": False,
-            "reason": "expected_mining_pose_not_supported",
-            "pose_id": None,
-            "resource_view": "unsupported",
-            "world_state": "blocked",
+            "reason": "inventory_confidence_below_floor",
+            "inventory_confidence": 0.79,
+        },
+        {
+            "accepted": False,
+            "reason": "inventory_confidence_below_floor",
+            "inventory_confidence": 1.01,
+        },
+        {
+            "accepted": False,
+            "reason": "inventory_confidence_below_floor",
+            "inventory_confidence": float("nan"),
+        },
+        {
+            "accepted": False,
+            "reason": "inventory_layout_invalid",
+            "inventory_capacity": 27,
+        },
+        {
+            "accepted": False,
+            "reason": "inventory_epoch_mismatch",
+        },
+        {
+            "accepted": False,
+            "reason": "inventory_perception_stale",
+            "perception_age_s": 1.01,
+        },
+        {
+            "accepted": False,
+            "reason": "inventory_perception_stale",
+            "perception_age_s": -0.01,
+        },
+        {
+            "accepted": False,
+            "reason": "window_changed_during_start_connector_authority",
+            "window": {"hwnd": 99},
         },
     ),
 )
-def test_start_connector_requires_fresh_supported_pose_and_full_inventory(overrides):
+def test_start_connector_requires_fresh_exact_full_inventory_authority(overrides):
     backend = ConnectorBackend()
     backend.connector_authority_overrides = overrides
     result = run_route(backend, ConnectorRoute(backend))
     assert "start_connector_current_frame_authority_unproven" in result.stop_reason
     assert result.click_count == len(backend.clicks) == 0
+
+
+def test_start_connector_full_inventory_does_not_require_mining_pose_or_resource_state():
+    backend = ConnectorBackend()
+    result = run_route(backend, ConnectorRoute(backend))
+    assert result.success
+    assert result.click_count == len(backend.clicks) == 3
+    authority = next(
+        event["authority"]
+        for event in result.events
+        if event["kind"] == "start_connector_current_frame_authority"
+    )
+    assert authority["mining_pose_evaluated"] is False
+    assert authority["resource_evaluated"] is False
+    assert "pose_id" not in authority
+    assert "resource_view" not in authority
+    assert "world_state" not in authority
 
 
 def test_connector_is_reregistered_after_native_authority_before_click():
