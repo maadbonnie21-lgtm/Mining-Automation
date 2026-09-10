@@ -233,7 +233,15 @@ class BankRunner:
             # 2026-09-09 World 301 live hover proof: logical (80,416), physical
             # (100,520) at the current 1.25 mapping yielded exact "Bank booth".
             # It is hover-only until the same fresh frame re-proves that text.
-            candidates.append(("current_bank_booth", (80, 416)))
+            # Bounded hover-only fallbacks across the same reviewed booth face.
+            # A point never earns click authority unless that exact fresh hover
+            # independently proves Bank booth text.
+            for point in (
+                (80, 416), (110, 416), (140, 416),
+                (80, 440), (110, 440), (140, 440),
+                (80, 464), (110, 464), (140, 464),
+            ):
+                candidates.append(("bank_booth_hover_scan", point))
             verified = None
             last_proof_score = 0.0
             for source, candidate in candidates:
