@@ -51,16 +51,6 @@ AUTO_CAMERA_SEARCH_STEPS: tuple[PrepCameraStep, ...] = (
     PrepCameraStep.COMPASS_RESET,
     PrepCameraStep.WHEEL_POSITIVE_1,
     PrepCameraStep.WHEEL_POSITIVE_1,
-    PrepCameraStep.WHEEL_POSITIVE_1,
-    PrepCameraStep.WHEEL_POSITIVE_1,
-    PrepCameraStep.WHEEL_POSITIVE_1,
-    PrepCameraStep.WHEEL_POSITIVE_1,
-    PrepCameraStep.WHEEL_POSITIVE_1,
-    PrepCameraStep.WHEEL_POSITIVE_1,
-    PrepCameraStep.WHEEL_POSITIVE_1,
-    PrepCameraStep.WHEEL_POSITIVE_1,
-    PrepCameraStep.WHEEL_POSITIVE_1,
-    PrepCameraStep.WHEEL_POSITIVE_1,
 )
 
 
